@@ -1,10 +1,10 @@
 //! Punto de entrada del overlay `bongocat` (reescritura en Rust, Fase 0.5).
 //!
-//! Portado: CLI, carga de configuración, fichero PID, `--toggle`, `--watch-config`,
-//! el overlay (Wayland con SCTK, bucle `calloop`, rasterizado SVG), el lector de
-//! teclado en proceso aislado con seccomp (0013 §2) y el auto-ocultar en
-//! pantalla completa (protocolos wlr y COSMIC).
-//! Pendiente: HiDPI, multi-monitor.
+//! Portado: CLI, carga de configuración, fichero PID (por salida), `--toggle`,
+//! `--watch-config`, `--monitor` + una instancia por salida, el overlay (Wayland
+//! con SCTK, bucle `calloop`, rasterizado SVG, HiDPI), el lector de teclado en
+//! proceso aislado con seccomp (0013 §2) y el auto-ocultar en pantalla completa
+//! (protocolos wlr y COSMIC).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,6 +29,7 @@ struct Args {
     monitor: Option<String>,
     watch_config: bool,
     toggle: bool,
+    supervise: bool,
     multi_monitor_child: bool,
     /// No conectar a ningún protocolo de toplevels (deshabilita el auto-ocultar
     /// en pantalla completa). Escotilla por si el protocolo del compositor da
@@ -50,6 +51,7 @@ fn print_help(prog: &str) {
          \x20 -c, --config FICHERO       Ruta del bongocat.conf (auto-detecta si se omite)\n\
          \x20 -w, --watch-config         Recarga al cambiar la configuración\n\
          \x20 -t, --toggle               Arranca / para\n\
+         \x20 -S, --supervise            Relanza el overlay si sale con error\n\
          \x20 -m, --monitor NOMBRE       Fuerza una salida de monitor\n\
          \x20     --validate             Valida la configuración y sale\n\
          \x20     --print-default-config Imprime la configuración por defecto como INI\n\
@@ -82,6 +84,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "-w" | "--watch-config" => a.watch_config = true,
             "-t" | "--toggle" => a.toggle = true,
+            "-S" | "--supervise" => a.supervise = true,
             "--multi-monitor-child" => a.multi_monitor_child = true,
             "--no-toplevel" => a.no_toplevel = true,
             "--validate" => a.validate = true,
@@ -140,9 +143,27 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // --toggle: si hay una instancia, la para y salimos; si no, seguimos.
+    // --supervise: envoltorio delgado que relanza el overlay si sale con error
+    // (autoarranque sin systemd). Ctrl+C / salida limpia (código 0) lo detiene.
+    if args.supervise {
+        return supervise(&argv);
+    }
+
+    // Multi-monitor: si hay >1 salida configurada (`monitor=`) y no se fijó una
+    // con `--monitor`, lanzar una instancia hija por salida y esperar a todas.
+    if args.monitor.is_none() && !args.multi_monitor_child && loaded.config.output_names.len() > 1 {
+        return spawn_per_monitor(&args, &loaded);
+    }
+
+    // Salida objetivo: `--monitor` gana; si no, la primera de `monitor=`.
+    let target = args
+        .monitor
+        .clone()
+        .or_else(|| loaded.config.output_name.clone());
+
+    // --toggle: si hay una instancia (para este monitor), la para y salimos.
     if args.toggle {
-        match toggle::run() {
+        match toggle::run(target.as_deref()) {
             toggle::Outcome::Stopped => return ExitCode::SUCCESS,
             toggle::Outcome::NotRunning => {}
         }
@@ -159,8 +180,8 @@ fn main() -> ExitCode {
         }
     };
 
-    // Fichero PID: garantiza una sola instancia. Vive hasta el final de `main`.
-    let _pid = match pidfile::PidFile::acquire() {
+    // Fichero PID: una instancia por salida (`bongocat[-NOMBRE].pid`).
+    let _pid = match pidfile::PidFile::acquire(target.as_deref()) {
         Ok(pidfile::Acquire::Ok(p)) => p,
         Ok(pidfile::Acquire::AlreadyRunning) => {
             eprintln!("bongocat: ya hay otra instancia corriendo");
@@ -172,14 +193,13 @@ fn main() -> ExitCode {
         }
     };
 
-    // Pendiente (F19+): multi-monitor y --watch-config.
-    let _ = (args.monitor, args.multi_monitor_child); // pendiente: multi-monitor
     match wl::run_overlay(
         &loaded.config,
         loaded.path.clone(),
         args.watch_config,
         args.no_toplevel,
         input,
+        target,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -187,6 +207,100 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Envoltorio de `--supervise`: relanza el binario (con los mismos argumentos,
+/// quitando `--supervise`) mientras salga con código ≠ 0. Sale con código 0 (o
+/// Ctrl+C, que el overlay traduce a salida limpia) → se detiene. Corta si hay 5
+/// fallos rápidos seguidos, para no entrar en bucle (p. ej. un `SIGSYS` de
+/// seccomp o un compositor que no arranca).
+fn supervise(argv: &[String]) -> ExitCode {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(&argv[0]));
+    let child_args: Vec<&str> = argv[1..]
+        .iter()
+        .map(String::as_str)
+        .filter(|a| *a != "--supervise" && *a != "-S")
+        .collect();
+
+    let mut fast_failures = 0u32;
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        let start = Instant::now();
+        let status = match Command::new(&exe).args(&child_args).status() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("bongocat[supervise]: no se pudo lanzar el overlay: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        if status.success() {
+            return ExitCode::SUCCESS;
+        }
+
+        if start.elapsed() < Duration::from_secs(5) {
+            fast_failures += 1;
+            if fast_failures >= 5 {
+                eprintln!("bongocat[supervise]: 5 fallos rápidos seguidos ({status}); me rindo");
+                return ExitCode::from(1);
+            }
+            backoff = (backoff * 2).min(Duration::from_secs(30));
+        } else {
+            fast_failures = 0;
+            backoff = Duration::from_secs(1);
+        }
+        eprintln!(
+            "bongocat[supervise]: el overlay terminó ({status}); reinicio en {}s",
+            backoff.as_secs()
+        );
+        std::thread::sleep(backoff);
+    }
+}
+
+/// Lanza una instancia hija por cada salida de `monitor=` (con `--monitor
+/// NOMBRE`) y espera a que terminen todas. Porta `multi_monitor_launch`.
+fn spawn_per_monitor(args: &Args, loaded: &io::Loaded) -> ExitCode {
+    use std::process::Command;
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bongocat: no se pudo resolver el ejecutable: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let mut kids = Vec::new();
+    for name in &loaded.config.output_names {
+        let mut cmd = Command::new(&exe);
+        cmd.arg("--multi-monitor-child").arg("--monitor").arg(name);
+        if let Some(p) = &loaded.path {
+            cmd.arg("-c").arg(p);
+        }
+        if args.watch_config {
+            cmd.arg("-w");
+        }
+        if args.no_toplevel {
+            cmd.arg("--no-toplevel");
+        }
+        match cmd.spawn() {
+            Ok(c) => {
+                eprintln!("bongocat: instancia para '{name}' (PID {})", c.id());
+                kids.push(c);
+            }
+            Err(e) => eprintln!("bongocat: no se pudo lanzar la instancia para '{name}': {e}"),
+        }
+    }
+
+    if kids.is_empty() {
+        return ExitCode::from(1);
+    }
+    for mut k in kids {
+        let _ = k.wait();
+    }
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
@@ -205,6 +319,12 @@ mod tests {
         assert_eq!(a.config, Some(PathBuf::from("/tmp/x.conf")));
         assert_eq!(a.monitor.as_deref(), Some("eDP-1"));
         assert!(a.watch_config);
+    }
+
+    #[test]
+    fn supervise_y_alias_corto() {
+        assert!(args(&["--supervise"]).unwrap().supervise);
+        assert!(args(&["-S"]).unwrap().supervise);
     }
 
     #[test]

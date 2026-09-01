@@ -11,13 +11,26 @@ use std::path::PathBuf;
 use rustix::fs::{flock, FlockOperation};
 
 /// Ruta del fichero PID: `$XDG_RUNTIME_DIR/bongocat.pid`, o `/tmp/bongocat.pid`.
+///
+/// Con `target` (una salida concreta, p. ej. `--monitor HDMI-A-1`) el nombre
+/// pasa a `bongocat-HDMI-A-1.pid`: así puede correr una instancia por monitor
+/// sin que se pisen el lock.
 #[must_use]
-pub fn pid_path() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
+pub fn pid_path(target: Option<&str>) -> PathBuf {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("bongocat.pid")
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    match target {
+        Some(name) => {
+            let slug: String = name
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            dir.join(format!("bongocat-{slug}.pid"))
+        }
+        None => dir.join("bongocat.pid"),
+    }
 }
 
 /// Fichero PID adquirido: mantiene el `flock` mientras viva y borra el fichero
@@ -38,8 +51,8 @@ pub enum Acquire {
 impl PidFile {
     /// Crea el fichero (`0600`, `O_NOFOLLOW`), toma el `flock` exclusivo no
     /// bloqueante y escribe el PID actual.
-    pub fn acquire() -> std::io::Result<Acquire> {
-        let path = pid_path();
+    pub fn acquire(target: Option<&str>) -> std::io::Result<Acquire> {
+        let path = pid_path(target);
         let file = OpenOptions::new()
             .create(true)
             .write(true)

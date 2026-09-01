@@ -18,10 +18,11 @@ pub enum Outcome {
 }
 
 /// Lee el PID guardado, comprueba que sea un `bongocat` vivo y le manda
-/// `SIGTERM` (y `SIGKILL` si no muere en 5 s).
+/// `SIGTERM` (y `SIGKILL` si no muere en 5 s). `target` selecciona el fichero
+/// PID por salida (ver [`pid_path`]).
 #[must_use]
-pub fn run() -> Outcome {
-    let path = pid_path();
+pub fn run(target: Option<&str>) -> Outcome {
+    let path = pid_path(target);
     let Some(pid) = read_running_pid(&path) else {
         return Outcome::NotRunning;
     };

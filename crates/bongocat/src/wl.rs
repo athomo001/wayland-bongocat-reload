@@ -95,6 +95,30 @@ struct TopInfo {
     activated: bool,
 }
 
+/// Sonda de salidas: cola de eventos aparte para resolver `--monitor NOMBRE`
+/// antes de crear la layer-surface (SCTK reclama `wl_output` en la principal).
+#[derive(Default)]
+struct OutputProbe {
+    outputs: Vec<(wl_output::WlOutput, Option<String>)>,
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for OutputProbe {
+    fn event(
+        state: &mut Self,
+        proxy: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wl_output::Event::Name { name } = event {
+            if let Some(slot) = state.outputs.iter_mut().find(|(o, _)| o == proxy) {
+                slot.1 = Some(name);
+            }
+        }
+    }
+}
+
 /// Anclaje de la layer-surface para una posición del overlay (siempre a los dos
 /// lados horizontales).
 fn anchor_for(pos: Position) -> Anchor {
@@ -136,6 +160,7 @@ pub fn run_overlay(
     watch_config: bool,
     no_toplevel: bool,
     input: input::Isolated,
+    target_output_name: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
@@ -199,6 +224,46 @@ pub fn run_overlay(
         _ => {}
     }
 
+    // Multi-monitor: si se pidió una salida por nombre, la resolvemos con una
+    // cola de eventos aparte (SCTK reclama `wl_output` en la principal, no
+    // podemos tener dos `Dispatch<WlOutput>` para el mismo estado).
+    let target_output: Option<wl_output::WlOutput> = match &target_output_name {
+        Some(name) => {
+            let mut probe_q = conn.new_event_queue::<OutputProbe>();
+            let probe_qh = probe_q.handle();
+            let mut probe = OutputProbe::default();
+            for g in globals.contents().clone_list() {
+                if g.interface == "wl_output" {
+                    let o = globals.registry().bind::<wl_output::WlOutput, _, _>(
+                        g.name,
+                        g.version.min(4),
+                        &probe_qh,
+                        (),
+                    );
+                    probe.outputs.push((o, None));
+                }
+            }
+            // Dos roundtrips: el evento `name` puede llegar en el segundo.
+            probe_q.roundtrip(&mut probe)?;
+            probe_q.roundtrip(&mut probe)?;
+            match probe
+                .outputs
+                .into_iter()
+                .find(|(_, n)| n.as_deref() == Some(name.as_str()))
+            {
+                Some((o, _)) => {
+                    eprintln!("bongocat: overlay en la salida '{name}'");
+                    Some(o)
+                }
+                None => {
+                    eprintln!("bongocat: salida '{name}' no encontrada; uso la de por defecto");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     // Alto lógico de la barra; el ancho lo decide el compositor (anclada a los
     // dos lados). Valor inicial de fallback hasta el primer `configure`.
     let height: u32 = config.overlay_height.max(1) as u32;
@@ -219,7 +284,7 @@ pub fn run_overlay(
         surface,
         Layer::Top,
         Some("bongocat"),
-        None, // salida: la que elija el compositor (multi-monitor viene después)
+        target_output.as_ref(), // None = la salida que elija el compositor
     );
 
     layer.set_anchor(anchor_for(config.overlay_position));
@@ -281,6 +346,7 @@ pub fn run_overlay(
         viewport,
         _fs_mgr: fs_mgr,
         _fs_obj: fs_obj,
+        _target_output: target_output,
         exit: false,
     };
 
@@ -406,6 +472,8 @@ struct State {
     viewport: Option<WpViewport>,
     _fs_mgr: Option<WpFractionalScaleManagerV1>,
     _fs_obj: Option<WpFractionalScaleV1>,
+    /// Salida fijada con `--monitor` (se guarda para mantener viva la proxy).
+    _target_output: Option<wl_output::WlOutput>,
     exit: bool,
 }
 
