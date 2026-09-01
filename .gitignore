@@ -57,3 +57,9 @@ Thumbs.db
 
 # Rust build output
 /target/
+
+# Config local de pruebas (plantilla: bongocat.conf.example)
+/bongocat.conf
+
+# Config local de pruebas (plantilla: bongocat.conf.example)
+/bongocat.conf

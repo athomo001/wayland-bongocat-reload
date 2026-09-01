@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+publish = false
 description = "Overlay de gato bongo para Wayland (reescritura en Rust, en curso)."
 
 [lints.rust]

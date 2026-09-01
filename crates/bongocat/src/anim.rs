@@ -179,6 +179,52 @@ mod tests {
         assert!(opaco, "el fotograma 'both-up' salió transparente");
     }
 
+    /// Firma compacta y estable de un rasterizado: por fotograma, la suma de
+    /// todos los bytes y cuántos píxeles quedan no transparentes.
+    fn firma(f: &Frames) -> Vec<(u64, usize)> {
+        (0..5)
+            .map(|i| {
+                let px = f.frame(i);
+                let sum = px.iter().map(|&b| u64::from(b)).sum();
+                let opacos = px.chunks_exact(4).filter(|p| p[3] != 0).count();
+                (sum, opacos)
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "solo para (re)fijar el snapshot: cargo test -- --ignored imprime_firma"]
+    fn imprime_firma() {
+        let f = rasterize(40, false, false).unwrap();
+        eprintln!("dims = ({}, {})", f.w, f.h);
+        eprintln!("firma = {:?}", firma(&f));
+    }
+
+    #[test]
+    fn snapshot_rasterizado_classic() {
+        // T-0010-M4: fija el resultado de rasterizar los 5 SVG a la altura por
+        // defecto (`cat_height=40`). Si `resvg`/`usvg` cambian el render, este
+        // test falla: hay que mirar el gato a ojo y re-fijar los números con
+        // `cargo test -- --ignored imprime_firma`.
+        let f = rasterize(40, false, false).expect("rasterizado");
+        assert_eq!((f.w, f.h), (72, 40));
+        assert_eq!(
+            firma(&f),
+            SNAPSHOT_CLASSIC,
+            "cambió el rasterizado; revísalo visualmente antes de re-fijar"
+        );
+    }
+
+    /// Firma por fotograma `(suma_de_bytes, píxeles_no_transparentes)` de
+    /// `rasterize(40, false, false)`. Ver [`snapshot_rasterizado_classic`].
+    const SNAPSHOT_CLASSIC: [(u64, usize); 5] = [
+        (647_986, 769),
+        (650_081, 787),
+        (683_898, 820),
+        (688_100, 839),
+        (682_807, 801),
+    ];
+
     #[test]
     fn blit_over_sobre_fondo_vacio_copia_el_gato() {
         let mut dst = vec![0u8; 4 * 4 * 4]; // 4x4
