@@ -58,6 +58,14 @@ pub struct Time {
     pub min: i32,
 }
 
+impl Time {
+    /// Minutos desde medianoche (`hour * 60 + min`).
+    #[must_use]
+    pub fn minutes(self) -> i32 {
+        self.hour * 60 + self.min
+    }
+}
+
 /// Configuración completa de bongocat. `Config::default()` reproduce
 /// `config_set_defaults` del código C.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -394,15 +402,10 @@ fn validate(c: &mut Config, warnings: &mut Vec<String>) {
     }
 
     // Reposo programado con inicio == fin: se desactiva (como el C).
-    if c.enable_scheduled_sleep {
-        let b = c.sleep_begin.hour * 60 + c.sleep_begin.min;
-        let e = c.sleep_end.hour * 60 + c.sleep_end.min;
-        if b == e {
-            warnings.push(
-                "reposo programado activado pero sleep_begin == sleep_end; se desactiva".into(),
-            );
-            c.enable_scheduled_sleep = false;
-        }
+    if c.enable_scheduled_sleep && c.sleep_begin.minutes() == c.sleep_end.minutes() {
+        warnings
+            .push("reposo programado activado pero sleep_begin == sleep_end; se desactiva".into());
+        c.enable_scheduled_sleep = false;
     }
 }
 

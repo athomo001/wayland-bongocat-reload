@@ -18,9 +18,14 @@ wayland-client = "0.31"
 smithay-client-toolkit = { version = "0.19", default-features = false }
 # foreign-toplevel-management: para auto-ocultar en pantalla completa.
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-# ext-foreign-toplevel-list-v1: lista de toplevels (COSMIC/GNOME lo exponen).
-# `staging` habilita el módulo `ext::foreign_toplevel_list`.
-wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
+# Protocolos wayland-protocols usados:
+#   staging  -> ext::foreign_toplevel_list, wp::fractional_scale (HiDPI)
+#   unstable -> wp::viewporter (HiDPI: buffer físico -> superficie lógica)
+wayland-protocols = { version = "0.32", default-features = false, features = [
+    "client",
+    "staging",
+    "unstable",
+] }
 
 # Bucle de eventos: multiplexará Wayland + timer de animación + input + watcher.
 calloop = { version = "0.14", features = ["signals"] }

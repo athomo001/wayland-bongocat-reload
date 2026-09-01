@@ -13,3 +13,4 @@ pub mod fullscreen;
 pub mod io;
 pub mod paw;
 pub mod scale;
+pub mod sleep;

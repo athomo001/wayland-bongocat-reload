@@ -7,7 +7,8 @@
 //!
 //! Auto-ocultar en pantalla completa vía `zwlr_foreign_toplevel_management_v1`
 //! (wlroots, KWin) o `zcosmic_toplevel_info_v1` (COSMIC) — ver `cosmic.rs`.
-//! Pendiente: HiDPI, multi-monitor. Porta `src/platform/wayland.c`.
+//! HiDPI con `wp_viewporter` + `wp_fractional_scale_v1` (búfer físico → capa
+//! lógica). Pendiente: multi-monitor. Porta `src/platform/wayland.c`.
 
 use std::error::Error;
 use std::time::{Duration, Instant};
@@ -52,6 +53,15 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
     ext_foreign_toplevel_handle_v1::{self as ext_handle, ExtForeignToplevelHandleV1},
     ext_foreign_toplevel_list_v1::{self as ext_list, ExtForeignToplevelListV1},
 };
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+    wp_fractional_scale_v1::{self as fs_v1, WpFractionalScaleV1},
+};
+use wayland_protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
+
+use bongocat_common::scale::{scale_offset_120, scale_size_120};
 
 use crate::anim::{self, Frames};
 use crate::cosmic::{
@@ -100,6 +110,23 @@ fn frame_dt_from_fps(fps: i32) -> Duration {
     Duration::from_millis(1000 / u64::from(fps.clamp(1, 120) as u32))
 }
 
+/// Hora local en minutos desde medianoche (`0..1440`), o `None` si falla.
+/// Equivale a `time()` + `localtime_r()` de `anim_is_sleep_time` (respeta `$TZ`
+/// y `/etc/localtime`). La lógica de la franja vive en `bongocat_common::sleep`.
+#[allow(unsafe_code)] // FFI puntual y documentado: time + localtime_r
+fn local_now_minutes() -> Option<i32> {
+    // SAFETY: `time(NULL)` devuelve el epoch actual; `localtime_r` escribe en un
+    // `tm` de pila propio y devuelve ese mismo puntero (o NULL en error).
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return None;
+        }
+        Some(tm.tm_hour * 60 + tm.tm_min)
+    }
+}
+
 /// Arranca el overlay: conecta a Wayland, crea la layer-surface y corre el bucle
 /// `calloop`. Con `watch_config`, vigila `config_path` y recarga en caliente.
 /// Devuelve cuando el compositor cierra la surface o llega SIGINT/SIGTERM.
@@ -119,6 +146,19 @@ pub fn run_overlay(
     let layer_shell = LayerShell::bind(&globals, &qh)
         .map_err(|e| format!("el compositor no soporta wlr-layer-shell: {e}"))?;
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("falta wl_shm: {e}"))?;
+
+    // HiDPI (opcional): `wp_viewporter` + `wp_fractional_scale_v1`. Con ambos, el
+    // búfer se rasteriza a píxeles físicos y `wp_viewport` lo mapea al tamaño
+    // lógico de la capa. Sin `viewporter` no se escala (búfer = tamaño lógico).
+    let viewporter = globals.bind::<WpViewporter, _, _>(&qh, 1..=1, ()).ok();
+    let fs_mgr = globals
+        .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
+    match (viewporter.is_some(), fs_mgr.is_some()) {
+        (true, true) => eprintln!("bongocat: HiDPI: fractional-scale + viewporter"),
+        (true, false) => eprintln!("bongocat: HiDPI: viewporter (escala entera de la salida)"),
+        _ => eprintln!("bongocat: sin viewporter; sin escalado HiDPI"),
+    }
 
     // Detección de pantalla completa (opcional). Se prueba primero el protocolo
     // wlr (sway, Hyprland, river, KWin); si no está, el camino COSMIC:
@@ -188,6 +228,15 @@ pub fn run_overlay(
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
 
+    // Empareja la superficie con un viewport (para renderizar a resolución
+    // física) y un receptor de fractional-scale (para saber la escala preferida).
+    let viewport = viewporter
+        .as_ref()
+        .map(|vp| vp.get_viewport(layer.wl_surface(), &qh, ()));
+    let fs_obj = fs_mgr
+        .as_ref()
+        .map(|m| m.get_fractional_scale(layer.wl_surface(), &qh, ()));
+
     let pool = SlotPool::new((width * height * 4) as usize, &shm)?;
 
     // Rasteriza los 5 fotogramas del gato a la altura configurada.
@@ -228,6 +277,10 @@ pub fn run_overlay(
         want_hidden_since: now,
         width,
         height,
+        scale_120: 120,
+        viewport,
+        _fs_mgr: fs_mgr,
+        _fs_obj: fs_obj,
         exit: false,
     };
 
@@ -343,24 +396,75 @@ struct State {
     /// estable (antirrebote frente a compositores que hacen oscilar el estado).
     want_hidden: bool,
     want_hidden_since: Instant,
+    /// Tamaño **lógico** de la capa (el que da el `configure`).
     width: u32,
     height: u32,
+    /// Escala HiDPI en base 120 (120 = 1.0×, 180 = 1.5×, 240 = 2.0×). Solo tiene
+    /// efecto si hay `viewport` (si no, el búfer va a tamaño lógico).
+    scale_120: u32,
+    /// `wp_viewport` de la superficie: mapea el búfer físico al tamaño lógico.
+    viewport: Option<WpViewport>,
+    _fs_mgr: Option<WpFractionalScaleManagerV1>,
+    _fs_obj: Option<WpFractionalScaleV1>,
     exit: bool,
 }
 
 impl State {
-    /// Posición del gato en la barra, en píxeles (rebanada 3: sin HiDPI todavía).
-    /// Porta el cálculo de `draw_bar` de `src/platform/wayland.c`.
-    fn cat_origin(&self) -> (i32, i32) {
-        let (bw, bh) = (self.width as i32, self.height as i32);
+    /// Escala efectiva en base 120. Sin `viewport` no se puede mapear un búfer
+    /// físico distinto del lógico, así que se fuerza 120 (1.0×).
+    fn eff_scale_120(&self) -> u32 {
+        if self.viewport.is_some() {
+            self.scale_120
+        } else {
+            120
+        }
+    }
+
+    /// Altura del gato en píxeles **físicos** (la config está en lógicos).
+    fn phys_cat_height(&self) -> u32 {
+        scale_size_120(self.config.cat_height.max(1), self.eff_scale_120()).max(1) as u32
+    }
+
+    /// Posición del gato dentro del búfer **físico** de `phys_w`×`phys_h`.
+    /// Porta el cálculo de `draw_bar`: los offsets de la config (lógicos) se
+    /// pasan a físicos con `scale_offset_120`.
+    fn cat_origin(&self, phys_w: i32, phys_h: i32) -> (i32, i32) {
+        let s = self.eff_scale_120();
         let (cw, ch) = (self.frames.w as i32, self.frames.h as i32);
-        let y = (bh - ch) / 2 + self.config.cat_y_offset;
+        let xoff = scale_offset_120(self.config.cat_x_offset, s);
+        let yoff = scale_offset_120(self.config.cat_y_offset, s);
+        let y = (phys_h - ch) / 2 + yoff;
         let x = match self.config.cat_align {
-            Align::Center => (bw - cw) / 2 + self.config.cat_x_offset,
-            Align::Left => self.config.cat_x_offset,
-            Align::Right => bw - cw - self.config.cat_x_offset,
+            Align::Center => (phys_w - cw) / 2 + xoff,
+            Align::Left => xoff,
+            Align::Right => phys_w - cw - xoff,
         };
         (x, y)
+    }
+
+    /// Re-rasteriza los fotogramas del gato a la altura física actual.
+    fn rerasterize(&mut self) {
+        match anim::rasterize(
+            self.phys_cat_height(),
+            self.config.mirror_x,
+            self.config.mirror_y,
+        ) {
+            Ok(f) => self.frames = f,
+            Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
+        }
+    }
+
+    /// Cambia la escala HiDPI (evento `preferred_scale` o escala de la salida).
+    fn set_scale(&mut self, new_120: u32) {
+        if new_120 == 0 || new_120 == self.scale_120 {
+            return;
+        }
+        self.scale_120 = new_120;
+        if self.viewport.is_some() {
+            self.rerasterize();
+            eprintln!("bongocat: escala HiDPI {}/120", new_120);
+            self.draw();
+        }
     }
 
     /// Llega un bit de pata del lector de teclado: extiende la ventana de esa
@@ -389,7 +493,18 @@ impl State {
             && now.duration_since(self.last_activity).as_secs()
                 >= self.config.idle_sleep_timeout_sec as u64;
 
-        let next = if idle_sleep {
+        // Reposo por horario: si `enable_scheduled_sleep` y la hora local cae en
+        // la franja `[sleep_begin, sleep_end)`. Porta `anim_is_sleep_time`.
+        let scheduled_sleep = self.config.enable_scheduled_sleep
+            && local_now_minutes().is_some_and(|m| {
+                bongocat_common::sleep::is_scheduled_sleep(
+                    m,
+                    self.config.sleep_begin.minutes(),
+                    self.config.sleep_end.minutes(),
+                )
+            });
+
+        let next = if idle_sleep || scheduled_sleep {
             FRAME_SLEEPING
         } else {
             let left = now < self.left_hold_until;
@@ -432,15 +547,12 @@ impl State {
         let old = std::mem::replace(&mut self.config, loaded.config);
         let c = self.config.clone();
 
-        // Aspecto del gato → re-rasterizar.
+        // Aspecto del gato → re-rasterizar (a la altura física actual).
         if c.cat_height != old.cat_height
             || c.mirror_x != old.mirror_x
             || c.mirror_y != old.mirror_y
         {
-            match anim::rasterize(c.cat_height.max(1) as u32, c.mirror_x, c.mirror_y) {
-                Ok(f) => self.frames = f,
-                Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
-            }
+            self.rerasterize();
         }
 
         // FPS → el próximo tick lo recoge.
@@ -502,12 +614,20 @@ impl State {
     }
 
     /// Limpia el buffer (transparente) y dibuja el fotograma actual del gato.
+    ///
+    /// El búfer se crea en píxeles **físicos** (`lógico × escala/120`); si hay
+    /// `wp_viewport`, se le fija como destino el tamaño **lógico** para que el
+    /// compositor lo reescale sin pérdida en pantallas HiDPI. A escala 1.0× (o
+    /// sin viewport) físico == lógico y todo es idéntico al camino sin HiDPI.
     fn draw(&mut self) {
-        let (w, h) = (self.width.max(1), self.height.max(1));
-        let stride = w as i32 * 4;
-        let needed = (w * h * 4) as usize;
+        let (lw, lh) = (self.width.max(1), self.height.max(1));
+        let s = self.eff_scale_120();
+        let pw = scale_size_120(lw as i32, s).max(1) as u32;
+        let ph = scale_size_120(lh as i32, s).max(1) as u32;
+        let stride = pw as i32 * 4;
+        let needed = (pw * ph * 4) as usize;
         // Se calculan antes de tocar el pool (evita conflictos de préstamo).
-        let (ox, oy) = self.cat_origin();
+        let (ox, oy) = self.cat_origin(pw as i32, ph as i32);
         let (fw, fh) = (self.frames.w, self.frames.h);
         let frame = self.frames.frame(self.frame as usize);
 
@@ -518,11 +638,11 @@ impl State {
         let (buffer, canvas) =
             match self
                 .pool
-                .create_buffer(w as i32, h as i32, stride, wl_shm::Format::Argb8888)
+                .create_buffer(pw as i32, ph as i32, stride, wl_shm::Format::Argb8888)
             {
                 Ok(x) => x,
                 Err(e) => {
-                    eprintln!("bongocat: create_buffer {w}x{h} falló: {e}");
+                    eprintln!("bongocat: create_buffer {pw}x{ph} falló: {e}");
                     return;
                 }
             };
@@ -542,11 +662,16 @@ impl State {
                     px.copy_from_slice(&[0, 0, 0, op]);
                 }
             }
-            anim::blit_over(canvas, (w, h), frame, (fw, fh), (ox, oy));
+            anim::blit_over(canvas, (pw, ph), frame, (fw, fh), (ox, oy));
+        }
+
+        // El viewport traduce el búfer físico al tamaño lógico de la superficie.
+        if let Some(vp) = &self.viewport {
+            vp.set_destination(lw as i32, lh as i32);
         }
 
         let surface = self.layer.wl_surface();
-        surface.damage_buffer(0, 0, w as i32, h as i32);
+        surface.damage_buffer(0, 0, pw as i32, ph as i32);
         if let Err(e) = buffer.attach_to(surface) {
             eprintln!("bongocat: attach falló: {e}");
         }
@@ -614,8 +739,17 @@ impl CompositorHandler for State {
         _c: &Connection,
         _qh: &QueueHandle<Self>,
         _s: &wl_surface::WlSurface,
-        _o: &wl_output::WlOutput,
+        o: &wl_output::WlOutput,
     ) {
+        // Sin fractional-scale: usar la escala **entera** de la salida donde
+        // entró la superficie (fallback de `scale_120_from_output` del C).
+        if self._fs_obj.is_none() {
+            if let Some(info) = self.output_state.info(o) {
+                if info.scale_factor > 0 {
+                    self.set_scale(info.scale_factor as u32 * 120);
+                }
+            }
+        }
     }
     fn surface_leave(
         &mut self,
@@ -663,6 +797,26 @@ delegate_layer!(State);
 delegate_registry!(State);
 // wl_region no tiene eventos: solo la usamos para la región de entrada vacía.
 delegate_noop!(State: ignore wl_region::WlRegion);
+// HiDPI: el manager y el viewporter no emiten eventos; el viewport tampoco.
+delegate_noop!(State: ignore WpViewporter);
+delegate_noop!(State: ignore WpViewport);
+delegate_noop!(State: ignore WpFractionalScaleManagerV1);
+
+/// `wp_fractional_scale_v1::preferred_scale`: escala sugerida en /120.
+impl Dispatch<WpFractionalScaleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _obj: &WpFractionalScaleV1,
+        event: fs_v1::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let fs_v1::Event::PreferredScale { scale } = event {
+            state.set_scale(scale);
+        }
+    }
+}
 
 // ── foreign-toplevel-management: detección de pantalla completa ──────────────
 impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for State {
