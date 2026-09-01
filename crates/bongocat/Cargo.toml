@@ -27,3 +27,7 @@ resvg = { version = "0.44", default-features = false }
 
 # Lectura de /dev/input/event*. TODO(0013): mover a proceso aislado + seccomp.
 evdev = "0.12"
+
+# Fichero PID (flock) y señales, sin `unsafe`.
+rustix = { version = "0.38", features = ["fs", "process"] }
+libc = "0.2" # solo para constantes de flags de open (O_NOFOLLOW)

@@ -52,8 +52,12 @@ fn preprocess(svg: &[u8]) -> String {
 }
 
 /// Rasteriza los 5 SVG a una altura de gato de `cat_height` px (el ancho sale
-/// de la relación de aspecto).
-pub fn rasterize(cat_height: u32) -> Result<Frames, Box<dyn Error>> {
+/// de la relación de aspecto), aplicando el espejo horizontal/vertical.
+pub fn rasterize(
+    cat_height: u32,
+    mirror_x: bool,
+    mirror_y: bool,
+) -> Result<Frames, Box<dyn Error>> {
     let h = cat_height.max(1);
     let w = ((u64::from(h) * REF_W) / REF_H).max(1) as u32;
     let opt = Options::default();
@@ -73,9 +77,42 @@ pub fn rasterize(cat_height: u32) -> Result<Frames, Box<dyn Error>> {
         for px in buf.chunks_exact_mut(4) {
             px.swap(0, 2);
         }
+        if mirror_x {
+            flip_h(&mut buf, w, h);
+        }
+        if mirror_y {
+            flip_v(&mut buf, w, h);
+        }
         frames[i] = buf;
     }
     Ok(Frames { w, h, frames })
+}
+
+/// Voltea `buf` (RGBA/BGRA, 4 bytes/px) en horizontal, in situ.
+fn flip_h(buf: &mut [u8], w: u32, h: u32) {
+    let w = w as usize;
+    for y in 0..h as usize {
+        let row = y * w * 4;
+        for x in 0..w / 2 {
+            let (l, r) = (row + x * 4, row + (w - 1 - x) * 4);
+            for k in 0..4 {
+                buf.swap(l + k, r + k);
+            }
+        }
+    }
+}
+
+/// Voltea `buf` en vertical, in situ.
+fn flip_v(buf: &mut [u8], w: u32, h: u32) {
+    let stride = w as usize * 4;
+    let h = h as usize;
+    let mut tmp = vec![0u8; stride];
+    for y in 0..h / 2 {
+        let (top, bot) = (y * stride, (h - 1 - y) * stride);
+        tmp.copy_from_slice(&buf[top..top + stride]);
+        buf.copy_within(bot..bot + stride, top);
+        buf[bot..bot + stride].copy_from_slice(&tmp);
+    }
 }
 
 /// Compone `src` (BGRA premultiplicado, tamaño `src_wh`) sobre `dst`
@@ -126,7 +163,7 @@ mod tests {
 
     #[test]
     fn rasteriza_los_cinco_a_la_altura_pedida() {
-        let f = rasterize(110).expect("rasterizado");
+        let f = rasterize(110, false, false).expect("rasterizado");
         assert_eq!(f.h, 110);
         assert_eq!(f.w, (110 * 500) / 277);
         for i in 0..5 {
@@ -137,7 +174,7 @@ mod tests {
     #[test]
     fn algun_pixel_del_gato_es_opaco() {
         // El gato (relleno blanco) debe dejar píxeles con alfa alto.
-        let f = rasterize(80).unwrap();
+        let f = rasterize(80, true, false).unwrap();
         let opaco = f.frame(0).chunks_exact(4).any(|p| p[3] > 200);
         assert!(opaco, "el fotograma 'both-up' salió transparente");
     }

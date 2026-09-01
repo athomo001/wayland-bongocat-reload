@@ -33,8 +33,9 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
 use wayland_client::{
+    delegate_noop,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_shm, wl_surface},
+    protocol::{wl_output, wl_region, wl_shm, wl_surface},
     Connection, QueueHandle,
 };
 
@@ -61,6 +62,15 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
     let width: u32 = config.screen_width.max(1) as u32;
 
     let surface = compositor.create_surface(&qh);
+
+    // Click-through: región de entrada VACÍA → los clics (y el ratón) pasan a
+    // lo que haya debajo del overlay. Sin esto, la barra se traga todos los
+    // clics de su rectángulo. Porta `wl_surface_set_input_region` de
+    // `wayland_setup_surface`. Se aplica en el `layer.commit()` de abajo.
+    let empty_region = compositor.wl_compositor().create_region(&qh, ());
+    surface.set_input_region(Some(&empty_region));
+    empty_region.destroy();
+
     let layer = layer_shell.create_layer_surface(
         &qh,
         surface,
@@ -83,7 +93,11 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
     let pool = SlotPool::new((width * height * 4) as usize, &shm)?;
 
     // Rasteriza los 5 fotogramas del gato a la altura configurada.
-    let frames = anim::rasterize(config.cat_height.max(1) as u32)?;
+    let frames = anim::rasterize(
+        config.cat_height.max(1) as u32,
+        config.mirror_x,
+        config.mirror_y,
+    )?;
     eprintln!(
         "bongocat: {} fotogramas rasterizados a {}x{}",
         5, frames.w, frames.h
@@ -250,7 +264,16 @@ impl State {
                 }
             };
 
-        canvas.fill(0); // fondo transparente
+        // Fondo de la barra: negro con `overlay_opacity`. Premultiplicado con
+        // RGB=0 → bytes [B,G,R,A] = [0,0,0,opacidad]. 0 = totalmente transparente.
+        let op = self.config.overlay_opacity.clamp(0, 255) as u8;
+        if op == 0 {
+            canvas.fill(0);
+        } else {
+            for px in canvas.chunks_exact_mut(4) {
+                px.copy_from_slice(&[0, 0, 0, op]);
+            }
+        }
         anim::blit_over(canvas, (w, h), frame, (fw, fh), (ox, oy));
 
         let surface = self.layer.wl_surface();
@@ -369,3 +392,5 @@ delegate_output!(State);
 delegate_shm!(State);
 delegate_layer!(State);
 delegate_registry!(State);
+// wl_region no tiene eventos: solo la usamos para la región de entrada vacía.
+delegate_noop!(State: ignore wl_region::WlRegion);

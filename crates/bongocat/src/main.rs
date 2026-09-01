@@ -1,9 +1,8 @@
 //! Punto de entrada del overlay `bongocat` (reescritura en Rust, Fase 0.5).
 //!
-//! Estado: la CLI y la carga de configuración están portadas. El overlay en sí
-//! (Wayland con `smithay-client-toolkit`, bucle `calloop`, rasterizado SVG,
-//! proceso lector de input, supervisor) está pendiente — features F15+ de la
-//! Fase 0.5. Ver el análisis en el material de planificación local.
+//! Portado: CLI, carga de configuración, fichero PID, `--toggle`, y el overlay
+//! (Wayland con SCTK, bucle `calloop`, rasterizado SVG, lector de teclado).
+//! Pendiente: HiDPI, multi-monitor, auto-ocultar en fullscreen, `--watch-config`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,6 +12,8 @@ use bongocat_common::io;
 
 mod anim;
 mod input;
+mod pidfile;
+mod toggle;
 mod wl;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -128,14 +129,29 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Rebanada 1 de la Fase 0.5: barra de color. Aún sin gato, sin animación,
-    // sin multi-monitor ni watcher (F19+).
-    let _ = (
-        args.watch_config,
-        args.toggle,
-        args.monitor,
-        args.multi_monitor_child,
-    );
+    // --toggle: si hay una instancia, la para y salimos; si no, seguimos.
+    if args.toggle {
+        match toggle::run() {
+            toggle::Outcome::Stopped => return ExitCode::SUCCESS,
+            toggle::Outcome::NotRunning => {}
+        }
+    }
+
+    // Fichero PID: garantiza una sola instancia. Vive hasta el final de `main`.
+    let _pid = match pidfile::PidFile::acquire() {
+        Ok(pidfile::Acquire::Ok(p)) => p,
+        Ok(pidfile::Acquire::AlreadyRunning) => {
+            eprintln!("bongocat: ya hay otra instancia corriendo");
+            return ExitCode::from(1);
+        }
+        Err(e) => {
+            eprintln!("bongocat: no se pudo crear el fichero PID: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // Pendiente (F19+): multi-monitor y --watch-config.
+    let _ = (args.watch_config, args.monitor, args.multi_monitor_child);
     match wl::run_overlay(&loaded.config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

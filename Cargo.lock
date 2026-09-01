@@ -64,7 +64,9 @@ dependencies = [
  "calloop",
  "calloop-wayland-source",
  "evdev",
+ "libc",
  "resvg",
+ "rustix 0.38.44",
  "smithay-client-toolkit",
  "wayland-client",
 ]
