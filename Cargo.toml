@@ -1,0 +1,19 @@
+# Workspace de la reescritura en Rust (Fase 0.5). Convive con el árbol C
+# (`Makefile`, `src/`) hasta que el Rust alcance paridad 1:1 y pase a `main`.
+[workspace]
+resolver = "2"
+members = ["crates/bongocat-common"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+repository = "https://github.com/athomo001/wayland-bongocat-reload"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "s"
+overflow-checks = true   # los cálculos de parseo/geometría no deben desbordar en silencio
