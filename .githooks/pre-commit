@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Hook de pre-commit del proyecto. Activar una vez con:
+#   git config core.hooksPath .githooks
+#
+# Comprueba, sobre los ficheros en el índice:
+#  - formato C (make format-check) mientras el núcleo sea C;
+#    formato Rust (cargo fmt --check) cuando exista Cargo.toml;
+#  - comentarios en inglés residuales (aviso, no bloquea).
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+# Ficheros de código en el índice.
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR -- '*.c' '*.h' '*.rs' 2>/dev/null || true)
+[ "${#staged[@]}" -eq 0 ] && exit 0
+
+fail=0
+
+if [ -f Cargo.toml ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    cargo fmt --check || { echo "pre-commit: 'cargo fmt' pendiente"; fail=1; }
+  fi
+else
+  if command -v make >/dev/null 2>&1 && grep -q '^format-check:' Makefile 2>/dev/null; then
+    make format-check || { echo "pre-commit: 'make format' pendiente"; fail=1; }
+  fi
+fi
+
+# Aviso de comentarios en inglés (no bloquea el commit).
+if [ -x scripts/check_comment_lang.sh ]; then
+  scripts/check_comment_lang.sh "${staged[@]}" || \
+    echo "pre-commit: aviso — revisa los comentarios de arriba (posible inglés)"
+fi
+
+exit $fail

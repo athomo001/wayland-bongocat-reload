@@ -1,0 +1,14 @@
+# <tipo>(<ámbito opcional>): <resumen en imperativo, <=72 chars>
+#
+# Tipos: feat | fix | docs | refactor | perf | test | build | ci | chore
+# Ámbitos habituales: config, wayland, input, anim, ipc, theme, tray, build, ci
+#
+# Cuerpo (opcional): el porqué y el qué, no el cómo. Envolver a ~72 columnas.
+#
+#
+# Pie (opcional):
+#   Fixes #123
+#   BREAKING CHANGE: <qué rompe y cómo migrar>
+#
+# Un commit = un cambio enfocado. Ver /AGENTS.md y CONTRIBUTING.md.
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

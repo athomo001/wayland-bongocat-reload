@@ -1,5 +1,7 @@
 # Bongo Cat Wayland Overlay
 
+> 🇪🇸 El README principal de este fork está en español: [README.md](README.md).
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-bongocat/releases)
 

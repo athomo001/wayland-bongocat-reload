@@ -20,6 +20,24 @@ result
 .idea/
 .agent/
 
+# ─── Material de trabajo con IA: PRIVADO, no se versiona ──────────────────────
+# Habilidades reutilizables traídas de otro workspace.
+.agents/
+# Especificaciones, hoja de ruta, mapa mental, TDD/FDD, revisiones, presupuestos.
+specs/
+# Análisis del código y de la arquitectura.
+ANALISIS_CODIGO.md
+ANALISIS_*.md
+ARQUITECTURA.md
+ARCHITECTURE.md
+# Instrucciones para agentes (planificación con IA, no doc de contribución).
+AGENTS.md
+CLAUDE.md
+# Plantillas de GitHub derivadas de las specs privadas.
+.github/PULL_REQUEST_TEMPLATE.md
+.github/ISSUE_TEMPLATE/
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Temporary files
 *.tmp
 *.temp

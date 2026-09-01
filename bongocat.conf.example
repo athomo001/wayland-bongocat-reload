@@ -1,112 +1,127 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# BONGO CAT CONFIG - Default Configuration
+# CONFIGURACIÓN DE BONGO CAT — valores por defecto
 # ═══════════════════════════════════════════════════════════════════════════════
-# Save this file to: ~/.config/bongocat/bongocat.conf
-# Run with: bongocat --watch-config
+# Guarda este fichero en: ~/.config/bongocat/bongocat.conf
+# Ejecuta con: bongocat --watch-config
+# Cada opción indica su rango y su efecto. Las líneas con "#" están desactivadas.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ APPEARANCE                                                                  │
+# │ APARIENCIA                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Cat size and position
+# Tamaño y posición del gato.
+#   cat_height    : alto del gato en píxeles (10–200).
+#   cat_align     : alineación horizontal — left, center o right.
+#   cat_x_offset  : desplazamiento horizontal desde la alineación (entero, +/-).
+#   cat_y_offset  : desplazamiento vertical desde el centro de la barra (+/-).
 cat_height=110
 cat_align=center
 cat_x_offset=0
 cat_y_offset=0
 
-# Deprecated: no-op with SVG rendering (antialiasing is always enabled)
+# Obsoleto: sin efecto con el render SVG (el antialiasing siempre está activo).
 # enable_antialiasing=1
 
-# Flip the cat
+# Voltear el gato: mirror_x en horizontal, mirror_y en vertical (0 = no, 1 = sí).
 mirror_x=0
 mirror_y=0
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ OVERLAY BAR                                                                 │
+# │ BARRA DEL OVERLAY                                                           │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Bar dimensions
+# Alto de la barra en píxeles (20–300).
 overlay_height=120
 
-# Background: 0=transparent, 255=opaque
+# Opacidad del fondo de la barra: 0 = transparente, 255 = opaco.
 overlay_opacity=0
 
-# Position: top, bottom
+# Posición en la pantalla: top o bottom.
 overlay_position=bottom
 
-# Layer: background, bottom, top, or overlay (always visible)
+# Capa de Wayland: background, bottom, top u overlay (overlay = siempre visible).
 layer=top
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ INPUT DEVICES                                                               │
+# │ DISPOSITIVOS DE ENTRADA                                                     │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Find your device with: bongocat-find-devices
-# Add multiple lines for multiple keyboards
+# Encuentra tu dispositivo con: bongocat-find-devices
+# Repite la línea para monitorear varios teclados.
+# La ruta debe empezar por /dev/input/ (validado por seguridad).
 keyboard_device=/dev/input/event4
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ MULTI-MONITOR (optional)                                                    │
+# │ MULTI-MONITOR (opcional)                                                    │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Leave commented to auto-detect
-# Find monitor names with: wlr-randr or hyprctl monitors
+# Déjalo comentado para auto-detectar.
+# Nombres de monitor: wlr-randr  o  hyprctl monitors
 # monitor=eDP-1
 # monitor=eDP-1,HDMI-A-1
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ ANIMATION                                                                   │
+# │ ANIMACIÓN                                                                   │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
+# fps               : fotogramas por segundo (1–120).
+# idle_frame        : fotograma que se muestra en reposo (0–4).
+# keypress_duration : ms que se mantiene la pata bajada tras una pulsación (10–5000).
 fps=60
 idle_frame=0
 keypress_duration=100
 
-# Hand mapping: 0=random hands, 1=left keys→left hand, right keys→right hand
+# Mapeo de manos: 0 = pata al azar; 1 = teclas de la izquierda → pata izquierda,
+# teclas de la derecha → pata derecha.
 enable_hand_mapping=1
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ SLEEP MODE (optional)                                                       │
+# │ MODO REPOSO (opcional)                                                      │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Hide after N seconds of no keyboard activity (0=disabled)
-# When triggered, displays a dedicated sleeping animation frame
+# Dormir tras N segundos sin actividad de teclado (0 = desactivado).
+# Al activarse se muestra un fotograma de gato dormido.
 idle_sleep_timeout=0
 
-# Scheduled sleep (requires enable_scheduled_sleep=1)
+# Reposo por horario (necesita enable_scheduled_sleep=1). Rango que cruza la
+# medianoche permitido (p. ej. 22:00 → 06:00).
 enable_scheduled_sleep=0
 sleep_begin=22:00
 sleep_end=06:00
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ FULLSCREEN                                                                  │
+# │ PANTALLA COMPLETA                                                           │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Keep overlay visible even when a fullscreen window is detected (0=hide, 1=show)
+# Mantener el overlay visible aunque se detecte una ventana a pantalla completa.
+# 0 = ocultar (por defecto), 1 = seguir mostrando.
 # disable_fullscreen_hide=0
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ HOTPLUG                                                                     │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# How often to rescan for new input devices, in seconds (0=scan once at startup)
+# Cada cuántos segundos rescanear en busca de dispositivos nuevos
+# (0 = escanear solo una vez al arrancar).
 # hotplug_scan_interval=30
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ TEST ANIMATION                                                              │
+# │ ANIMACIÓN DE PRUEBA                                                         │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
-# Duration of each test animation frame in milliseconds
+# Duración de cada fotograma de la animación de prueba, en ms.
 # test_animation_duration=200
-# Interval between test animation cycles in milliseconds (0=disabled)
+# Intervalo entre ciclos de la animación de prueba, en ms (0 = desactivado).
 # test_animation_interval=0
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ DEBUG                                                                       │
+# │ DEPURACIÓN                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
-# WARNING: Enabling debug mode will log keystrokes!!
+# ⚠️ AVISO DE PRIVACIDAD: en la versión actual, enable_debug=1 registra las
+#    pulsaciones de teclado (keycodes) en stdout/stderr. Mantén 0 salvo para
+#    diagnóstico puntual. Este volcado está en camino de eliminarse: la tecla
+#    se reducirá a izquierda/derecha y bongocat no podrá saber cuál pulsaste.
 #
-# Enable debug logging (0=disabled, 1=enabled)
 enable_debug=0
