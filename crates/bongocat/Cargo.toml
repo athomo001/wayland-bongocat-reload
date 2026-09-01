@@ -1,0 +1,29 @@
+[package]
+name = "bongocat"
+version = "3.0.0-dev"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Overlay de gato bongo para Wayland (reescritura en Rust, en curso)."
+
+[lints.rust]
+unsafe_code = "deny" # se permitirá solo en los puntos de FFI de Wayland, documentados
+
+[dependencies]
+bongocat-common = { path = "../bongocat-common" }
+
+# Wayland (cliente). SCTK trae registro, outputs, layer-shell, shm.
+wayland-client = "0.31"
+smithay-client-toolkit = { version = "0.19", default-features = false }
+
+# Bucle de eventos: multiplexará Wayland + timer de animación + input + watcher.
+calloop = { version = "0.14", features = ["signals"] }
+calloop-wayland-source = "0.4"
+
+# Rasterizado SVG. `default-features = false` quita el render de texto/fuentes:
+# los SVG del gato son solo trazados (spec 0010). Re-exporta usvg y tiny-skia.
+resvg = { version = "0.44", default-features = false }
+
+# Lectura de /dev/input/event*. TODO(0013): mover a proceso aislado + seccomp.
+evdev = "0.12"
