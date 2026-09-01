@@ -16,6 +16,11 @@ bongocat-common = { path = "../bongocat-common" }
 # Wayland (cliente). SCTK trae registro, outputs, layer-shell, shm.
 wayland-client = "0.31"
 smithay-client-toolkit = { version = "0.19", default-features = false }
+# foreign-toplevel-management: para auto-ocultar en pantalla completa.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# ext-foreign-toplevel-list-v1: lista de toplevels (COSMIC/GNOME lo exponen).
+# `staging` habilita el módulo `ext::foreign_toplevel_list`.
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
 
 # Bucle de eventos: multiplexará Wayland + timer de animación + input + watcher.
 calloop = { version = "0.14", features = ["signals"] }
@@ -31,3 +36,13 @@ evdev = "0.12"
 # Fichero PID (flock) y señales, sin `unsafe`.
 rustix = { version = "0.38", features = ["fs", "process"] }
 libc = "0.2" # solo para constantes de flags de open (O_NOFOLLOW)
+
+# Vigilancia del bongocat.conf para --watch-config.
+inotify = { version = "0.11", default-features = false }
+
+# COSMIC no expone wlr-foreign-toplevel: generamos nosotros el cliente del
+# protocolo `zcosmic_toplevel_info_v1` a partir del XML (MIT) vendido en
+# `protocols/`. El crate `cosmic-protocols` es GPL-3.0 y contaminaría la
+# licencia MIT del proyecto, así que solo tomamos el XML.
+wayland-scanner = "0.31"
+seccompiler = "0.5.0"

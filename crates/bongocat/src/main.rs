@@ -1,8 +1,10 @@
 //! Punto de entrada del overlay `bongocat` (reescritura en Rust, Fase 0.5).
 //!
-//! Portado: CLI, carga de configuración, fichero PID, `--toggle`, y el overlay
-//! (Wayland con SCTK, bucle `calloop`, rasterizado SVG, lector de teclado).
-//! Pendiente: HiDPI, multi-monitor, auto-ocultar en fullscreen, `--watch-config`.
+//! Portado: CLI, carga de configuración, fichero PID, `--toggle`, `--watch-config`,
+//! el overlay (Wayland con SCTK, bucle `calloop`, rasterizado SVG), el lector de
+//! teclado en proceso aislado con seccomp (0013 §2) y el auto-ocultar en
+//! pantalla completa (protocolos wlr y COSMIC).
+//! Pendiente: HiDPI, multi-monitor.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -11,9 +13,12 @@ use bongocat_common::config::Config;
 use bongocat_common::io;
 
 mod anim;
+mod cosmic;
 mod input;
+mod input_child;
 mod pidfile;
 mod toggle;
+mod watch;
 mod wl;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,6 +30,10 @@ struct Args {
     watch_config: bool,
     toggle: bool,
     multi_monitor_child: bool,
+    /// No conectar a ningún protocolo de toplevels (deshabilita el auto-ocultar
+    /// en pantalla completa). Escotilla por si el protocolo del compositor da
+    /// problemas.
+    no_toplevel: bool,
     // Utilidades sin compositor:
     validate: bool,
     print_default_config: bool,
@@ -44,7 +53,8 @@ fn print_help(prog: &str) {
          \x20 -m, --monitor NOMBRE       Fuerza una salida de monitor\n\
          \x20     --validate             Valida la configuración y sale\n\
          \x20     --print-default-config Imprime la configuración por defecto como INI\n\
-         \x20     --dry-run              Resuelve config + tema sin abrir Wayland y sale\n"
+         \x20     --dry-run              Resuelve config + tema sin abrir Wayland y sale\n\
+         \x20     --no-toplevel          No usar protocolos de toplevels (sin auto-ocultar)\n"
     );
 }
 
@@ -73,6 +83,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-w" | "--watch-config" => a.watch_config = true,
             "-t" | "--toggle" => a.toggle = true,
             "--multi-monitor-child" => a.multi_monitor_child = true,
+            "--no-toplevel" => a.no_toplevel = true,
             "--validate" => a.validate = true,
             "--print-default-config" => a.print_default_config = true,
             "--dry-run" => a.dry_run = true,
@@ -137,6 +148,17 @@ fn main() -> ExitCode {
         }
     }
 
+    // Lector de teclado en un proceso aparte con seccomp (spec 0013 §2). Se hace
+    // AQUÍ: el proceso todavía es monohilo y aún no se tomó el fichero PID ni se
+    // conectó a Wayland, así que el hijo no hereda esos descriptores.
+    let input = match input::start(&loaded.config.keyboard_devices) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("bongocat: no se pudo arrancar el lector de input: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
     // Fichero PID: garantiza una sola instancia. Vive hasta el final de `main`.
     let _pid = match pidfile::PidFile::acquire() {
         Ok(pidfile::Acquire::Ok(p)) => p,
@@ -151,8 +173,14 @@ fn main() -> ExitCode {
     };
 
     // Pendiente (F19+): multi-monitor y --watch-config.
-    let _ = (args.watch_config, args.monitor, args.multi_monitor_child);
-    match wl::run_overlay(&loaded.config) {
+    let _ = (args.monitor, args.multi_monitor_child); // pendiente: multi-monitor
+    match wl::run_overlay(
+        &loaded.config,
+        loaded.path.clone(),
+        args.watch_config,
+        args.no_toplevel,
+        input,
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("bongocat: error de Wayland: {e}");

@@ -1,20 +1,22 @@
-//! Lector de teclado.
+//! Descubrimiento de teclados y arranque del **proceso lector aislado**.
 //!
-//! Lee `/dev/input/event*` con `evdev` y, por cada pulsación, **reduce el
-//! keycode a un bit de pata (`PAW_LEFT`/`PAW_RIGHT`) y lo descarta**: solo ese
-//! bit cruza el canal hacia el bucle de eventos. El identificador de la tecla no
-//! se guarda, registra ni transmite (spec 0013 §1).
+//! El descubrimiento (`evdev::enumerate`) ocurre aquí, en el proceso de
+//! confianza. La lectura de `/dev/input/event*` se hace en un proceso hijo
+//! separado con seccomp (ver [`crate::input_child`]): así, aunque una entrada
+//! evdev maliciosa comprometiese al lector, no puede tocar Wayland, la config,
+//! la red ni ejecutar nada (spec 0013 §2).
 //!
-//! TODO(0013 §2): mover esto a un **proceso** aparte, con seccomp, `zeroize` del
-//! búfer y `PR_SET_DUMPABLE(0)`. Por ahora es un hilo por dispositivo para poder
-//! iterar; la garantía de "no se sabe qué tecla" ya se cumple.
+//! Al hijo solo le cruza **1 byte por pulsación** (el bit de pata ya reducido);
+//! el identificador de la tecla no se guarda, registra ni transmite.
 
+#![allow(unsafe_code)] // punto de FFI documentado: pipe2 + fork
+
+use std::io;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::thread;
 
-use bongocat_common::paw::paw_for_keycode;
-use calloop::channel::Sender;
-use evdev::{Device, EventType, Key};
+use evdev::{Device, Key};
 
 /// ¿Este dispositivo parece un teclado? (tiene las letras y Enter).
 fn looks_like_keyboard(dev: &Device) -> bool {
@@ -32,12 +34,12 @@ pub fn detect_keyboards() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// Abre los dispositivos y lanza un hilo lector por cada uno.
-///
-/// Estrategia: se intentan los de la configuración; si ninguno parece un
-/// teclado (o no hay), se usan los detectados automáticamente. Así el gato
-/// reacciona aunque el `keyboard_device` del `.conf` esté mal.
-pub fn spawn_readers(configured: &[String], tx: &Sender<u8>) {
+/// Decide qué dispositivos leerá el hijo. Estrategia: los de la configuración
+/// que existan y parezcan teclado; si ninguno lo parece (o la lista está vacía),
+/// se usan los detectados automáticamente. Así el gato reacciona aunque el
+/// `keyboard_device` del `.conf` esté mal (p. ej. apuntando a un botón rfkill).
+#[must_use]
+pub fn resolve_devices(configured: &[String]) -> Vec<String> {
     let detected = detect_keyboards();
     if detected.is_empty() {
         eprintln!("bongocat: no se detectó ningún teclado en /dev/input (¿grupo 'input'?)");
@@ -48,65 +50,90 @@ pub fn spawn_readers(configured: &[String], tx: &Sender<u8>) {
         }
     }
 
-    let mut opened_a_keyboard = false;
+    let mut chosen = Vec::new();
     for path in configured {
         match Device::open(path) {
-            Ok(dev) => {
-                let kb = looks_like_keyboard(&dev);
-                if kb {
-                    opened_a_keyboard = true;
-                } else {
-                    eprintln!("bongocat: {path} no parece un teclado; se intentará igual");
-                }
-                start_reader(dev, path.clone(), tx);
-                eprintln!("bongocat: escuchando {path}");
-            }
-            Err(e) => {
-                eprintln!("bongocat: no se pudo abrir {path}: {e} (¿estás en el grupo 'input'?)");
-            }
+            Ok(dev) if looks_like_keyboard(&dev) => chosen.push(path.clone()),
+            Ok(_) => eprintln!("bongocat: {path} no parece un teclado; se ignora"),
+            Err(e) => eprintln!("bongocat: no se pudo abrir {path}: {e} (¿grupo 'input'?)"),
         }
     }
 
-    if !opened_a_keyboard {
-        for (p, _) in detected {
-            let ps = p.display().to_string();
-            match Device::open(&p) {
-                Ok(dev) => {
-                    start_reader(dev, ps.clone(), tx);
-                    eprintln!("bongocat: escuchando (auto) {ps}");
-                }
-                Err(e) => eprintln!("bongocat: no se pudo abrir {ps}: {e}"),
+    if chosen.is_empty() {
+        chosen = detected
+            .into_iter()
+            .map(|(p, _)| p.display().to_string())
+            .collect();
+        if !chosen.is_empty() {
+            eprintln!("bongocat: uso los teclados detectados automáticamente");
+        }
+    }
+    chosen
+}
+
+/// Extremo de padre del lector aislado.
+pub struct Isolated {
+    /// Extremo de lectura de la tubería: bytes = bits de pata.
+    pub read: OwnedFd,
+}
+
+/// Lanza el proceso lector aislado. **Debe llamarse mientras el proceso es
+/// monohilo** (antes de conectar a Wayland o de crear cualquier hilo) y antes de
+/// tomar el fichero PID, para que el hijo no herede esos descriptores.
+///
+/// El hijo hace `fork` sin `exec`: ejecuta [`crate::input_child::run`], que
+/// aplica el endurecimiento y no regresa.
+pub fn start(configured: &[String]) -> io::Result<Isolated> {
+    let devices = resolve_devices(configured);
+
+    // Tubería: ambos extremos con O_CLOEXEC. El hijo no hace `exec`, así que su
+    // extremo sigue válido; en un `exec` futuro (no hay) se cerrarían solos.
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `pipe2` con un array de 2 enteros y flags constantes.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let (rd, wr) = (fds[0], fds[1]);
+
+    // SAFETY: el proceso es monohilo aquí (contrato de la función). El hijo solo
+    // llama a `input_child::run`, que termina con `_exit` sin desenrollar.
+    let pid = unsafe { libc::fork() };
+    match pid {
+        -1 => {
+            let e = io::Error::last_os_error();
+            // SAFETY: fds válidos recién creados.
+            unsafe {
+                libc::close(rd);
+                libc::close(wr);
             }
+            Err(e)
+        }
+        0 => {
+            // Hijo.
+            // SAFETY: cerramos el extremo que no usa; `rd` es válido.
+            unsafe { libc::close(rd) };
+            crate::input_child::run(&devices, wr);
+        }
+        _ => {
+            // Padre.
+            // SAFETY: cerramos el extremo de escritura; `wr` es válido.
+            unsafe { libc::close(wr) };
+            // SAFETY: `rd` es un fd válido del que somos dueños en exclusiva.
+            let read = unsafe { OwnedFd::from_raw_fd(rd) };
+            reap_in_background(pid);
+            Ok(Isolated { read })
         }
     }
 }
 
-fn start_reader(dev: Device, path: String, tx: &Sender<u8>) {
-    let tx = tx.clone();
+/// Recolecta al hijo cuando termine (evita el zombi) sin bloquear el bucle.
+fn reap_in_background(pid: libc::pid_t) {
     let _ = thread::Builder::new()
-        .name(format!("input:{path}"))
-        .spawn(move || read_loop(dev, &path, &tx));
-}
-
-fn read_loop(mut dev: Device, path: &str, tx: &Sender<u8>) {
-    loop {
-        let batch = match dev.fetch_events() {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("bongocat: {path} dejó de leer: {e}");
-                return;
-            }
-        };
-        for ev in batch {
-            // Solo key-down.
-            if ev.event_type() == EventType::KEY && ev.value() == 1 {
-                // Reducción inmediata e irreversible: keycode -> 1 bit.
-                // Nada de logs por pulsación: filtraría el ritmo de tecleo.
-                let bit = paw_for_keycode(i32::from(ev.code()));
-                if tx.send(bit).is_err() {
-                    return; // el bucle de eventos se cerró
-                }
-            }
-        }
-    }
+        .name("input:reaper".into())
+        .spawn(move || {
+            let mut status = 0;
+            // SAFETY: `waitpid` sobre nuestro propio hijo; puntero a un i32 local.
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+            eprintln!("bongocat: el proceso lector de input ({pid}) terminó");
+        });
 }

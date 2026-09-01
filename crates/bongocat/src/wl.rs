@@ -1,12 +1,13 @@
-//! Wayland: rebanadas 1–2 de la Fase 0.5.
+//! Wayland: el overlay (rebanadas 1–6 de la Fase 0.5).
 //!
-//! - R1: crear la layer-surface con `smithay-client-toolkit` y pintarla de un
-//!   color sólido, anclada al borde configurado con el alto configurado.
-//! - R2: mover el bucle a `calloop` (el mismo que luego llevará Wayland + timer
-//!   de animación + input + watcher), `Ctrl+C` limpio y un timer que "late" el
-//!   color cada segundo para confirmar el camino timer → redibujado.
+//! Layer-surface con `smithay-client-toolkit`, bucle `calloop`, región de
+//! entrada vacía (click-through), rasterizado del gato, lector de teclado,
+//! máquina de estados, fondo con `overlay_opacity`, espejo, y `--watch-config`
+//! (recarga en caliente).
 //!
-//! Portará poco a poco lo que hoy hace `src/platform/wayland.c`.
+//! Auto-ocultar en pantalla completa vía `zwlr_foreign_toplevel_management_v1`
+//! (wlroots, KWin) o `zcosmic_toplevel_info_v1` (COSMIC) — ver `cosmic.rs`.
+//! Pendiente: HiDPI, multi-monitor. Porta `src/platform/wayland.c`.
 
 use std::error::Error;
 use std::time::{Duration, Instant};
@@ -33,19 +34,82 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
 use wayland_client::{
-    delegate_noop,
+    delegate_noop, event_created_child,
     globals::registry_queue_init,
     protocol::{wl_output, wl_region, wl_shm, wl_surface},
-    Connection, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1::{self as ftl_handle, ZwlrForeignToplevelHandleV1},
+    zwlr_foreign_toplevel_manager_v1::{self as ftl_mgr, ZwlrForeignToplevelManagerV1},
+};
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::thread;
+
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
+    ext_foreign_toplevel_handle_v1::{self as ext_handle, ExtForeignToplevelHandleV1},
+    ext_foreign_toplevel_list_v1::{self as ext_list, ExtForeignToplevelListV1},
 };
 
 use crate::anim::{self, Frames};
-use crate::input;
+use crate::cosmic::{
+    zcosmic_toplevel_handle_v1::{self as cosmic_handle, ZcosmicToplevelHandleV1},
+    zcosmic_toplevel_info_v1::{self as cosmic_info, ZcosmicToplevelInfoV1},
+};
+use crate::{input, input_child, watch};
 
-/// Arranca el overlay: conecta a Wayland, crea la layer-surface con la posición
-/// y el alto de `config`, y corre el bucle `calloop`. Devuelve cuando el
-/// compositor cierra la surface o se recibe SIGINT/SIGTERM.
-pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
+/// Valores del enum `state` de `zwlr_foreign_toplevel_handle_v1` (y del enum
+/// homónimo de `zcosmic_toplevel_handle_v1`: mismos números).
+const TOPLEVEL_STATE_ACTIVATED: u32 = 2;
+const TOPLEVEL_STATE_FULLSCREEN: u32 = 3;
+
+/// Interpreta el array `state` de un toplevel (u32 en orden nativo) y devuelve
+/// `(fullscreen, activated)`. Común a los protocolos wlr y COSMIC.
+fn parse_toplevel_state(arr: &[u8]) -> (bool, bool) {
+    let mut fullscreen = false;
+    let mut activated = false;
+    for chunk in arr.chunks_exact(4) {
+        let v = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        activated |= v == TOPLEVEL_STATE_ACTIVATED;
+        fullscreen |= v == TOPLEVEL_STATE_FULLSCREEN;
+    }
+    (fullscreen, activated)
+}
+
+/// Estado de un toplevel que nos interesa para ocultar el gato.
+#[derive(Default)]
+struct TopInfo {
+    fullscreen: bool,
+    activated: bool,
+}
+
+/// Anclaje de la layer-surface para una posición del overlay (siempre a los dos
+/// lados horizontales).
+fn anchor_for(pos: Position) -> Anchor {
+    let edge = match pos {
+        Position::Top => Anchor::TOP,
+        Position::Bottom => Anchor::BOTTOM,
+    };
+    edge | Anchor::LEFT | Anchor::RIGHT
+}
+
+/// Duración entre fotogramas a partir de los FPS configurados.
+fn frame_dt_from_fps(fps: i32) -> Duration {
+    Duration::from_millis(1000 / u64::from(fps.clamp(1, 120) as u32))
+}
+
+/// Arranca el overlay: conecta a Wayland, crea la layer-surface y corre el bucle
+/// `calloop`. Con `watch_config`, vigila `config_path` y recarga en caliente.
+/// Devuelve cuando el compositor cierra la surface o llega SIGINT/SIGTERM.
+pub fn run_overlay(
+    config: &Config,
+    config_path: Option<PathBuf>,
+    watch_config: bool,
+    no_toplevel: bool,
+    input: input::Isolated,
+) -> Result<(), Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
     let qh: QueueHandle<State> = event_queue.handle();
@@ -55,6 +119,45 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
     let layer_shell = LayerShell::bind(&globals, &qh)
         .map_err(|e| format!("el compositor no soporta wlr-layer-shell: {e}"))?;
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("falta wl_shm: {e}"))?;
+
+    // Detección de pantalla completa (opcional). Se prueba primero el protocolo
+    // wlr (sway, Hyprland, river, KWin); si no está, el camino COSMIC:
+    // `ext-foreign-toplevel-list-v1` (la lista) + `zcosmic_toplevel_info_v1` v2
+    // (el estado de cada uno). Si no hay ninguno, el gato no se auto-oculta.
+    let ftl_mgr = if no_toplevel {
+        None
+    } else {
+        globals
+            .bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ())
+            .ok()
+    };
+    let (ext_list, cosmic_info) = if no_toplevel {
+        eprintln!("bongocat: --no-toplevel: sin detección de pantalla completa");
+        (None, None)
+    } else if ftl_mgr.is_none() {
+        let list = globals
+            .bind::<ExtForeignToplevelListV1, _, _>(&qh, 1..=1, ())
+            .ok();
+        let info = globals
+            .bind::<ZcosmicToplevelInfoV1, _, _>(&qh, 2..=3, ())
+            .ok();
+        // Solo sirve si están los dos: la lista da los handles y el "info" el estado.
+        if list.is_some() && info.is_some() {
+            (list, info)
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+    match (ftl_mgr.is_some(), cosmic_info.is_some()) {
+        (true, _) => eprintln!("bongocat: auto-ocultar en pantalla completa: activo (wlr)"),
+        (_, true) => eprintln!("bongocat: auto-ocultar en pantalla completa: activo (cosmic)"),
+        _ if !no_toplevel => {
+            eprintln!("bongocat: sin protocolo de toplevels; el gato no se auto-ocultará");
+        }
+        _ => {}
+    }
 
     // Alto lógico de la barra; el ancho lo decide el compositor (anclada a los
     // dos lados). Valor inicial de fallback hasta el primer `configure`.
@@ -79,14 +182,9 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
         None, // salida: la que elija el compositor (multi-monitor viene después)
     );
 
-    let anchor = match config.overlay_position {
-        Position::Top => Anchor::TOP,
-        Position::Bottom => Anchor::BOTTOM,
-    } | Anchor::LEFT
-        | Anchor::RIGHT;
-    layer.set_anchor(anchor);
+    layer.set_anchor(anchor_for(config.overlay_position));
     layer.set_size(0, height);
-    layer.set_exclusive_zone(-1); // no reservar espacio: el overlay flota
+    layer.set_exclusive_zone(-1); // no reservar espacio; el overlay flota
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
 
@@ -112,11 +210,22 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
         pool,
         layer,
         config: config.clone(),
+        config_path: config_path.clone(),
         frames,
         frame: config.idle_frame.clamp(0, 4) as u8,
+        frame_dt: frame_dt_from_fps(config.fps),
         left_hold_until: now,
         right_hold_until: now,
         last_activity: now,
+        last_reload: now,
+        _ftl_mgr: ftl_mgr,
+        _ext_list: ext_list,
+        cosmic_info,
+        toplevels: HashMap::new(),
+        ext_to_cosmic: HashMap::new(),
+        hidden: false,
+        want_hidden: false,
+        want_hidden_since: now,
         width,
         height,
         exit: false,
@@ -139,22 +248,47 @@ pub fn run_overlay(config: &Config) -> Result<(), Box<dyn Error>> {
         },
     )?;
 
-    // Lector(es) de teclado → canal de bits de pata.
+    // Lector de teclado: corre en el proceso hijo aislado. Un hilo puente lee su
+    // tubería (bytes = bits de pata ya reducidos) y los mete en el canal calloop.
     let (tx, rx) = calloop::channel::channel::<u8>();
-    input::spawn_readers(&config.keyboard_devices, &tx);
+    {
+        let pipe = std::fs::File::from(input.read);
+        thread::Builder::new()
+            .name("input:bridge".into())
+            .spawn(move || input_child::parent_bridge(pipe, tx))
+            .map_err(|e| format!("no se pudo crear el hilo puente de input: {e}"))?;
+    }
     lh.insert_source(rx, |ev, _, state| {
         if let calloop::channel::Event::Msg(bit) = ev {
             state.on_paw(bit);
         }
     })?;
 
+    // --watch-config: hilo con inotify → recarga en caliente (con debounce).
+    if watch_config {
+        if let Some(path) = config_path {
+            let (wtx, wrx) = calloop::channel::channel::<()>();
+            watch::spawn(path, wtx);
+            lh.insert_source(wrx, |ev, _, state| {
+                if let calloop::channel::Event::Msg(()) = ev {
+                    state.reload();
+                }
+            })?;
+        } else {
+            eprintln!("bongocat: --watch-config sin fichero de configuración; se ignora");
+        }
+    }
+
     // Tick de animación a ritmo de FPS: recalcula el fotograma y redibuja si
-    // cambió. TODO: bajar a un tick lento cuando no hay actividad (idle ~0% CPU).
-    let frame_dt = Duration::from_millis(1000 / u64::from(config.fps.clamp(1, 120) as u32));
-    lh.insert_source(Timer::from_duration(frame_dt), move |_, _, state| {
-        state.tick();
-        TimeoutAction::ToDuration(frame_dt)
-    })?;
+    // cambió. Lee `state.frame_dt` para respetar cambios de `fps` en caliente.
+    // TODO: bajar a un tick lento cuando no hay actividad (idle ~0% CPU).
+    lh.insert_source(
+        Timer::from_duration(frame_dt_from_fps(config.fps)),
+        |_, _, state| {
+            state.tick();
+            TimeoutAction::ToDuration(state.frame_dt)
+        },
+    )?;
 
     eprintln!("bongocat: barra {width}x{height} anclada; Ctrl+C para salir");
     while !state.exit {
@@ -171,14 +305,44 @@ struct State {
     pool: SlotPool,
     layer: LayerSurface,
     config: Config,
+    config_path: Option<PathBuf>,
     frames: Frames,
     /// Fotograma actual (0–4), lo decide la máquina de estados.
     frame: u8,
+    /// Duración entre ticks de animación (deriva de `fps`).
+    frame_dt: Duration,
     /// Instantes hasta los que cada pata sigue "bajada".
     left_hold_until: Instant,
     right_hold_until: Instant,
     /// Última pulsación (para el reposo por inactividad).
     last_activity: Instant,
+    /// Última recarga de config (para el debounce de 300 ms).
+    last_reload: Instant,
+    /// El manager de foreign-toplevel wlr, si el compositor lo soporta (se
+    /// guarda solo para mantenerlo vivo).
+    _ftl_mgr: Option<ZwlrForeignToplevelManagerV1>,
+    /// La lista `ext-foreign-toplevel-list-v1` (camino COSMIC), viva mientras dure.
+    _ext_list: Option<ExtForeignToplevelListV1>,
+    /// El "info" de COSMIC: se usa para pedir un `zcosmic_toplevel_handle_v1` por
+    /// cada toplevel de la lista (`get_cosmic_toplevel`).
+    cosmic_info: Option<ZcosmicToplevelInfoV1>,
+    /// Toplevels rastreados, por id de objeto. En el camino wlr la clave es el
+    /// `zwlr_foreign_toplevel_handle_v1`; en el camino COSMIC, el
+    /// `zcosmic_toplevel_handle_v1`.
+    toplevels: HashMap<wayland_client::backend::ObjectId, TopInfo>,
+    /// Camino COSMIC: id del `ext_foreign_toplevel_handle_v1` → id del
+    /// `zcosmic_toplevel_handle_v1`, para poder limpiar al cerrarse la ventana
+    /// (el handle COSMIC v2 no emite `closed` propio).
+    ext_to_cosmic: HashMap<
+        wayland_client::backend::ObjectId,
+        (ExtForeignToplevelHandleV1, ZcosmicToplevelHandleV1),
+    >,
+    /// Estado aplicado: ¿el gato está oculto ahora (ventana a pantalla completa)?
+    hidden: bool,
+    /// Estado deseado según los toplevels; se aplica a `hidden` tras 350 ms
+    /// estable (antirrebote frente a compositores que hacen oscilar el estado).
+    want_hidden: bool,
+    want_hidden_since: Instant,
     width: u32,
     height: u32,
     exit: bool,
@@ -219,6 +383,7 @@ impl State {
     /// `anim_select_frame`. (El reposo por horario `enable_scheduled_sleep`
     /// llega en una rebanada posterior.)
     fn tick(&mut self) {
+        self.apply_pending_hidden();
         let now = Instant::now();
         let idle_sleep = self.config.idle_sleep_timeout_sec > 0
             && now.duration_since(self.last_activity).as_secs()
@@ -236,6 +401,104 @@ impl State {
             self.frame = next;
             self.draw();
         }
+    }
+
+    /// Recarga la configuración desde disco y aplica los cambios en vivo.
+    /// Debounce de 300 ms (editores que escriben varias veces seguidas). Si la
+    /// nueva config no carga, se mantiene la actual. Porta `config_reload_apply`
+    /// y los caminos de `wayland_update_config`. Pendiente: cambio de teclado,
+    /// de `layer` y de monitor.
+    fn reload(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_reload) < Duration::from_millis(300) {
+            return;
+        }
+        self.last_reload = now;
+
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let loaded = match bongocat_common::io::load(Some(&path)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("bongocat: recarga falló ({e}); se mantiene la configuración");
+                return;
+            }
+        };
+        for w in &loaded.warnings {
+            eprintln!("bongocat: aviso: {w}");
+        }
+
+        let old = std::mem::replace(&mut self.config, loaded.config);
+        let c = self.config.clone();
+
+        // Aspecto del gato → re-rasterizar.
+        if c.cat_height != old.cat_height
+            || c.mirror_x != old.mirror_x
+            || c.mirror_y != old.mirror_y
+        {
+            match anim::rasterize(c.cat_height.max(1) as u32, c.mirror_x, c.mirror_y) {
+                Ok(f) => self.frames = f,
+                Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
+            }
+        }
+
+        // FPS → el próximo tick lo recoge.
+        self.frame_dt = frame_dt_from_fps(c.fps);
+
+        // Barra: alto / posición.
+        let mut surface_changed = false;
+        if c.overlay_height != old.overlay_height {
+            self.layer.set_size(0, c.overlay_height.max(1) as u32);
+            surface_changed = true;
+        }
+        if c.overlay_position != old.overlay_position {
+            self.layer.set_anchor(anchor_for(c.overlay_position));
+            surface_changed = true;
+        }
+        if surface_changed {
+            self.layer.commit(); // el `configure` que llega redibuja con el tamaño nuevo
+        }
+
+        self.draw();
+        eprintln!("bongocat: configuración recargada");
+    }
+
+    /// Recalcula el estado *deseado* de ocultar: algún toplevel activado y a
+    /// pantalla completa (y `disable_fullscreen_hide` desactivado). No dibuja: el
+    /// cambio se aplica desde `apply_pending_hidden` con antirrebote. Para un
+    /// solo monitor no hace falta mirar en qué salida está. Porta
+    /// `fs_recompute_state` con el fallback global de `fullscreen.c`.
+    fn recompute_hidden(&mut self) {
+        let want = !self.config.disable_fullscreen_hide
+            && self.toplevels.values().any(|t| t.fullscreen && t.activated);
+        if want != self.want_hidden {
+            self.want_hidden = want;
+            self.want_hidden_since = Instant::now();
+        }
+    }
+
+    /// Aplica ocultar/mostrar por pantalla completa con un antirrebote de
+    /// 350 ms. Algunos compositores (visto en cosmic-comp 1.0) hacen oscilar el
+    /// estado de pantalla completa de las ventanas; sin esto el gato
+    /// parpadearía. Se llama desde `tick` (cada fotograma).
+    fn apply_pending_hidden(&mut self) {
+        if self.want_hidden == self.hidden {
+            return;
+        }
+        if Instant::now().duration_since(self.want_hidden_since) < Duration::from_millis(350) {
+            return;
+        }
+        self.hidden = self.want_hidden;
+        eprintln!(
+            "bongocat: pantalla completa {}",
+            if self.hidden {
+                "detectada — gato oculto"
+            } else {
+                "despejada"
+            }
+        );
+        self.draw();
     }
 
     /// Limpia el buffer (transparente) y dibuja el fotograma actual del gato.
@@ -264,17 +527,23 @@ impl State {
                 }
             };
 
-        // Fondo de la barra: negro con `overlay_opacity`. Premultiplicado con
-        // RGB=0 → bytes [B,G,R,A] = [0,0,0,opacidad]. 0 = totalmente transparente.
-        let op = self.config.overlay_opacity.clamp(0, 255) as u8;
-        if op == 0 {
+        if self.hidden {
+            // Ventana a pantalla completa: barra totalmente transparente y sin
+            // gato (equivale a opacidad efectiva 0 en `draw_bar`).
             canvas.fill(0);
         } else {
-            for px in canvas.chunks_exact_mut(4) {
-                px.copy_from_slice(&[0, 0, 0, op]);
+            // Fondo de la barra: negro con `overlay_opacity`. Premultiplicado
+            // con RGB=0 → bytes [B,G,R,A] = [0,0,0,opacidad]. 0 = transparente.
+            let op = self.config.overlay_opacity.clamp(0, 255) as u8;
+            if op == 0 {
+                canvas.fill(0);
+            } else {
+                for px in canvas.chunks_exact_mut(4) {
+                    px.copy_from_slice(&[0, 0, 0, op]);
+                }
             }
+            anim::blit_over(canvas, (w, h), frame, (fw, fh), (ox, oy));
         }
-        anim::blit_over(canvas, (w, h), frame, (fw, fh), (ox, oy));
 
         let surface = self.layer.wl_surface();
         surface.damage_buffer(0, 0, w as i32, h as i32);
@@ -394,3 +663,158 @@ delegate_layer!(State);
 delegate_registry!(State);
 // wl_region no tiene eventos: solo la usamos para la región de entrada vacía.
 delegate_noop!(State: ignore wl_region::WlRegion);
+
+// ── foreign-toplevel-management: detección de pantalla completa ──────────────
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _mgr: &ZwlrForeignToplevelManagerV1,
+        event: ftl_mgr::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            ftl_mgr::Event::Toplevel { toplevel } => {
+                state.toplevels.insert(toplevel.id(), TopInfo::default());
+            }
+            ftl_mgr::Event::Finished => {
+                state.toplevels.clear();
+                state.recompute_hidden();
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(State, ZwlrForeignToplevelManagerV1, [
+        ftl_mgr::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: ftl_handle::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        let id = handle.id();
+        match event {
+            ftl_handle::Event::State { state: arr } => {
+                let (fullscreen, activated) = parse_toplevel_state(&arr);
+                if let Some(t) = state.toplevels.get_mut(&id) {
+                    t.fullscreen = fullscreen;
+                    t.activated = activated;
+                }
+                state.recompute_hidden();
+            }
+            ftl_handle::Event::Closed => {
+                state.toplevels.remove(&id);
+                state.recompute_hidden();
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Camino COSMIC / GNOME ───────────────────────────────────────────────────
+// `ext-foreign-toplevel-list-v1` da la lista de ventanas; por cada una se pide
+// a `zcosmic_toplevel_info_v1` (v2) un `zcosmic_toplevel_handle_v1` cuyo evento
+// `state` trae los mismos flags (`activated`, `fullscreen`) que el protocolo wlr.
+
+impl Dispatch<ExtForeignToplevelListV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _list: &ExtForeignToplevelListV1,
+        event: ext_list::Event,
+        _: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_list::Event::Toplevel { toplevel } => {
+                // Puente v2: obtener el handle COSMIC para poder leer el estado.
+                let Some(info) = state.cosmic_info.as_ref() else {
+                    return;
+                };
+                let cosmic = info.get_cosmic_toplevel(&toplevel, qh, ());
+                state.toplevels.insert(cosmic.id(), TopInfo::default());
+                state
+                    .ext_to_cosmic
+                    .insert(toplevel.id(), (toplevel, cosmic));
+            }
+            ext_list::Event::Finished => {
+                state.toplevels.clear();
+                state.ext_to_cosmic.clear();
+                state.recompute_hidden();
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(State, ExtForeignToplevelListV1, [
+        ext_list::EVT_TOPLEVEL_OPCODE => (ExtForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ExtForeignToplevelHandleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        handle: &ExtForeignToplevelHandleV1,
+        event: ext_handle::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // El handle COSMIC v2 no emite `closed` propio: el de la lista es el
+        // equivalente, así que aquí se limpian los dos.
+        if let ext_handle::Event::Closed = event {
+            if let Some((ext_h, cosmic_h)) = state.ext_to_cosmic.remove(&handle.id()) {
+                state.toplevels.remove(&cosmic_h.id());
+                cosmic_h.destroy();
+                ext_h.destroy();
+                state.recompute_hidden();
+            }
+        }
+    }
+}
+
+impl Dispatch<ZcosmicToplevelInfoV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _info: &ZcosmicToplevelInfoV1,
+        event: cosmic_info::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let cosmic_info::Event::Finished = event {
+            state.toplevels.clear();
+            state.ext_to_cosmic.clear();
+            state.recompute_hidden();
+        }
+        // `done`: agrupa cambios de forma atómica; no lo necesitamos.
+    }
+}
+
+impl Dispatch<ZcosmicToplevelHandleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        handle: &ZcosmicToplevelHandleV1,
+        event: cosmic_handle::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let cosmic_handle::Event::State { state: arr } = event {
+            let (fullscreen, activated) = parse_toplevel_state(&arr);
+            if let Some(t) = state.toplevels.get_mut(&handle.id()) {
+                t.fullscreen = fullscreen;
+                t.activated = activated;
+            }
+            state.recompute_hidden();
+        }
+    }
+}

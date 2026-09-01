@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cosmic_toplevel_info_unstable_v1">
+  <copyright>
+    Copyright © 2018 Ilia Bozhinov
+    Copyright © 2020 Isaac Freund
+    Copyright © 2024 Victoria Brekenfeld
+
+    Permission to use, copy, modify, distribute, and sell this
+    software and its documentation for any purpose is hereby granted
+    without fee, provided that the above copyright notice appear in
+    all copies and that both that copyright notice and this permission
+    notice appear in supporting documentation, and that the name of
+    the copyright holders not be used in advertising or publicity
+    pertaining to distribution of the software without specific,
+    written prior permission.  The copyright holders make no
+    representations about the suitability of this software for any
+    purpose.  It is provided "as is" without express or implied
+    warranty.
+
+    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    THIS SOFTWARE.
+  </copyright>
+
+  <!--
+    Copia para wayland-bongocat-reload del XML de COSMIC. El overlay solo lo usa
+    para saber "hay una ventana activada y a pantalla completa" y auto-ocultarse.
+
+    IMPORTANTE: nos enganchamos como cliente de **versión 2**. El camino de
+    versión 1 (evento `toplevel` autónomo) hace que cosmic-comp saque a las
+    ventanas de pantalla completa a los ~2 s, así que se usa el puente
+    documentado: se obtienen los toplevels vía `ext-foreign-toplevel-list-v1` y
+    para cada uno se pide `get_cosmic_toplevel` para leer su estado.
+
+    Cambios respecto al original (imprescindible NO alterar el orden de los
+    eventos: el opcode de cada evento es su posición de declaración; si se salta
+    uno, el cliente malinterpreta el siguiente y el compositor corta la conexión
+    con "Malformed Wayland message"):
+
+      * Los `arg` de tipo `object` que apuntan a los protocolos de workspace
+        (`zcosmic_workspace_handle_v1`, `ext_workspace_handle_v1`) se cambian a
+        `uint`: mismo tamaño en el cable (4 bytes, el id de objeto), pero así el
+        binding se genera sin depender de esos protocolos. Esos eventos se
+        ignoran de todos modos.
+      * `get_cosmic_toplevel` conserva su `arg` a `ext_foreign_toplevel_handle_v1`
+        (ese protocolo sí está disponible como crate: `wayland-protocols`).
+  -->
+
+  <interface name="zcosmic_toplevel_info_v1" version="3">
+    <description summary="list toplevels and properties thereof">
+      The purpose of this protocol is to enable clients such as taskbars
+      or docks to access a list of opened applications and basic properties
+      thereof.
+    </description>
+
+    <event name="toplevel" deprecated-since="2">
+      <description summary="a toplevel has been created">
+        This event is emitted for clients binding version 1 whenever a
+        new toplevel window is created. It is emitted for all toplevels,
+        regardless of the app that has created them.
+
+        All initial properties of the toplevel (title, app_id, states, etc.)
+        will be sent immediately after this event via the corresponding
+        events in zcosmic_toplevel_handle_v1.
+      </description>
+      <arg name="toplevel" type="new_id" interface="zcosmic_toplevel_handle_v1"/>
+    </event>
+
+    <request name="stop" deprecated-since="2">
+      <description summary="stop sending events">
+        This request indicates that the client no longer wishes to receive
+        events for new toplevels.
+      </description>
+    </request>
+
+    <event name="finished" deprecated-since="2">
+      <description summary="the compositor has finished with the toplevel manager">
+        This event indicates that the compositor is done sending events
+        to the zcosmic_toplevel_info_v1.
+      </description>
+    </event>
+
+    <request name="get_cosmic_toplevel" since="2">
+      <description summary="get cosmic toplevel extension object">
+        Request a zcosmic_toplevel_handle_v1 extension object for an existing
+        ext_foreign_toplevel_handle_v1. All initial properties of the toplevel
+        (states, etc.) will be sent immediately via the corresponding events in
+        zcosmic_toplevel_handle_v1.
+      </description>
+      <arg name="cosmic_toplevel" type="new_id" interface="zcosmic_toplevel_handle_v1"/>
+      <arg name="foreign_toplevel" type="object" interface="ext_foreign_toplevel_handle_v1"/>
+    </request>
+
+    <event name="done" since="2">
+      <description summary="all information about active toplevels have been sent">
+        This event is sent after all changes for currently active
+        zcosmic_toplevel_handle_v1 have been sent.
+      </description>
+    </event>
+  </interface>
+
+  <interface name="zcosmic_toplevel_handle_v1" version="3">
+    <description summary="an open toplevel">
+      A zcosmic_toplevel_handle_v1 object represents an open toplevel
+      window. A single app may have multiple open toplevels.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the zcosmic_toplevel_handle_v1 object">
+        This request should be called either when the client will no longer
+        use the zcosmic_toplevel_handle_v1.
+      </description>
+    </request>
+
+    <event name="closed" deprecated-since="2">
+      <description summary="the toplevel has been closed">
+        The server will emit no further events on the
+        zcosmic_toplevel_handle_v1 after this event.
+      </description>
+    </event>
+
+    <event name="done" deprecated-since="2">
+      <description summary="all information about the toplevel has been sent">
+        This event is sent after all changes in the toplevel state have
+        been sent.
+      </description>
+    </event>
+
+    <event name="title" deprecated-since="2">
+      <description summary="title change">
+        This event is emitted whenever the title of the toplevel changes.
+      </description>
+      <arg name="title" type="string"/>
+    </event>
+
+    <event name="app_id" deprecated-since="2">
+      <description summary="app_id change">
+        This event is emitted whenever the app_id of the toplevel changes.
+      </description>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="output_enter">
+      <description summary="toplevel entered an output">
+        This event is emitted whenever the toplevel becomes visible on the
+        given output. A toplevel may be visible on multiple outputs.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+    </event>
+
+    <event name="output_leave">
+      <description summary="toplevel left an output">
+        This event is emitted whenever the toplevel is no longer visible
+        on a given output.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+    </event>
+
+    <event name="workspace_enter" deprecated-since="3">
+      <description summary="toplevel entered a workspace">
+        Original: arg `object` a zcosmic_workspace_handle_v1 (aquí `uint`).
+      </description>
+      <arg name="workspace" type="uint"/>
+    </event>
+
+    <event name="workspace_leave" deprecated-since="3">
+      <description summary="toplevel left a workspace">
+        Original: arg `object` a zcosmic_workspace_handle_v1 (aquí `uint`).
+      </description>
+      <arg name="workspace" type="uint"/>
+    </event>
+
+    <enum name="state">
+      <description summary="types of states on the toplevel">
+        The different states that a toplevel may have. These have the same
+        meaning as the states with the same names defined in xdg-toplevel
+      </description>
+      <entry name="maximized"  value="0" summary="the toplevel is maximized"  />
+      <entry name="minimized"  value="1" summary="the toplevel is minimized"  />
+      <entry name="activated"  value="2" summary="the toplevel is active"     />
+      <entry name="fullscreen" value="3" summary="the toplevel is fullscreen" />
+      <entry name="sticky"     value="4" summary="the toplevel is sticky"     since="2" />
+    </enum>
+
+    <event name="state">
+      <description summary="the toplevel state changed">
+        This event is emitted once on creation of the
+        zcosmic_toplevel_handle_v1 and again whenever the state of the
+        toplevel changes.
+      </description>
+      <arg name="state" type="array"/>
+    </event>
+
+    <event name="geometry" since="2">
+      <description summary="the toplevel's position and/or size has changed">
+        Emitted when the geometry of a toplevel relative to the provided
+        output has changed.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="x" type="int" summary="x coordinate of the upper-left corner"/>
+      <arg name="y" type="int" summary="y coordinate of the upper-left corner"/>
+      <arg name="width" type="int" summary="width of the toplevel"/>
+      <arg name="height" type="int" summary="height of the toplevel"/>
+    </event>
+
+    <event name="ext_workspace_enter" since="3">
+      <description summary="toplevel entered a workspace">
+        Original: arg `object` a ext_workspace_handle_v1 (aquí `uint`).
+      </description>
+      <arg name="workspace" type="uint"/>
+    </event>
+
+    <event name="ext_workspace_leave" since="3">
+      <description summary="toplevel left a workspace">
+        Original: arg `object` a ext_workspace_handle_v1 (aquí `uint`).
+      </description>
+      <arg name="workspace" type="uint"/>
+    </event>
+  </interface>
+</protocol>
