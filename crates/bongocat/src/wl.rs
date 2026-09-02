@@ -8,7 +8,8 @@
 //! Auto-ocultar en pantalla completa vía `zwlr_foreign_toplevel_management_v1`
 //! (wlroots, KWin) o `zcosmic_toplevel_info_v1` (COSMIC) — ver `cosmic.rs`.
 //! HiDPI con `wp_viewporter` + `wp_fractional_scale_v1` (búfer físico → capa
-//! lógica). Pendiente: multi-monitor. Porta `src/platform/wayland.c`.
+//! lógica). `--monitor` fija la salida. Socket de control IPC (spec 0003 M1:
+//! PING/STATE/QUIT). Porta `src/platform/wayland.c`.
 
 use std::error::Error;
 use std::time::{Duration, Instant};
@@ -21,10 +22,15 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        Capability, SeatHandler, SeatState,
+    },
     shell::{
         wlr_layer::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
@@ -37,7 +43,7 @@ use smithay_client_toolkit::{
 use wayland_client::{
     delegate_noop, event_created_child,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_region, wl_shm, wl_surface},
+    protocol::{wl_compositor, wl_output, wl_pointer, wl_region, wl_seat, wl_shm, wl_surface},
     Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
@@ -46,6 +52,7 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 };
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::thread;
 
@@ -68,7 +75,7 @@ use crate::cosmic::{
     zcosmic_toplevel_handle_v1::{self as cosmic_handle, ZcosmicToplevelHandleV1},
     zcosmic_toplevel_info_v1::{self as cosmic_info, ZcosmicToplevelInfoV1},
 };
-use crate::{input, input_child, watch};
+use crate::{input, input_child, ipc, watch};
 
 /// Valores del enum `state` de `zwlr_foreign_toplevel_handle_v1` (y del enum
 /// homónimo de `zcosmic_toplevel_handle_v1`: mismos números).
@@ -93,6 +100,24 @@ fn parse_toplevel_state(arr: &[u8]) -> (bool, bool) {
 struct TopInfo {
     fullscreen: bool,
     activated: bool,
+}
+
+/// Botón izquierdo del ratón en el protocolo Linux `input-event-codes.h`.
+const BTN_LEFT: u32 = 0x110;
+
+/// Estado del modo edición con ratón (spec 0005). La geometría vive en
+/// `bongocat_common::edit`; aquí solo el estado del arrastre.
+#[derive(Default)]
+struct EditState {
+    active: bool,
+    dragging: bool,
+    /// Desplazamiento puntero → origen del gato al agarrar (lógicas).
+    grab_dx: f64,
+    grab_dy: f64,
+    /// Última posición conocida del puntero (para re-anclar al usar la rueda).
+    ptr: (f64, f64),
+    /// `(cat_x_offset, cat_y_offset, cat_height)` al entrar, para "¿cambió algo?".
+    snapshot: (i32, i32, i32),
 }
 
 /// Sonda de salidas: cola de eventos aparte para resolver `--monitor NOMBRE`
@@ -319,6 +344,10 @@ pub fn run_overlay(
     let mut state = State {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
+        seat_state: SeatState::new(&globals, &qh),
+        wl_compositor: compositor.wl_compositor().clone(),
+        _pointer: None,
+        edit: EditState::default(),
         qh: qh.clone(),
         shm,
         pool,
@@ -347,7 +376,10 @@ pub fn run_overlay(
         _fs_mgr: fs_mgr,
         _fs_obj: fs_obj,
         _target_output: target_output,
+        ipc_dirty: std::collections::HashSet::new(),
+        manual_hidden: None,
         exit: false,
+        configured: false,
     };
 
     // ── Bucle de eventos ────────────────────────────────────────────────────
@@ -398,6 +430,45 @@ pub fn run_overlay(
         }
     }
 
+    // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
+    let _ipc_guard = if config.enable_ipc {
+        match ipc::bind(target_output_name.as_deref()) {
+            Ok((listener, guard)) => {
+                let src = calloop::generic::Generic::new(
+                    listener,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                );
+                lh.insert_source(src, |_readiness, listener, state: &mut State| {
+                    loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => {
+                                if !ipc::same_uid(&stream) {
+                                    continue;
+                                }
+                                if let Ok(req) = ipc::read_request(&stream) {
+                                    let reply = state.ipc_reply(&req);
+                                    let _ = writeln!(&stream, "{reply}");
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                    Ok(calloop::PostAction::Continue)
+                })?;
+                Some(guard)
+            }
+            Err(e) => {
+                eprintln!("bongocat: no se pudo abrir el socket IPC: {e}");
+                None
+            }
+        }
+    } else {
+        eprintln!("bongocat: enable_ipc=0; sin socket de control");
+        None
+    };
+
     // Tick de animación a ritmo de FPS: recalcula el fotograma y redibuja si
     // cambió. Lee `state.frame_dt` para respetar cambios de `fps` en caliente.
     // TODO: bajar a un tick lento cuando no hay actividad (idle ~0% CPU).
@@ -419,6 +490,12 @@ pub fn run_overlay(
 struct State {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
+    /// Para recrear la región de entrada (vacía normal; rect del gato en edición).
+    wl_compositor: wl_compositor::WlCompositor,
+    /// Puntero del seat, si lo hay (se guarda para mantenerlo vivo).
+    _pointer: Option<wl_pointer::WlPointer>,
+    edit: EditState,
     qh: QueueHandle<State>,
     shm: Shm,
     pool: SlotPool,
@@ -474,7 +551,15 @@ struct State {
     _fs_obj: Option<WpFractionalScaleV1>,
     /// Salida fijada con `--monitor` (se guarda para mantener viva la proxy).
     _target_output: Option<wl_output::WlOutput>,
+    /// Claves cambiadas por `SET` de IPC y aún sin `SAVE` al fichero.
+    ipc_dirty: std::collections::HashSet<String>,
+    /// Anulación manual del ocultado (IPC `SHOW`/`HIDE`/`TOGGLE`): `Some` fuerza
+    /// el estado; `None` = seguir la lógica de pantalla completa.
+    manual_hidden: Option<bool>,
     exit: bool,
+    /// ¿Llegó ya el primer `configure`? Antes no se puede adjuntar búfer
+    /// (`zwlr_layer_surface_v1`: error si se ataca antes del ack inicial).
+    configured: bool,
 }
 
 impl State {
@@ -520,6 +605,35 @@ impl State {
             Ok(f) => self.frames = f,
             Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
         }
+    }
+
+    /// Reacciona a un cambio de configuración (recarga de fichero o `SET` por
+    /// IPC): re-rasteriza si cambió el aspecto del gato, ajusta `frame_dt`,
+    /// redimensiona/reancla la barra si hace falta, y redibuja. Común a
+    /// `reload` y al `SET` en vivo.
+    fn apply_config_diff(&mut self, old: &Config) {
+        let c = self.config.clone();
+        if c.cat_height != old.cat_height
+            || c.mirror_x != old.mirror_x
+            || c.mirror_y != old.mirror_y
+        {
+            self.rerasterize();
+        }
+        self.frame_dt = frame_dt_from_fps(c.fps);
+
+        let mut surface_changed = false;
+        if c.overlay_height != old.overlay_height {
+            self.layer.set_size(0, c.overlay_height.max(1) as u32);
+            surface_changed = true;
+        }
+        if c.overlay_position != old.overlay_position {
+            self.layer.set_anchor(anchor_for(c.overlay_position));
+            surface_changed = true;
+        }
+        if surface_changed {
+            self.layer.commit(); // el `configure` que llega redibuja con el tamaño nuevo
+        }
+        self.draw();
     }
 
     /// Cambia la escala HiDPI (evento `preferred_scale` o escala de la salida).
@@ -613,34 +727,7 @@ impl State {
         }
 
         let old = std::mem::replace(&mut self.config, loaded.config);
-        let c = self.config.clone();
-
-        // Aspecto del gato → re-rasterizar (a la altura física actual).
-        if c.cat_height != old.cat_height
-            || c.mirror_x != old.mirror_x
-            || c.mirror_y != old.mirror_y
-        {
-            self.rerasterize();
-        }
-
-        // FPS → el próximo tick lo recoge.
-        self.frame_dt = frame_dt_from_fps(c.fps);
-
-        // Barra: alto / posición.
-        let mut surface_changed = false;
-        if c.overlay_height != old.overlay_height {
-            self.layer.set_size(0, c.overlay_height.max(1) as u32);
-            surface_changed = true;
-        }
-        if c.overlay_position != old.overlay_position {
-            self.layer.set_anchor(anchor_for(c.overlay_position));
-            surface_changed = true;
-        }
-        if surface_changed {
-            self.layer.commit(); // el `configure` que llega redibuja con el tamaño nuevo
-        }
-
-        self.draw();
+        self.apply_config_diff(&old);
         eprintln!("bongocat: configuración recargada");
     }
 
@@ -681,6 +768,228 @@ impl State {
         self.draw();
     }
 
+    /// ¿Está el gato oculto ahora mismo? Anulación manual sobre la lógica de
+    /// pantalla completa.
+    fn effective_hidden(&self) -> bool {
+        self.manual_hidden.unwrap_or(self.hidden)
+    }
+
+    /// Entra o sale del modo edición (spec 0005). Al salir con `persist`, si los
+    /// `cat_*_offset` / `cat_height` cambiaron, se guardan al `.conf` (con
+    /// `ConfDoc`, sin tocar el resto).
+    fn edit_set(&mut self, active: bool, persist: bool) -> String {
+        if active != self.edit.active {
+            self.edit.active = active;
+            self.edit.dragging = false;
+            if active {
+                self.edit.snapshot = (
+                    self.config.cat_x_offset,
+                    self.config.cat_y_offset,
+                    self.config.cat_height,
+                );
+                self.layer
+                    .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            } else {
+                self.layer
+                    .set_keyboard_interactivity(KeyboardInteractivity::None);
+                let now = (
+                    self.config.cat_x_offset,
+                    self.config.cat_y_offset,
+                    self.config.cat_height,
+                );
+                if persist && now != self.edit.snapshot {
+                    for k in ["cat_x_offset", "cat_y_offset", "cat_height"] {
+                        self.ipc_dirty.insert(k.to_string());
+                    }
+                    eprintln!("bongocat: modo edición — {}", self.ipc_save());
+                }
+            }
+            self.layer.commit();
+            self.draw(); // recoloca la región de entrada
+            let r = bongocat_common::edit::cat_rect(
+                &self.config,
+                self.width as i32,
+                self.height as i32,
+            );
+            eprintln!(
+                "bongocat: modo edición {} — región del gato = {:?}",
+                if active { "ON" } else { "OFF" },
+                r
+            );
+        }
+        format!("OK edit={}", if active { "on" } else { "off" })
+    }
+
+    /// Botón izquierdo dentro del gato: empezar a arrastrar.
+    fn edit_press(&mut self, px: f64, py: f64) {
+        let (bw, bh) = (self.width as i32, self.height as i32);
+        let rect = bongocat_common::edit::cat_rect(&self.config, bw, bh);
+        let inside = bongocat_common::edit::hit(rect, px as i32, py as i32);
+        if inside {
+            self.edit.dragging = true;
+            self.edit.grab_dx = px - f64::from(rect.0);
+            self.edit.grab_dy = py - f64::from(rect.1);
+        }
+        self.edit.ptr = (px, py);
+    }
+
+    /// Movimiento con el gato agarrado: recalcula `cat_x_offset` / `cat_y_offset`.
+    fn edit_drag(&mut self, px: f64, py: f64) {
+        use bongocat_common::edit;
+        self.edit.ptr = (px, py);
+        let (bw, bh) = (self.width as i32, self.height as i32);
+        let (_, _, cw, ch) = edit::cat_rect(&self.config, bw, bh);
+        let ox = (px - self.edit.grab_dx).round() as i32;
+        let oy = (py - self.edit.grab_dy).round() as i32;
+        let (ox, oy) = edit::clamp_origin(ox, oy, bw, bh, cw, ch);
+        self.config.cat_x_offset = edit::origin_to_x_offset(self.config.cat_align, ox, bw, cw);
+        self.config.cat_y_offset = edit::origin_to_y_offset(oy, bh, ch);
+        self.draw();
+    }
+
+    /// Rueda en modo edición: cambia `cat_height` (con recache). Si se está
+    /// arrastrando, re-ancla el agarre para que el gato "crezca bajo el cursor".
+    fn edit_wheel(&mut self, step: i32) {
+        let new_h = bongocat_common::edit::resize_cat_height(self.config.cat_height, step);
+        if new_h == self.config.cat_height {
+            return;
+        }
+        self.config.cat_height = new_h;
+        self.rerasterize();
+        if self.edit.dragging {
+            let (bw, bh) = (self.width as i32, self.height as i32);
+            let (rx, ry, ..) = bongocat_common::edit::cat_rect(&self.config, bw, bh);
+            self.edit.grab_dx = self.edit.ptr.0 - f64::from(rx);
+            self.edit.grab_dy = self.edit.ptr.1 - f64::from(ry);
+        }
+        self.draw();
+    }
+
+    /// Responde a una petición del socket de control (spec 0003 M1–M3, 0011).
+    /// Verbos: `PING`, `STATE`, `GET clave`, `SET clave valor` (en vivo),
+    /// `SAVE`, `RELOAD`, `SHOW`/`HIDE`/`TOGGLE`/`AUTO`, `QUIT`.
+    fn ipc_reply(&mut self, req: &str) -> String {
+        let mut parts = req.splitn(3, char::is_whitespace);
+        let verb = parts.next().unwrap_or("").to_ascii_uppercase();
+        let arg1 = parts.next().unwrap_or("").trim();
+        let arg2 = parts.next().unwrap_or("").trim();
+
+        match verb.as_str() {
+            "PING" => "PONG".to_string(),
+            "STATE" => format!(
+                "pid={} frame={} hidden={} manual_hidden={} edit={} scale_120={} fps={} \
+                 width={} height={} cat_height={} cat_opacity={}",
+                std::process::id(),
+                self.frame,
+                self.effective_hidden(),
+                match self.manual_hidden {
+                    Some(true) => "hide",
+                    Some(false) => "show",
+                    None => "auto",
+                },
+                self.edit.active,
+                self.scale_120,
+                self.config.fps,
+                self.width,
+                self.height,
+                self.config.cat_height,
+                self.config.cat_opacity,
+            ),
+            "GET" if !arg1.is_empty() => {
+                match bongocat_common::config::ConfDoc::parse(&self.config.to_ini()).get(arg1) {
+                    Some(v) => v.to_string(),
+                    None => format!("ERR clave desconocida: {arg1}"),
+                }
+            }
+            "SET" if !arg1.is_empty() && !arg2.is_empty() => {
+                let old = self.config.clone();
+                match bongocat_common::config::set_live(&mut self.config, arg1, arg2) {
+                    Ok(warnings) => {
+                        self.apply_config_diff(&old);
+                        self.ipc_dirty.insert(arg1.to_string());
+                        if warnings.is_empty() {
+                            format!("OK {arg1}={arg2}")
+                        } else {
+                            format!("OK {} (ajustado: {})", arg1, warnings.join("; "))
+                        }
+                    }
+                    Err(e) => format!("ERR {e}"),
+                }
+            }
+            "GET" | "SET" => "ERR uso: GET clave | SET clave valor".to_string(),
+            "EDIT" => match match arg1 {
+                "on" => Some(true),
+                "off" => Some(false),
+                "toggle" | "" => Some(!self.edit.active),
+                _ => None,
+            } {
+                Some(on) => self.edit_set(on, !on), // al apagar, persiste
+                None => "ERR uso: EDIT on|off|toggle".to_string(),
+            },
+            "SHOW" | "HIDE" | "TOGGLE" | "AUTO" => {
+                self.manual_hidden = match verb.as_str() {
+                    "SHOW" => Some(false),
+                    "HIDE" => Some(true),
+                    "TOGGLE" => Some(!self.effective_hidden()),
+                    _ => None, // AUTO: vuelve a seguir la pantalla completa
+                };
+                self.draw();
+                format!(
+                    "OK {}",
+                    if self.effective_hidden() {
+                        "hidden"
+                    } else {
+                        "shown"
+                    }
+                )
+            }
+            "SAVE" => self.ipc_save(),
+            "RELOAD" => {
+                if self.config_path.is_some() {
+                    self.reload();
+                    "OK".to_string()
+                } else {
+                    "ERR sin fichero de configuración".to_string()
+                }
+            }
+            "QUIT" => {
+                self.exit = true;
+                "OK".to_string()
+            }
+            "" => "ERR petición vacía".to_string(),
+            other => format!("ERR comando desconocido: {other}"),
+        }
+    }
+
+    /// `SAVE`: vuelca al `.conf` **solo las claves cambiadas por `SET`** desde el
+    /// último guardado, con `ConfDoc` para no tocar comentarios ni el resto de
+    /// líneas. Escritura atómica.
+    fn ipc_save(&mut self) -> String {
+        let Some(path) = self.config_path.clone() else {
+            return "ERR sin fichero de configuración".to_string();
+        };
+        if self.ipc_dirty.is_empty() {
+            return "OK (nada que guardar)".to_string();
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut doc = bongocat_common::config::ConfDoc::parse(&text);
+        let ini = bongocat_common::config::ConfDoc::parse(&self.config.to_ini());
+        for key in &self.ipc_dirty {
+            if let Some(v) = ini.get(key) {
+                doc.set(key, v);
+            }
+        }
+        match bongocat_common::io::save_atomic(&path, &doc.render()) {
+            Ok(()) => {
+                let n = self.ipc_dirty.len();
+                self.ipc_dirty.clear();
+                self.last_reload = Instant::now(); // no re-disparar la recarga por el watcher
+                format!("OK ({n} clave(s) guardada(s))")
+            }
+            Err(e) => format!("ERR no se pudo escribir {}: {e}", path.display()),
+        }
+    }
+
     /// Limpia el buffer (transparente) y dibuja el fotograma actual del gato.
     ///
     /// El búfer se crea en píxeles **físicos** (`lógico × escala/120`); si hay
@@ -688,6 +997,11 @@ impl State {
     /// compositor lo reescale sin pérdida en pantallas HiDPI. A escala 1.0× (o
     /// sin viewport) físico == lógico y todo es idéntico al camino sin HiDPI.
     fn draw(&mut self) {
+        // No adjuntar búfer antes del primer `configure` (protocolo layer-shell).
+        // El estado interno sí avanza; se pintará al llegar el `configure`.
+        if !self.configured {
+            return;
+        }
         let (lw, lh) = (self.width.max(1), self.height.max(1));
         let s = self.eff_scale_120();
         let pw = scale_size_120(lw as i32, s).max(1) as u32;
@@ -697,6 +1011,7 @@ impl State {
         // Se calculan antes de tocar el pool (evita conflictos de préstamo).
         let (ox, oy) = self.cat_origin(pw as i32, ph as i32);
         let (fw, fh) = (self.frames.w, self.frames.h);
+        let hidden = self.effective_hidden();
         let frame = self.frames.frame(self.frame as usize);
 
         if let Err(e) = self.pool.resize(needed.max(1)) {
@@ -715,9 +1030,9 @@ impl State {
                 }
             };
 
-        if self.hidden {
-            // Ventana a pantalla completa: barra totalmente transparente y sin
-            // gato (equivale a opacidad efectiva 0 en `draw_bar`).
+        if hidden {
+            // Oculto (pantalla completa o `HIDE` manual): barra transparente y
+            // sin gato (opacidad efectiva 0 en `draw_bar`).
             canvas.fill(0);
         } else {
             // Fondo de la barra: negro con `overlay_opacity`. Premultiplicado
@@ -730,13 +1045,26 @@ impl State {
                     px.copy_from_slice(&[0, 0, 0, op]);
                 }
             }
-            anim::blit_over(canvas, (pw, ph), frame, (fw, fh), (ox, oy));
+            // Opacidad del gato: % (0–100) → factor 0–255 para el blit.
+            let cat_op = (self.config.cat_opacity.clamp(0, 100) * 255 / 100) as u8;
+            anim::blit_over(canvas, (pw, ph), frame, (fw, fh), (ox, oy), cat_op);
         }
 
         // El viewport traduce el búfer físico al tamaño lógico de la superficie.
         if let Some(vp) = &self.viewport {
             vp.set_destination(lw as i32, lh as i32);
         }
+
+        // Región de entrada: vacía (click-through) normalmente; la **barra
+        // entera** mientras dure el modo edición, para que el arrastre no se
+        // corte cuando el gato (y su rect) se mueven bajo el cursor. El
+        // hit-test del gato lo hace `edit_press`.
+        let region = self.wl_compositor.create_region(&self.qh, ());
+        if self.edit.active {
+            region.add(0, 0, lw as i32, lh as i32);
+        }
+        self.layer.wl_surface().set_input_region(Some(&region));
+        region.destroy();
 
         let surface = self.layer.wl_surface();
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
@@ -771,6 +1099,7 @@ impl LayerShellHandler for State {
         if ch != 0 {
             self.height = ch;
         }
+        self.configured = true; // desde aquí ya se puede adjuntar búfer
         self.draw();
     }
 }
@@ -855,7 +1184,7 @@ impl ProvidesRegistryState for State {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_compositor!(State);
@@ -863,8 +1192,87 @@ delegate_output!(State);
 delegate_shm!(State);
 delegate_layer!(State);
 delegate_registry!(State);
-// wl_region no tiene eventos: solo la usamos para la región de entrada vacía.
+delegate_seat!(State);
+delegate_pointer!(State);
+// wl_region no tiene eventos: solo la usamos para la región de entrada.
 delegate_noop!(State: ignore wl_region::WlRegion);
+
+// ── Modo edición con ratón (spec 0005 M2–M4, M6) ────────────────────────────
+impl SeatHandler for State {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        cap: Capability,
+    ) {
+        if cap == Capability::Pointer && self._pointer.is_none() {
+            match self.seat_state.get_pointer(qh, &seat) {
+                Ok(p) => {
+                    self._pointer = Some(p);
+                    eprintln!("bongocat: puntero del seat listo (modo edición disponible)");
+                }
+                Err(e) => eprintln!("bongocat: sin puntero para el modo edición: {e}"),
+            }
+        }
+    }
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        cap: Capability,
+    ) {
+        if cap == Capability::Pointer {
+            self._pointer = None;
+        }
+    }
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for State {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        if !self.edit.active {
+            return;
+        }
+        let surface = self.layer.wl_surface().clone();
+        for ev in events {
+            if ev.surface != surface {
+                continue;
+            }
+            let (px, py) = ev.position;
+            match ev.kind {
+                PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                    self.edit_press(px, py);
+                }
+                PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
+                    self.edit.dragging = false;
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.edit.dragging = false; // por si el cursor se sale
+                }
+                PointerEventKind::Motion { .. } if self.edit.dragging => {
+                    self.edit_drag(px, py);
+                }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let dir = if vertical.absolute < 0.0 { 1 } else { -1 };
+                    self.edit_wheel(dir * bongocat_common::edit::wheel_step(false));
+                }
+                _ => {}
+            }
+        }
+    }
+}
 // HiDPI: el manager y el viewporter no emiten eventos; el viewport tampoco.
 delegate_noop!(State: ignore WpViewporter);
 delegate_noop!(State: ignore WpViewport);

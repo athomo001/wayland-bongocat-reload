@@ -7,8 +7,10 @@
 //!
 //! Portado de `src/config/config.c` a paridad con `tests/test_config.c`.
 
+mod doc;
 mod line;
 
+pub use doc::ConfDoc;
 pub use line::{split_line, Line};
 
 // ── Rangos de validación (de `src/config/config.c`) ──────────────────────────
@@ -51,6 +53,16 @@ pub enum Align {
     Right,
 }
 
+/// Qué pata usa la actividad del ratón (`enable_mouse`, spec 0012).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MousePaw {
+    Left,
+    #[default]
+    Right,
+    /// Una pata al azar por cada golpecito.
+    Random,
+}
+
 /// Hora del día para el reposo programado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Time {
@@ -83,6 +95,9 @@ pub struct Config {
     pub cat_x_offset: i32,
     pub cat_y_offset: i32,
     pub cat_height: i32,
+    /// Opacidad del **gato** en % (0 = invisible, 100 = opaco). Se aplica en el
+    /// blit, aparte de `overlay_opacity` (que es el fondo de la barra).
+    pub cat_opacity: i32,
     pub mirror_x: bool,
     pub mirror_y: bool,
     pub enable_antialiasing: bool,
@@ -100,6 +115,13 @@ pub struct Config {
     pub keyboard_devices: Vec<String>,
     pub keyboard_names: Vec<String>,
     pub hotplug_scan_interval: i32,
+    /// Animar una pata con la actividad del ratón físico (spec 0012).
+    pub enable_mouse: bool,
+    pub mouse_paw: MousePaw,
+    /// ms entre golpecitos mientras se mueve el ratón (no uno por evento).
+    pub mouse_move_interval: i32,
+    pub mouse_devices: Vec<String>,
+    pub mouse_names: Vec<String>,
 
     // Reposo
     pub enable_scheduled_sleep: bool,
@@ -110,6 +132,8 @@ pub struct Config {
     // Pantalla completa / depuración
     pub disable_fullscreen_hide: bool,
     pub enable_debug: bool,
+    /// Socket de control IPC (spec 0003). Por defecto activo; `0` lo desactiva.
+    pub enable_ipc: bool,
 }
 
 impl Default for Config {
@@ -125,6 +149,7 @@ impl Default for Config {
             cat_x_offset: 100,
             cat_y_offset: 10,
             cat_height: 40,
+            cat_opacity: 100,
             mirror_x: false,
             mirror_y: false,
             enable_antialiasing: true,
@@ -138,12 +163,18 @@ impl Default for Config {
             keyboard_devices: Vec::new(),
             keyboard_names: Vec::new(),
             hotplug_scan_interval: 30,
+            enable_mouse: true,
+            mouse_paw: MousePaw::Right,
+            mouse_move_interval: 50,
+            mouse_devices: Vec::new(),
+            mouse_names: Vec::new(),
             enable_scheduled_sleep: false,
             sleep_begin: Time { hour: 0, min: 0 },
             sleep_end: Time { hour: 0, min: 0 },
             idle_sleep_timeout_sec: 0,
             disable_fullscreen_hide: false,
             enable_debug: false,
+            enable_ipc: true,
         }
     }
 }
@@ -232,6 +263,30 @@ fn parse_time(s: &str) -> Option<Time> {
     }
 }
 
+/// Valida un par clave=valor aislado (para el escritor de config, spec 0004:
+/// rechazar antes de escribir claves desconocidas o valores mal tipados). No
+/// aplica el `clamp` de rango: eso lo hace `validate` al cargar.
+///
+/// # Errores
+/// `Err(msg)` si la clave es desconocida o el valor no tiene el tipo esperado.
+pub fn check_kv(key: &str, value: &str) -> Result<(), String> {
+    apply_kv(&mut Config::default(), key, value)
+}
+
+/// Aplica una clave a una `Config` **viva** (IPC `SET`, spec 0003): valida el
+/// tipo y luego recorta a rango igual que al cargar del fichero.
+///
+/// # Errores
+/// `Err(msg)` si la clave es desconocida o el valor no tiene el tipo esperado;
+/// en ese caso `cfg` no cambia. `Ok(avisos)` con los mensajes de recorte (vacío
+/// si el valor ya estaba en rango).
+pub fn set_live(cfg: &mut Config, key: &str, value: &str) -> Result<Vec<String>, String> {
+    apply_kv(cfg, key, value)?;
+    let mut warnings = Vec::new();
+    validate(cfg, &mut warnings);
+    Ok(warnings)
+}
+
 /// Aplica un par clave=valor ya partido. `Err(msg)` si la clave es desconocida o
 /// el valor inválido; en ese caso el campo conserva su valor previo.
 fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
@@ -248,6 +303,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "cat_x_offset" => c.cat_x_offset = int()?,
         "cat_y_offset" => c.cat_y_offset = int()?,
         "cat_height" => c.cat_height = int()?,
+        "cat_opacity" => c.cat_opacity = int()?,
         "overlay_height" => c.overlay_height = int()?,
         "overlay_opacity" => c.overlay_opacity = int()?,
         "idle_frame" => c.idle_frame = int()?,
@@ -257,6 +313,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "fps" => c.fps = int()?,
         "hotplug_scan_interval" => c.hotplug_scan_interval = int()?,
         "idle_sleep_timeout" => c.idle_sleep_timeout_sec = int()?,
+        "mouse_move_interval" => c.mouse_move_interval = int()?,
 
         // ── Booleanos (0/1) ──
         "mirror_x" => c.mirror_x = boolean()?,
@@ -264,6 +321,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "enable_antialiasing" => c.enable_antialiasing = boolean()?,
         "enable_hand_mapping" => c.enable_hand_mapping = boolean()?,
         "enable_debug" => c.enable_debug = boolean()?,
+        "enable_ipc" => c.enable_ipc = boolean()?,
         "enable_scheduled_sleep" => c.enable_scheduled_sleep = boolean()?,
         "disable_fullscreen_hide" => c.disable_fullscreen_hide = boolean()?,
 
@@ -315,18 +373,39 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         }
         "keyboard_name" => c.keyboard_names.push(value.to_string()),
         "keyboard_device" | "keyboard_devices" => {
-            if !value.starts_with("/dev/input/") {
-                return Err(format!(
-                    "keyboard_device debe empezar por /dev/input/: {value}"
-                ));
-            }
-            if value.contains("..") {
-                return Err(format!("path traversal en la ruta de dispositivo: {value}"));
-            }
+            validate_input_path(value)?;
             c.keyboard_devices.push(value.to_string());
+        }
+        "mouse_name" => c.mouse_names.push(value.to_string()),
+        "mouse_device" | "mouse_devices" => {
+            validate_input_path(value)?;
+            c.mouse_devices.push(value.to_string());
+        }
+        "enable_mouse" => c.enable_mouse = boolean()?,
+        "mouse_paw" => {
+            c.mouse_paw = match value {
+                "left" => MousePaw::Left,
+                "right" => MousePaw::Right,
+                "random" => MousePaw::Random,
+                _ => return Err(format!("mouse_paw '{value}' inválido (left|right|random)")),
+            }
         }
 
         _ => return Err(format!("clave desconocida '{key}'")),
+    }
+    Ok(())
+}
+
+/// Valida una ruta de `/dev/input/` (teclado o ratón): prefijo obligatorio y sin
+/// `..` (spec 0013: nadie mete rutas raras por la config).
+fn validate_input_path(value: &str) -> Result<(), String> {
+    if !value.starts_with("/dev/input/") {
+        return Err(format!(
+            "la ruta de dispositivo debe empezar por /dev/input/: {value}"
+        ));
+    }
+    if value.contains("..") {
+        return Err(format!("path traversal en la ruta de dispositivo: {value}"));
     }
     Ok(())
 }
@@ -390,7 +469,15 @@ fn validate(c: &mut Config, warnings: &mut Vec<String>) {
         "idle_sleep_timeout",
         warnings,
     );
+    clamp(
+        &mut c.mouse_move_interval,
+        10,
+        2000,
+        "mouse_move_interval",
+        warnings,
+    );
     clamp(&mut c.overlay_opacity, 0, 255, "overlay_opacity", warnings);
+    clamp(&mut c.cat_opacity, 0, 100, "cat_opacity", warnings);
 
     if c.idle_frame < 0 || c.idle_frame >= NUM_FRAMES {
         warnings.push(format!(
@@ -439,6 +526,17 @@ impl Align {
     }
 }
 
+impl MousePaw {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MousePaw::Left => "left",
+            MousePaw::Right => "right",
+            MousePaw::Random => "random",
+        }
+    }
+}
+
 impl Config {
     /// Emite la configuración como INI plano (sin comentarios). Sirve para
     /// `bongocat --print-default-config` y como base de un fichero nuevo. El
@@ -452,6 +550,7 @@ impl Config {
             s.push_str(&format!("{k}={v}\n"));
         };
         w("cat_height", &self.cat_height);
+        w("cat_opacity", &self.cat_opacity);
         w("cat_align", &self.cat_align.as_str());
         w("cat_x_offset", &self.cat_x_offset);
         w("cat_y_offset", &self.cat_y_offset);
@@ -481,11 +580,21 @@ impl Config {
         );
         w("disable_fullscreen_hide", &b(self.disable_fullscreen_hide));
         w("enable_debug", &b(self.enable_debug));
+        w("enable_ipc", &b(self.enable_ipc));
         for dev in &self.keyboard_devices {
             w("keyboard_device", dev);
         }
         for name in &self.keyboard_names {
             w("keyboard_name", name);
+        }
+        w("enable_mouse", &b(self.enable_mouse));
+        w("mouse_paw", &self.mouse_paw.as_str());
+        w("mouse_move_interval", &self.mouse_move_interval);
+        for dev in &self.mouse_devices {
+            w("mouse_device", dev);
+        }
+        for name in &self.mouse_names {
+            w("mouse_name", name);
         }
         if !self.output_names.is_empty() {
             w("monitor", &self.output_names.join(","));

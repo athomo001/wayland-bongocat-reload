@@ -24,12 +24,27 @@ fn defaults_con_configuracion_vacia() {
 
 #[test]
 fn clamping_de_enteros() {
-    let (c, w) = parse_ini("fps=999\ncat_height=0\noverlay_opacity=-50\noverlay_height=1\n");
+    let (c, w) = parse_ini(
+        "fps=999\ncat_height=0\noverlay_opacity=-50\noverlay_height=1\ncat_opacity=250\n",
+    );
     assert_eq!(c.fps, 120, "fps al máximo");
     assert_eq!(c.cat_height, 10, "cat_height al mínimo");
     assert_eq!(c.overlay_opacity, 0, "opacidad al mínimo");
     assert_eq!(c.overlay_height, 20, "overlay_height al mínimo");
-    assert_eq!(w.len(), 4, "un aviso por cada clamp: {w:?}");
+    assert_eq!(c.cat_opacity, 100, "cat_opacity al máximo (%)");
+    assert_eq!(w.len(), 5, "un aviso por cada clamp: {w:?}");
+}
+
+#[test]
+fn cat_opacity_por_defecto_y_ronda() {
+    let (c, _) = parse_ini("");
+    assert_eq!(c.cat_opacity, 100, "por defecto opaco");
+    let (c2, w) = parse_ini("cat_opacity=60\n");
+    assert!(w.is_empty());
+    assert_eq!(c2.cat_opacity, 60);
+    // ida y vuelta por to_ini
+    let (c3, _) = parse_ini(&c2.to_ini());
+    assert_eq!(c3.cat_opacity, 60);
 }
 
 #[test]
@@ -113,6 +128,27 @@ fn to_ini_hace_ida_y_vuelta() {
     custom.sleep_end = Time { hour: 8, min: 0 };
     let (round, _) = parse_ini(&custom.to_ini());
     assert_eq!(round, custom);
+}
+
+#[test]
+fn set_live_valida_recorta_y_falla() {
+    let mut c = Config::default();
+
+    // Válido y en rango: sin avisos.
+    assert_eq!(set_live(&mut c, "fps", "72"), Ok(Vec::new()));
+    assert_eq!(c.fps, 72);
+
+    // Válido pero fuera de rango: se recorta y avisa.
+    let w = set_live(&mut c, "cat_opacity", "500").unwrap();
+    assert_eq!(c.cat_opacity, 100);
+    assert_eq!(w.len(), 1);
+
+    // Tipo inválido: error y sin cambios.
+    assert!(set_live(&mut c, "fps", "abc").is_err());
+    assert_eq!(c.fps, 72, "un SET inválido no toca la config");
+
+    // Clave desconocida: error.
+    assert!(set_live(&mut c, "no_existe", "1").is_err());
 }
 
 #[test]

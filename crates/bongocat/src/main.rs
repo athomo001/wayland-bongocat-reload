@@ -16,7 +16,9 @@ mod anim;
 mod cosmic;
 mod input;
 mod input_child;
+mod ipc;
 mod pidfile;
+mod service;
 mod toggle;
 mod watch;
 mod wl;
@@ -39,6 +41,8 @@ struct Args {
     validate: bool,
     print_default_config: bool,
     dry_run: bool,
+    install_service: bool,
+    uninstall_service: bool,
 }
 
 fn print_help(prog: &str) {
@@ -56,7 +60,9 @@ fn print_help(prog: &str) {
          \x20     --validate             Valida la configuración y sale\n\
          \x20     --print-default-config Imprime la configuración por defecto como INI\n\
          \x20     --dry-run              Resuelve config + tema sin abrir Wayland y sale\n\
-         \x20     --no-toplevel          No usar protocolos de toplevels (sin auto-ocultar)\n"
+         \x20     --no-toplevel          No usar protocolos de toplevels (sin auto-ocultar)\n\
+         \x20     --install-service      Instala la unidad systemd de usuario y sale\n\
+         \x20     --uninstall-service    Quita la unidad systemd de usuario y sale\n"
     );
 }
 
@@ -90,6 +96,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--validate" => a.validate = true,
             "--print-default-config" => a.print_default_config = true,
             "--dry-run" => a.dry_run = true,
+            "--install-service" => a.install_service = true,
+            "--uninstall-service" => a.uninstall_service = true,
             other => return Err(format!("argumento desconocido: {other}")),
         }
     }
@@ -109,6 +117,12 @@ fn main() -> ExitCode {
     if args.print_default_config {
         print!("{}", Config::default().to_ini());
         return ExitCode::SUCCESS;
+    }
+    if args.install_service {
+        return service::install();
+    }
+    if args.uninstall_service {
+        return service::uninstall();
     }
 
     // Carga de configuración (portada; sin escaneo de /dev/input por nombre).
@@ -172,7 +186,7 @@ fn main() -> ExitCode {
     // Lector de teclado en un proceso aparte con seccomp (spec 0013 §2). Se hace
     // AQUÍ: el proceso todavía es monohilo y aún no se tomó el fichero PID ni se
     // conectó a Wayland, así que el hijo no hereda esos descriptores.
-    let input = match input::start(&loaded.config.keyboard_devices) {
+    let input = match input::start(&loaded.config) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("bongocat: no se pudo arrancar el lector de input: {e}");

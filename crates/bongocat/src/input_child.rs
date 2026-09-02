@@ -11,8 +11,9 @@
 //!     otra (`execve`, `open*`, `socket`, `ptrace`, `clone`, `prctl`…) mata el
 //!     proceso. Así, aunque una entrada evdev maliciosa lograse ejecución de
 //!     código, no puede tocar nada del sistema.
-//!   * **Nada de logs por pulsación**: el keycode se reduce a 1 bit y se
-//!     descarta; no se registra qué tecla fue.
+//!   * **Nada de logs por pulsación ni de movimiento de ratón**: el keycode y
+//!     los deltas del ratón se reducen a 1 bit de pata y se descartan; no se
+//!     registra qué tecla fue ni hacia dónde se movió el ratón.
 //!
 //! Si la arquitectura no está soportada por el filtro, se sigue sin seccomp
 //! (el aislamiento por proceso ya vale): se avisa por `stderr`.
@@ -22,44 +23,65 @@
 use std::io::Read;
 use std::os::fd::RawFd;
 use std::thread;
+use std::time::Instant;
 
+use bongocat_common::config::MousePaw;
+use bongocat_common::mouse::{mouse_motion_tick, mouse_paw_bit};
 use bongocat_common::paw::paw_for_keycode;
-use evdev::{Device, EventType};
+use evdev::{Device, EventType, RelativeAxisType};
 
 /// Punto de entrada del hijo. No regresa: termina con `_exit`.
 ///
-/// `devices` son rutas ya resueltas por el padre (descubrimiento en el proceso
-/// de confianza); aquí solo se abren. `write_fd` es el extremo de escritura de
-/// la tubería hacia el padre.
-pub fn run(devices: &[String], write_fd: RawFd) -> ! {
+/// `keyboards` y `mice` son rutas ya resueltas por el padre (descubrimiento en
+/// el proceso de confianza); aquí solo se abren. `write_fd` es el extremo de
+/// escritura de la tubería hacia el padre.
+pub fn run(
+    keyboards: &[String],
+    mice: &[String],
+    mouse_paw: MousePaw,
+    move_interval_ms: u64,
+    write_fd: RawFd,
+) -> ! {
     harden();
 
     // Abrir los dispositivos ANTES de seccomp (después, `open` está prohibido).
-    let opened: Vec<(Device, String)> = devices
-        .iter()
-        .filter_map(|p| match Device::open(p) {
-            Ok(d) => Some((d, p.clone())),
-            Err(e) => {
-                eprintln!("bongocat[input]: no se pudo abrir {p}: {e}");
-                None
-            }
-        })
-        .collect();
+    let open_all = |paths: &[String]| -> Vec<(Device, String)> {
+        paths
+            .iter()
+            .filter_map(|p| match Device::open(p) {
+                Ok(d) => Some((d, p.clone())),
+                Err(e) => {
+                    eprintln!("bongocat[input]: no se pudo abrir {p}: {e}");
+                    None
+                }
+            })
+            .collect()
+    };
+    let kbds = open_all(keyboards);
+    let mice = open_all(mice);
 
-    if opened.is_empty() {
+    if kbds.is_empty() && mice.is_empty() {
         eprintln!("bongocat[input]: ningún dispositivo; el hijo termina");
         exit(0);
     }
 
     // Un hilo lector por dispositivo (lectura bloqueante). Se crean ANTES de
     // aplicar el filtro para que `clone` pueda quedar prohibido después.
-    let mut handles = Vec::with_capacity(opened.len());
-    for (dev, path) in opened {
+    let mut handles = Vec::new();
+    for (dev, path) in kbds {
         handles.push(
             thread::Builder::new()
-                .name(format!("input:{path}"))
-                .spawn(move || reader_thread(dev, &path, write_fd))
-                .expect("crear hilo lector"),
+                .name(format!("kbd:{path}"))
+                .spawn(move || keyboard_thread(dev, &path, write_fd))
+                .expect("crear hilo de teclado"),
+        );
+    }
+    for (dev, path) in mice {
+        handles.push(
+            thread::Builder::new()
+                .name(format!("mouse:{path}"))
+                .spawn(move || mouse_thread(dev, &path, write_fd, mouse_paw, move_interval_ms))
+                .expect("crear hilo de ratón"),
         );
     }
 
@@ -72,9 +94,17 @@ pub fn run(devices: &[String], write_fd: RawFd) -> ! {
     exit(0);
 }
 
-/// Bucle de lectura de un dispositivo. Por cada key-down: reduce el keycode a un
-/// bit de pata y lo manda por la tubería. Nunca registra la tecla.
-fn reader_thread(mut dev: Device, path: &str, write_fd: RawFd) {
+/// Escribe 1 byte (el bit de pata) por la tubería. `false` = el padre la cerró.
+fn send_bit(write_fd: RawFd, bit: u8) -> bool {
+    let buf = [bit];
+    // SAFETY: `write` sobre un fd válido; 1 byte < PIPE_BUF, atómico aun con
+    // varios hilos escribiendo.
+    unsafe { libc::write(write_fd, buf.as_ptr().cast(), 1) == 1 }
+}
+
+/// Bucle de teclado. Por cada key-down: reduce el keycode a un bit de pata y lo
+/// manda por la tubería. Nunca registra la tecla.
+fn keyboard_thread(mut dev: Device, path: &str, write_fd: RawFd) {
     loop {
         let batch = match dev.fetch_events() {
             Ok(b) => b,
@@ -84,14 +114,67 @@ fn reader_thread(mut dev: Device, path: &str, write_fd: RawFd) {
             }
         };
         for ev in batch {
-            if ev.event_type() == EventType::KEY && ev.value() == 1 {
-                let bit = [paw_for_keycode(i32::from(ev.code()))];
-                // SAFETY: `write` sobre un fd válido; 1 byte < PIPE_BUF, atómico
-                // aun con varios hilos escribiendo.
-                let n = unsafe { libc::write(write_fd, bit.as_ptr().cast(), 1) };
-                if n != 1 {
-                    return; // el padre cerró la tubería: salimos
-                }
+            if ev.event_type() == EventType::KEY
+                && ev.value() == 1
+                && !send_bit(write_fd, paw_for_keycode(i32::from(ev.code())))
+            {
+                return; // el padre cerró la tubería
+            }
+        }
+    }
+}
+
+/// Bucle de ratón (spec 0012). Botón o rueda → golpecito inmediato; movimiento →
+/// **un** golpecito cada `move_interval_ms` mientras haya desplazamiento. Nunca
+/// registra los deltas: solo "hubo actividad" → 1 bit.
+fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, interval_ms: u64) {
+    // PRNG diminuto para `MousePaw::Random` (no hace falta entropía real).
+    let mut rng: u64 = u64::from(std::process::id()) ^ 0x9E37_79B9_7F4A_7C15;
+    let mut coin = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng & 1 == 1
+    };
+
+    let mut accum: i64 = 0;
+    let mut last_tap = Instant::now();
+    loop {
+        let batch = match dev.fetch_events() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("bongocat[input]: {path} dejó de leer: {e}");
+                return;
+            }
+        };
+        let mut tap_now = false;
+        for ev in batch {
+            match ev.event_type() {
+                EventType::KEY if ev.value() == 1 => tap_now = true, // botón del ratón
+                EventType::RELATIVE => match RelativeAxisType(ev.code()) {
+                    RelativeAxisType::REL_WHEEL | RelativeAxisType::REL_HWHEEL
+                        if ev.value() != 0 =>
+                    {
+                        tap_now = true;
+                    }
+                    RelativeAxisType::REL_X | RelativeAxisType::REL_Y => {
+                        accum += i64::from(ev.value()).abs();
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        if !tap_now && mouse_motion_tick(accum, last_tap.elapsed().as_millis() as u64, interval_ms)
+        {
+            tap_now = true;
+        }
+        if tap_now {
+            accum = 0;
+            last_tap = Instant::now();
+            if !send_bit(write_fd, mouse_paw_bit(paw, coin())) {
+                return;
             }
         }
     }

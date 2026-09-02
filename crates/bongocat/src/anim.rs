@@ -117,17 +117,22 @@ fn flip_v(buf: &mut [u8], w: u32, h: u32) {
 
 /// Compone `src` (BGRA premultiplicado, tamaño `src_wh`) sobre `dst`
 /// (BGRA premultiplicado, tamaño `dst_wh`) en el `origin` dado, con compositing
-/// "over". Recorta lo que se salga. Porta `blit_cached_frame`.
+/// "over". `opacity` (0–255, 255 = sin cambio) escala uniformemente los 4
+/// canales de cada píxel del gato — como es premultiplicado, eso baja también su
+/// alfa efectivo (`cat_opacity`). Recorta lo que se salga. Porta
+/// `blit_cached_frame`.
 pub fn blit_over(
     dst: &mut [u8],
     dst_wh: (u32, u32),
     src: &[u8],
     src_wh: (u32, u32),
     origin: (i32, i32),
+    opacity: u8,
 ) {
     let (dst_w, dst_h) = dst_wh;
     let (src_w, src_h) = src_wh;
     let (ox, oy) = origin;
+    let op = u16::from(opacity);
     for sy in 0..src_h as i32 {
         let dy = sy + oy;
         if dy < 0 || dy >= dst_h as i32 {
@@ -140,17 +145,18 @@ pub fn blit_over(
             }
             let si = ((sy as u32 * src_w + sx as u32) * 4) as usize;
             let di = ((dy as u32 * dst_w + dx as u32) * 4) as usize;
-            let sa = src[si + 3];
+            // Píxel del gato ya escalado por la opacidad (exacto a 255).
+            let s: [u8; 4] = std::array::from_fn(|c| (u16::from(src[si + c]) * op / 255) as u8);
+            let sa = s[3];
             if sa == 0 {
                 continue;
             }
             if sa == 255 {
-                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+                dst[di..di + 4].copy_from_slice(&s);
             } else {
                 let inv = 255 - u16::from(sa);
                 for c in 0..4 {
-                    dst[di + c] =
-                        (u16::from(src[si + c]) + (u16::from(dst[di + c]) * inv) / 255) as u8;
+                    dst[di + c] = (u16::from(s[c]) + (u16::from(dst[di + c]) * inv) / 255) as u8;
                 }
             }
         }
@@ -229,12 +235,28 @@ mod tests {
     fn blit_over_sobre_fondo_vacio_copia_el_gato() {
         let mut dst = vec![0u8; 4 * 4 * 4]; // 4x4
         let src = [0x10u8, 0x20, 0x30, 0xFF].repeat(4); // 2x2 opaco
-        blit_over(&mut dst, (4, 4), &src, (2, 2), (1, 1));
+        blit_over(&mut dst, (4, 4), &src, (2, 2), (1, 1), 255);
         // píxel (fila 1, col 1) del destino = píxel opaco del src
         let (row, col) = (1usize, 1usize);
         let i = (row * 4 + col) * 4;
         assert_eq!(&dst[i..i + 4], &[0x10, 0x20, 0x30, 0xFF]);
         // esquina (0,0) sigue vacía
         assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn blit_over_con_opacidad_reduce_todos_los_canales() {
+        // Gato opaco [40,80,120,255] al 50 % sobre fondo vacío → mitad de cada
+        // canal y alfa ≈ 127 (compuesto "over" con inv≈128).
+        let mut dst = vec![0u8; 4]; // 1x1
+        let src = [40u8, 80, 120, 255];
+        blit_over(&mut dst, (1, 1), &src, (1, 1), (0, 0), 128);
+        // s = [20,40,60,128]; como sa != 255, va por la rama "over" sobre 0:
+        // dst[c] = s[c] + 0 = s[c].
+        assert_eq!(&dst[..], &[20, 40, 60, 128]);
+        // opacidad 0 → nada.
+        let mut d0 = vec![9u8; 4];
+        blit_over(&mut d0, (1, 1), &src, (1, 1), (0, 0), 0);
+        assert_eq!(&d0[..], &[9, 9, 9, 9], "opacidad 0 no dibuja");
     }
 }

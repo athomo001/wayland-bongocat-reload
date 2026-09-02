@@ -98,6 +98,43 @@ pub fn load(explicit: Option<&Path>) -> std::io::Result<Loaded> {
     })
 }
 
+/// Escribe `contents` en `path` de forma **atómica**: fichero temporal en el
+/// mismo directorio + `fsync` + `rename` (spec 0004). Preserva los permisos del
+/// fichero previo si existía. Un fallo no deja `path` a medias.
+///
+/// # Errores
+/// Errores de E/S al crear el temporal, escribir, sincronizar o renombrar.
+pub fn save_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bongocat.conf");
+    let tmp = dir.join(format!(".{name}.tmp.{}", std::process::id()));
+
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Si no se configuró ningún teclado (ni por ruta ni por nombre), añade
 /// `/dev/input/event4` como último recurso, igual que `config_set_default_devices`.
 pub fn apply_default_keyboard_device(config: &mut Config) {

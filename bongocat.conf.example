@@ -12,10 +12,12 @@
 
 # Tamaño y posición del gato.
 #   cat_height    : alto del gato en píxeles (10–200).
+#   cat_opacity   : opacidad del gato en % (0 = invisible, 100 = opaco).
 #   cat_align     : alineación horizontal — left, center o right.
 #   cat_x_offset  : desplazamiento horizontal desde la alineación (entero, +/-).
 #   cat_y_offset  : desplazamiento vertical desde el centro de la barra (+/-).
 cat_height=110
+cat_opacity=100
 cat_align=center
 cat_x_offset=0
 cat_y_offset=0
@@ -51,6 +53,15 @@ layer=top
 # Repite la línea para monitorear varios teclados.
 # La ruta debe empezar por /dev/input/ (validado por seguridad).
 keyboard_device=/dev/input/event4
+
+# Ratón: con enable_mouse=1 el gato da golpecitos al mover / clicar / girar la
+# rueda del ratón físico (privacidad: no se lee la posición, solo "hay actividad").
+#   mouse_paw           : qué pata usa el ratón — left, right o random.
+#   mouse_move_interval : ms entre golpecitos mientras mueves el ratón (10–2000).
+#   mouse_device        : ruta /dev/input/… (repetible). Vacío = autodetección.
+enable_mouse=1
+mouse_paw=right
+mouse_move_interval=50
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ MULTI-MONITOR (opcional)                                                    │
@@ -114,6 +125,15 @@ sleep_end=06:00
 # test_animation_duration=200
 # Intervalo entre ciclos de la animación de prueba, en ms (0 = desactivado).
 # test_animation_interval=0
+
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ CONTROL (IPC)                                                               │
+# └─────────────────────────────────────────────────────────────────────────────┘
+
+# Socket Unix de control en $XDG_RUNTIME_DIR/bongocat[-MONITOR].sock, para que
+# `bongocatctl ping/state/stop` (y el icono de bandeja) hablen con la instancia.
+# Solo lo atiende tu propio usuario (modo 0600 + SO_PEERCRED). 1 = activo.
+enable_ipc=1
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ DEPURACIÓN                                                                  │

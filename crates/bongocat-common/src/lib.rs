@@ -9,8 +9,11 @@
 //! con los tests de `tests/test_*.c`.
 
 pub mod config;
+pub mod edit;
 pub mod fullscreen;
 pub mod io;
+pub mod ipc;
+pub mod mouse;
 pub mod paw;
 pub mod scale;
 pub mod sleep;

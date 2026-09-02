@@ -1,4 +1,4 @@
-//! Descubrimiento de teclados y arranque del **proceso lector aislado**.
+//! Descubrimiento de teclados/ratones y arranque del **proceso lector aislado**.
 //!
 //! El descubrimiento (`evdev::enumerate`) ocurre aquí, en el proceso de
 //! confianza. La lectura de `/dev/input/event*` se hace en un proceso hijo
@@ -6,8 +6,9 @@
 //! evdev maliciosa comprometiese al lector, no puede tocar Wayland, la config,
 //! la red ni ejecutar nada (spec 0013 §2).
 //!
-//! Al hijo solo le cruza **1 byte por pulsación** (el bit de pata ya reducido);
-//! el identificador de la tecla no se guarda, registra ni transmite.
+//! Al padre solo le cruza **1 byte por pulsación / golpecito de ratón** (el bit
+//! de pata ya reducido); ni la tecla ni la posición del ratón se guardan,
+//! registran ni transmiten.
 
 #![allow(unsafe_code)] // punto de FFI documentado: pipe2 + fork
 
@@ -16,7 +17,8 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::thread;
 
-use evdev::{Device, Key};
+use bongocat_common::config::Config;
+use evdev::{Device, Key, RelativeAxisType};
 
 /// ¿Este dispositivo parece un teclado? (tiene las letras y Enter).
 fn looks_like_keyboard(dev: &Device) -> bool {
@@ -25,26 +27,32 @@ fn looks_like_keyboard(dev: &Device) -> bool {
     })
 }
 
-/// Escanea `/dev/input` y devuelve `(ruta, nombre)` de lo que parece un teclado.
-#[must_use]
-pub fn detect_keyboards() -> Vec<(PathBuf, String)> {
+/// ¿Este dispositivo parece un ratón? (eje relativo X/Y o botón izquierdo).
+fn looks_like_mouse(dev: &Device) -> bool {
+    dev.supported_relative_axes()
+        .is_some_and(|a| a.contains(RelativeAxisType::REL_X) || a.contains(RelativeAxisType::REL_Y))
+        || dev
+            .supported_keys()
+            .is_some_and(|k| k.contains(Key::BTN_LEFT))
+}
+
+fn detect(pred: fn(&Device) -> bool) -> Vec<(PathBuf, String)> {
     evdev::enumerate()
-        .filter(|(_, d)| looks_like_keyboard(d))
+        .filter(|(_, d)| pred(d))
         .map(|(p, d)| (p, d.name().unwrap_or("(sin nombre)").to_string()))
         .collect()
 }
 
-/// Decide qué dispositivos leerá el hijo. Estrategia: los de la configuración
-/// que existan y parezcan teclado; si ninguno lo parece (o la lista está vacía),
-/// se usan los detectados automáticamente. Así el gato reacciona aunque el
-/// `keyboard_device` del `.conf` esté mal (p. ej. apuntando a un botón rfkill).
-#[must_use]
-pub fn resolve_devices(configured: &[String]) -> Vec<String> {
-    let detected = detect_keyboards();
+/// Resuelve qué dispositivos leerá el hijo para un rol. Estrategia: los de la
+/// configuración que existan y casen con `pred`; si ninguno casa (o la lista
+/// está vacía), se usan los detectados automáticamente. `rol` es solo para los
+/// mensajes.
+fn resolve(configured: &[String], pred: fn(&Device) -> bool, rol: &str) -> Vec<String> {
+    let detected = detect(pred);
     if detected.is_empty() {
-        eprintln!("bongocat: no se detectó ningún teclado en /dev/input (¿grupo 'input'?)");
+        eprintln!("bongocat: no se detectó ningún {rol} en /dev/input (¿grupo 'input'?)");
     } else {
-        eprintln!("bongocat: teclados detectados:");
+        eprintln!("bongocat: {rol}s detectados:");
         for (p, n) in &detected {
             eprintln!("           {}  —  {n}", p.display());
         }
@@ -53,8 +61,8 @@ pub fn resolve_devices(configured: &[String]) -> Vec<String> {
     let mut chosen = Vec::new();
     for path in configured {
         match Device::open(path) {
-            Ok(dev) if looks_like_keyboard(&dev) => chosen.push(path.clone()),
-            Ok(_) => eprintln!("bongocat: {path} no parece un teclado; se ignora"),
+            Ok(dev) if pred(&dev) => chosen.push(path.clone()),
+            Ok(_) => eprintln!("bongocat: {path} no parece un {rol}; se ignora"),
             Err(e) => eprintln!("bongocat: no se pudo abrir {path}: {e} (¿grupo 'input'?)"),
         }
     }
@@ -65,10 +73,16 @@ pub fn resolve_devices(configured: &[String]) -> Vec<String> {
             .map(|(p, _)| p.display().to_string())
             .collect();
         if !chosen.is_empty() {
-            eprintln!("bongocat: uso los teclados detectados automáticamente");
+            eprintln!("bongocat: uso los {rol}s detectados automáticamente");
         }
     }
     chosen
+}
+
+/// Teclados a leer (config o autodetección). Ver [`resolve`].
+#[must_use]
+pub fn resolve_devices(configured: &[String]) -> Vec<String> {
+    resolve(configured, looks_like_keyboard, "teclado")
 }
 
 /// Extremo de padre del lector aislado.
@@ -83,8 +97,19 @@ pub struct Isolated {
 ///
 /// El hijo hace `fork` sin `exec`: ejecuta [`crate::input_child::run`], que
 /// aplica el endurecimiento y no regresa.
-pub fn start(configured: &[String]) -> io::Result<Isolated> {
-    let devices = resolve_devices(configured);
+///
+/// # Errores
+/// Errores de E/S al crear la tubería o al hacer `fork`.
+pub fn start(cfg: &Config) -> io::Result<Isolated> {
+    let keyboards = resolve_devices(&cfg.keyboard_devices);
+    let mice = if cfg.enable_mouse {
+        resolve(&cfg.mouse_devices, looks_like_mouse, "ratón")
+    } else {
+        eprintln!("bongocat: enable_mouse=0; el ratón se ignora");
+        Vec::new()
+    };
+    let mouse_paw = cfg.mouse_paw;
+    let move_interval_ms = cfg.mouse_move_interval.max(1) as u64;
 
     // Tubería: ambos extremos con O_CLOEXEC. El hijo no hace `exec`, así que su
     // extremo sigue válido; en un `exec` futuro (no hay) se cerrarían solos.
@@ -112,7 +137,7 @@ pub fn start(configured: &[String]) -> io::Result<Isolated> {
             // Hijo.
             // SAFETY: cerramos el extremo que no usa; `rd` es válido.
             unsafe { libc::close(rd) };
-            crate::input_child::run(&devices, wr);
+            crate::input_child::run(&keyboards, &mice, mouse_paw, move_interval_ms, wr);
         }
         _ => {
             // Padre.
