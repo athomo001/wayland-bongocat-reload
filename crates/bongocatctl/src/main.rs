@@ -28,6 +28,9 @@ Uso: bongocatctl [-c FICHERO] <orden> [args]
   state             Imprime el estado de la instancia
   show / hide / toggle   Muestra u oculta el gato a mano
   edit [on|off|toggle]   Modo edición: arrastra el gato / rueda = tamaño; guarda al salir
+  theme [list]           Lista los temas disponibles
+  theme next             Pasa al siguiente tema
+  theme set NOMBRE       Cambia de tema en caliente (NOMBRE o 'embedded')
   get-live CLAVE    Lee un valor de la instancia (config viva)
   set-live CLAVE V  Cambia un valor en caliente (no toca el fichero)
   save              Persiste al .conf lo cambiado con set-live (conserva formato)
@@ -39,7 +42,7 @@ Opciones:
   -m, --monitor NOMBRE   Instancia de esa salida (para las órdenes IPC)
   -v, --version          Versión
 
-Pendiente (fases posteriores): GET/SET/SAVE en vivo por IPC, TUI, temas, presets.";
+Pendiente (fases posteriores): TUI de configuración, presets, perfiles.";
 
 struct Args {
     config: Option<PathBuf>,
@@ -119,6 +122,13 @@ fn main() -> ExitCode {
         ["edit"] => cmd_ipc(args.monitor.as_deref(), "EDIT toggle", ""),
         ["edit", m @ ("on" | "off" | "toggle")] => {
             cmd_ipc(args.monitor.as_deref(), &format!("EDIT {m}"), "")
+        }
+        ["theme"] | ["theme", "list"] => cmd_ipc(args.monitor.as_deref(), "THEME list", ""),
+        ["theme", "next"] => cmd_ipc(args.monitor.as_deref(), "THEME next", ""),
+        ["theme", "set", name] => cmd_ipc(args.monitor.as_deref(), &format!("THEME {name}"), ""),
+        ["theme", ..] => {
+            eprintln!("bongocatctl: uso: theme [list] | theme next | theme set NOMBRE");
+            ExitCode::from(2)
         }
         ["reload"] => cmd_ipc(args.monitor.as_deref(), "RELOAD", "OK"),
         ["save"] => cmd_ipc(args.monitor.as_deref(), "SAVE", ""),

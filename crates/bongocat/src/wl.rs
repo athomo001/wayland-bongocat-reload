@@ -75,7 +75,7 @@ use crate::cosmic::{
     zcosmic_toplevel_handle_v1::{self as cosmic_handle, ZcosmicToplevelHandleV1},
     zcosmic_toplevel_info_v1::{self as cosmic_info, ZcosmicToplevelInfoV1},
 };
-use crate::{input, input_child, ipc, watch};
+use crate::{input, input_child, ipc, theme, watch};
 
 /// Valores del enum `state` de `zwlr_foreign_toplevel_handle_v1` (y del enum
 /// homónimo de `zcosmic_toplevel_handle_v1`: mismos números).
@@ -152,6 +152,18 @@ fn anchor_for(pos: Position) -> Anchor {
         Position::Bottom => Anchor::BOTTOM,
     };
     edge | Anchor::LEFT | Anchor::RIGHT
+}
+
+/// Rasteriza los 5 fotogramas: del tema si hay, si no del embebido.
+fn rasterize_theme(
+    theme: Option<&theme::LoadedTheme>,
+    cfg: &Config,
+) -> Result<Frames, Box<dyn Error>> {
+    let (h, mx, my) = (cfg.cat_height.max(1) as u32, cfg.mirror_x, cfg.mirror_y);
+    match theme {
+        Some(t) => anim::rasterize_from(&t.frames, t.meta.aspect, false, h, mx, my),
+        None => anim::rasterize(h, mx, my),
+    }
 }
 
 /// Duración entre fotogramas a partir de los FPS configurados.
@@ -329,15 +341,13 @@ pub fn run_overlay(
 
     let pool = SlotPool::new((width * height * 4) as usize, &shm)?;
 
-    // Rasteriza los 5 fotogramas del gato a la altura configurada.
-    let frames = anim::rasterize(
-        config.cat_height.max(1) as u32,
-        config.mirror_x,
-        config.mirror_y,
-    )?;
+    // Tema (spec 0006): si `theme=` está, se cargan sus 5 SVG; si falla, el
+    // gato embebido (`classic`) sigue disponible siempre.
+    let theme = theme::resolve(&config.theme);
+    let frames = rasterize_theme(theme.as_ref(), config)?;
     eprintln!(
-        "bongocat: {} fotogramas rasterizados a {}x{}",
-        5, frames.w, frames.h
+        "bongocat: {} fotogramas rasterizados a {}x{} (aspecto {}:{})",
+        5, frames.w, frames.h, frames.aspect.0, frames.aspect.1
     );
 
     let now = Instant::now();
@@ -355,6 +365,7 @@ pub fn run_overlay(
         config: config.clone(),
         config_path: config_path.clone(),
         frames,
+        theme,
         frame: config.idle_frame.clamp(0, 4) as u8,
         frame_dt: frame_dt_from_fps(config.fps),
         left_hold_until: now,
@@ -503,6 +514,8 @@ struct State {
     config: Config,
     config_path: Option<PathBuf>,
     frames: Frames,
+    /// Tema activo cargado de disco, o `None` para el gato embebido.
+    theme: Option<theme::LoadedTheme>,
     /// Fotograma actual (0–4), lo decide la máquina de estados.
     frame: u8,
     /// Duración entre ticks de animación (deriva de `fps`).
@@ -595,13 +608,43 @@ impl State {
         (x, y)
     }
 
-    /// Re-rasteriza los fotogramas del gato a la altura física actual.
+    /// Relación de aspecto del tema activo, en `i32` (para `edit::cat_rect`).
+    fn cat_aspect(&self) -> (i32, i32) {
+        (self.frames.aspect.0 as i32, self.frames.aspect.1 as i32)
+    }
+
+    /// Cambia el tema en caliente (IPC `THEME`). `spec` vacío / `embedded` /
+    /// `none` → el gato embebido. Marca `theme` como sucia para `SAVE`.
+    fn set_theme(&mut self, spec: &str) -> String {
+        let spec = match spec {
+            "embedded" | "none" | "classic-embedded" => "",
+            s => s,
+        };
+        let loaded = theme::resolve(spec);
+        if !spec.is_empty() && loaded.is_none() {
+            return format!("ERR el tema '{spec}' no cargó; sigo con el actual");
+        }
+        self.theme = loaded;
+        self.config.theme = spec.to_string();
+        self.ipc_dirty.insert("theme".to_string());
+        self.rerasterize();
+        self.draw();
+        format!(
+            "OK theme={}",
+            if spec.is_empty() { "embedded" } else { spec }
+        )
+    }
+
+    /// Re-rasteriza los fotogramas del gato a la altura física actual, desde el
+    /// tema activo o el embebido.
     fn rerasterize(&mut self) {
-        match anim::rasterize(
-            self.phys_cat_height(),
-            self.config.mirror_x,
-            self.config.mirror_y,
-        ) {
+        let h = self.phys_cat_height();
+        let (mx, my) = (self.config.mirror_x, self.config.mirror_y);
+        let r = match &self.theme {
+            Some(t) => anim::rasterize_from(&t.frames, t.meta.aspect, false, h, mx, my),
+            None => anim::rasterize(h, mx, my),
+        };
+        match r {
             Ok(f) => self.frames = f,
             Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
         }
@@ -613,7 +656,11 @@ impl State {
     /// `reload` y al `SET` en vivo.
     fn apply_config_diff(&mut self, old: &Config) {
         let c = self.config.clone();
-        if c.cat_height != old.cat_height
+        if c.theme != old.theme {
+            self.theme = theme::resolve(&c.theme);
+        }
+        if c.theme != old.theme
+            || c.cat_height != old.cat_height
             || c.mirror_x != old.mirror_x
             || c.mirror_y != old.mirror_y
         {
@@ -810,6 +857,7 @@ impl State {
                 &self.config,
                 self.width as i32,
                 self.height as i32,
+                self.cat_aspect(),
             );
             eprintln!(
                 "bongocat: modo edición {} — región del gato = {:?}",
@@ -823,7 +871,7 @@ impl State {
     /// Botón izquierdo dentro del gato: empezar a arrastrar.
     fn edit_press(&mut self, px: f64, py: f64) {
         let (bw, bh) = (self.width as i32, self.height as i32);
-        let rect = bongocat_common::edit::cat_rect(&self.config, bw, bh);
+        let rect = bongocat_common::edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
         let inside = bongocat_common::edit::hit(rect, px as i32, py as i32);
         if inside {
             self.edit.dragging = true;
@@ -838,7 +886,7 @@ impl State {
         use bongocat_common::edit;
         self.edit.ptr = (px, py);
         let (bw, bh) = (self.width as i32, self.height as i32);
-        let (_, _, cw, ch) = edit::cat_rect(&self.config, bw, bh);
+        let (_, _, cw, ch) = edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
         let ox = (px - self.edit.grab_dx).round() as i32;
         let oy = (py - self.edit.grab_dy).round() as i32;
         let (ox, oy) = edit::clamp_origin(ox, oy, bw, bh, cw, ch);
@@ -858,7 +906,8 @@ impl State {
         self.rerasterize();
         if self.edit.dragging {
             let (bw, bh) = (self.width as i32, self.height as i32);
-            let (rx, ry, ..) = bongocat_common::edit::cat_rect(&self.config, bw, bh);
+            let (rx, ry, ..) =
+                bongocat_common::edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
             self.edit.grab_dx = self.edit.ptr.0 - f64::from(rx);
             self.edit.grab_dy = self.edit.ptr.1 - f64::from(ry);
         }
@@ -877,8 +926,8 @@ impl State {
         match verb.as_str() {
             "PING" => "PONG".to_string(),
             "STATE" => format!(
-                "pid={} frame={} hidden={} manual_hidden={} edit={} scale_120={} fps={} \
-                 width={} height={} cat_height={} cat_opacity={}",
+                "pid={} frame={} hidden={} manual_hidden={} edit={} theme={} scale_120={} \
+                 fps={} width={} height={} cat_height={} cat_opacity={}",
                 std::process::id(),
                 self.frame,
                 self.effective_hidden(),
@@ -888,6 +937,11 @@ impl State {
                     None => "auto",
                 },
                 self.edit.active,
+                if self.config.theme.is_empty() {
+                    "embedded"
+                } else {
+                    &self.config.theme
+                },
                 self.scale_120,
                 self.config.fps,
                 self.width,
@@ -917,6 +971,27 @@ impl State {
                 }
             }
             "GET" | "SET" => "ERR uso: GET clave | SET clave valor".to_string(),
+            "THEME" => match arg1 {
+                "" => "ERR uso: THEME list | next | <nombre>".to_string(),
+                "list" => {
+                    let mut l = theme::list();
+                    l.insert(0, "embedded".to_string());
+                    l.join(" ")
+                }
+                "next" => {
+                    let all = theme::list();
+                    if all.is_empty() {
+                        return "ERR no hay temas instalados".to_string();
+                    }
+                    let cur = self.config.theme.clone();
+                    let next = match all.iter().position(|n| *n == cur) {
+                        Some(i) => all[(i + 1) % all.len()].clone(),
+                        None => all[0].clone(),
+                    };
+                    self.set_theme(&next)
+                }
+                name => self.set_theme(name),
+            },
             "EDIT" => match match arg1 {
                 "on" => Some(true),
                 "off" => Some(false),

@@ -16,4 +16,6 @@ pub mod ipc;
 pub mod mouse;
 pub mod paw;
 pub mod scale;
+pub mod sheet;
 pub mod sleep;
+pub mod theme;

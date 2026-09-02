@@ -19,6 +19,7 @@ mod input_child;
 mod ipc;
 mod pidfile;
 mod service;
+mod theme;
 mod toggle;
 mod watch;
 mod wl;
@@ -104,8 +105,53 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
+/// Subcomando `bongocat theme new|check ...` (spec 0006 M7). Se resuelve antes
+/// del parseo de flags porque tiene su propia forma.
+fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
+    if argv.get(1).map(String::as_str) != Some("theme") {
+        return None;
+    }
+    let rc = match (argv.get(2).map(String::as_str), argv.get(3)) {
+        (Some("new"), Some(name)) => match theme::scaffold(name) {
+            Ok(dir) => {
+                println!("bongocat: tema creado en {}", dir.display());
+                println!("Edita los SVG y pruébalo:  bongocat -c <conf>   (con theme={name})");
+                println!("Valídalo:                  bongocat theme check {name}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("bongocat: theme new: {e}");
+                ExitCode::from(1)
+            }
+        },
+        (Some("check"), Some(spec)) => {
+            if theme::check(spec) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        (Some("list"), _) => {
+            for n in theme::list() {
+                println!("{n}");
+            }
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!(
+                "bongocat: uso: bongocat theme new NOMBRE | theme check NOMBRE|RUTA | theme list"
+            );
+            ExitCode::from(2)
+        }
+    };
+    Some(rc)
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
+    if let Some(rc) = theme_subcommand(&argv) {
+        return rc;
+    }
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
@@ -154,6 +200,21 @@ fn main() -> ExitCode {
             loaded.config.fps,
             loaded.config.keyboard_devices,
         );
+        match theme::resolve(&loaded.config.theme) {
+            Some(t) => println!(
+                "dry-run: tema '{}' aspecto {}:{} desde {}",
+                if t.meta.name.is_empty() {
+                    &loaded.config.theme
+                } else {
+                    &t.meta.name
+                },
+                t.meta.aspect.0,
+                t.meta.aspect.1,
+                t.dir.display(),
+            ),
+            None => println!("dry-run: tema = embebido (classic)"),
+        }
+        println!("dry-run: temas disponibles: {:?}", theme::list());
         return ExitCode::SUCCESS;
     }
 

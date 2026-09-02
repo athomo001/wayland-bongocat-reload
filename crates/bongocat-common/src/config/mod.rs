@@ -102,6 +102,9 @@ pub struct Config {
     pub mirror_y: bool,
     pub enable_antialiasing: bool,
     pub cat_align: Align,
+    /// Tema (skin): nombre en las rutas de temas, o ruta a un directorio.
+    /// Vacío = el gato embebido (`classic`). Spec 0006.
+    pub theme: String,
 
     // Animación
     pub idle_frame: i32,
@@ -154,6 +157,7 @@ impl Default for Config {
             mirror_y: false,
             enable_antialiasing: true,
             cat_align: Align::Center,
+            theme: String::new(),
             idle_frame: 0,
             keypress_duration: 100,
             test_animation_duration: 200,
@@ -349,6 +353,12 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
                 "right" => Align::Right,
                 _ => return Err(format!("cat_align '{value}' inválido, se usa 'center'")),
             }
+        }
+        "theme" => {
+            if value.contains("..") {
+                return Err(format!("path traversal en theme: {value}"));
+            }
+            c.theme = value.to_string();
         }
 
         // ── Horas HH:MM ──
@@ -552,6 +562,9 @@ impl Config {
         w("cat_height", &self.cat_height);
         w("cat_opacity", &self.cat_opacity);
         w("cat_align", &self.cat_align.as_str());
+        if !self.theme.is_empty() {
+            w("theme", &self.theme);
+        }
         w("cat_x_offset", &self.cat_x_offset);
         w("cat_y_offset", &self.cat_y_offset);
         w("mirror_x", &b(self.mirror_x));

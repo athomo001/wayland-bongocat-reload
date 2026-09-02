@@ -22,6 +22,11 @@ cat_align=center
 cat_x_offset=0
 cat_y_offset=0
 
+# Tema (skin): nombre de una carpeta en las rutas de temas, o ruta a un
+# directorio. Vacío = el gato clásico embebido. Lista: `bongocatctl theme list`.
+# Cómo crear/añadir temas: themes/README.md.
+# theme=pink
+
 # Obsoleto: sin efecto con el render SVG (el antialiasing siempre está activo).
 # enable_antialiasing=1
 

@@ -28,6 +28,9 @@ const SVGS: [&[u8]; 5] = [
 pub struct Frames {
     pub w: u32,
     pub h: u32,
+    /// Relación de aspecto del tema activo (`(w, h)`); el blit y el hit-test del
+    /// modo edición la usan como única fuente.
+    pub aspect: (u32, u32),
     frames: [Vec<u8>; 5],
 }
 
@@ -51,21 +54,62 @@ fn preprocess(svg: &[u8]) -> String {
         .join("\n")
 }
 
-/// Rasteriza los 5 SVG a una altura de gato de `cat_height` px (el ancho sale
-/// de la relación de aspecto), aplicando el espejo horizontal/vertical.
+/// Los 5 SVG del `classic` ya preprocesados (viewBox recortado, sin `<rect>`).
+/// Los usa `bongocat theme new` como plantilla de partida.
+#[must_use]
+pub fn classic_frame_svgs() -> [String; 5] {
+    [
+        preprocess(SVGS[0]),
+        preprocess(SVGS[1]),
+        preprocess(SVGS[2]),
+        preprocess(SVGS[3]),
+        preprocess(SVGS[4]),
+    ]
+}
+
+/// Rasteriza el **gato embebido** (`classic`) a `cat_height` px. Fallback siempre
+/// disponible (spec 0006 §4).
 pub fn rasterize(
     cat_height: u32,
     mirror_x: bool,
     mirror_y: bool,
 ) -> Result<Frames, Box<dyn Error>> {
+    rasterize_from(
+        &SVGS,
+        (REF_W as u32, REF_H as u32),
+        true, // los SVG embebidos llevan el margen del editor: recortar
+        cat_height,
+        mirror_x,
+        mirror_y,
+    )
+}
+
+/// Rasteriza 5 SVG (de un tema o del embebido) a una altura de gato de
+/// `cat_height` px; el ancho sale de `aspect`. `crop` aplica el recorte del
+/// viewBox y el borrado de `<rect>` (solo para el embebido; un tema ya da el SVG
+/// "recortado", spec 0006). Aplica el espejo H/V.
+pub fn rasterize_from<S: AsRef<[u8]>>(
+    sources: &[S; 5],
+    aspect: (u32, u32),
+    crop: bool,
+    cat_height: u32,
+    mirror_x: bool,
+    mirror_y: bool,
+) -> Result<Frames, Box<dyn Error>> {
+    let (aw, ah) = (aspect.0.max(1), aspect.1.max(1));
     let h = cat_height.max(1);
-    let w = ((u64::from(h) * REF_W) / REF_H).max(1) as u32;
+    let w = ((u64::from(h) * u64::from(aw)) / u64::from(ah)).max(1) as u32;
     let opt = Options::default();
 
     let mut frames: [Vec<u8>; 5] = Default::default();
-    for (i, raw) in SVGS.iter().enumerate() {
-        let tree = Tree::from_data(preprocess(raw).as_bytes(), &opt)
-            .map_err(|e| format!("SVG {i} no parsea: {e}"))?;
+    for (i, raw) in sources.iter().enumerate() {
+        let bytes = raw.as_ref();
+        let data = if crop {
+            preprocess(bytes).into_bytes()
+        } else {
+            bytes.to_vec()
+        };
+        let tree = Tree::from_data(&data, &opt).map_err(|e| format!("SVG {i} no parsea: {e}"))?;
         let mut pm = Pixmap::new(w, h).ok_or("no se pudo crear el pixmap")?;
         let size = tree.size();
         let sx = w as f32 / size.width();
@@ -85,7 +129,12 @@ pub fn rasterize(
         }
         frames[i] = buf;
     }
-    Ok(Frames { w, h, frames })
+    Ok(Frames {
+        w,
+        h,
+        aspect: (aw, ah),
+        frames,
+    })
 }
 
 /// Voltea `buf` (RGBA/BGRA, 4 bytes/px) en horizontal, in situ.

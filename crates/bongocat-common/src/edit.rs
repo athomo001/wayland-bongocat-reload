@@ -8,26 +8,27 @@
 
 use crate::config::{Align, Config};
 
-/// Relación de aspecto de referencia del gato (igual que `anim::REF_W/REF_H`).
-pub const CAT_ASPECT_W: i32 = 500;
-pub const CAT_ASPECT_H: i32 = 277;
+/// Relación de aspecto de referencia del `classic` (`(w, h)`).
+pub const DEFAULT_ASPECT: (i32, i32) = (500, 277);
 
 /// Rango de `cat_height` (igual que la validación de config).
 pub const MIN_CAT_HEIGHT: i32 = 10;
 pub const MAX_CAT_HEIGHT: i32 = 200;
 
-/// Ancho del gato para una altura dada (relación de aspecto).
+/// Ancho del gato para una altura dada y una relación de aspecto `(w, h)`.
 #[must_use]
-pub fn cat_width_for_height(h: i32) -> i32 {
-    (h.max(1) * CAT_ASPECT_W / CAT_ASPECT_H).max(1)
+pub fn cat_width_for_height(h: i32, aspect: (i32, i32)) -> i32 {
+    let (aw, ah) = (aspect.0.max(1), aspect.1.max(1));
+    (h.max(1) * aw / ah).max(1)
 }
 
 /// Rectángulo `(x, y, w, h)` del gato dentro de una barra de `bar_w`×`bar_h`,
-/// en píxeles lógicos. Reproduce el posicionamiento de `draw_bar` / `cat_origin`.
+/// en píxeles lógicos, para la relación de aspecto del tema activo. Reproduce el
+/// posicionamiento de `draw_bar` / `cat_origin`.
 #[must_use]
-pub fn cat_rect(cfg: &Config, bar_w: i32, bar_h: i32) -> (i32, i32, i32, i32) {
+pub fn cat_rect(cfg: &Config, bar_w: i32, bar_h: i32, aspect: (i32, i32)) -> (i32, i32, i32, i32) {
     let ch = cfg.cat_height.clamp(MIN_CAT_HEIGHT, MAX_CAT_HEIGHT);
-    let cw = cat_width_for_height(ch);
+    let cw = cat_width_for_height(ch, aspect);
     let y = (bar_h - ch) / 2 + cfg.cat_y_offset;
     let x = match cfg.cat_align {
         Align::Left => cfg.cat_x_offset,
@@ -114,7 +115,7 @@ mod tests {
         let (bar_w, bar_h) = (1920, 120);
         for align in [Align::Left, Align::Center, Align::Right] {
             let c = cfg(align, 37, -11, 90);
-            let (x, y, w, h) = cat_rect(&c, bar_w, bar_h);
+            let (x, y, w, h) = cat_rect(&c, bar_w, bar_h, DEFAULT_ASPECT);
             // origen -> offset -> debería reproducir los offsets originales.
             assert_eq!(
                 origin_to_x_offset(align, x, bar_w, w),
