@@ -154,16 +154,39 @@ fn anchor_for(pos: Position) -> Anchor {
     edge | Anchor::LEFT | Anchor::RIGHT
 }
 
+/// Rasteriza los 5 fotogramas a la altura `h` (px) desde el tema cargado, o del
+/// embebido si no hay. Un tema SVG (`theme_format` 1/2) va por `rasterize_from`;
+/// uno de sprite sheet (formato 3, spec 0014) por `rasterize_sheet`.
+fn rasterize_loaded(
+    theme: Option<&theme::LoadedTheme>,
+    h: u32,
+    mx: bool,
+    my: bool,
+) -> Result<Frames, Box<dyn Error>> {
+    let Some(t) = theme else {
+        return anim::rasterize(h, mx, my);
+    };
+    match &t.art {
+        theme::ThemeArt::Svg(svgs) => {
+            anim::rasterize_from(svgs.as_ref(), t.meta.aspect, false, h, mx, my)
+        }
+        theme::ThemeArt::Sheet(s) => {
+            anim::rasterize_sheet(&s.sheet, &s.png.rgba, s.png.w, s.png.h, h, mx, my)
+        }
+    }
+}
+
 /// Rasteriza los 5 fotogramas: del tema si hay, si no del embebido.
 fn rasterize_theme(
     theme: Option<&theme::LoadedTheme>,
     cfg: &Config,
 ) -> Result<Frames, Box<dyn Error>> {
-    let (h, mx, my) = (cfg.cat_height.max(1) as u32, cfg.mirror_x, cfg.mirror_y);
-    match theme {
-        Some(t) => anim::rasterize_from(&t.frames, t.meta.aspect, false, h, mx, my),
-        None => anim::rasterize(h, mx, my),
-    }
+    rasterize_loaded(
+        theme,
+        cfg.cat_height.max(1) as u32,
+        cfg.mirror_x,
+        cfg.mirror_y,
+    )
 }
 
 /// Duración entre fotogramas a partir de los FPS configurados.
@@ -640,11 +663,7 @@ impl State {
     fn rerasterize(&mut self) {
         let h = self.phys_cat_height();
         let (mx, my) = (self.config.mirror_x, self.config.mirror_y);
-        let r = match &self.theme {
-            Some(t) => anim::rasterize_from(&t.frames, t.meta.aspect, false, h, mx, my),
-            None => anim::rasterize(h, mx, my),
-        };
-        match r {
+        match rasterize_loaded(self.theme.as_ref(), h, mx, my) {
             Ok(f) => self.frames = f,
             Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
         }

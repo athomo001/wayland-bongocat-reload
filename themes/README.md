@@ -61,5 +61,15 @@ carga igual con metadatos vacíos y `theme_format = 1`.
 Copia `classic/` (la plantilla de referencia) y edita los SVG con Inkscape o Boxy
 SVG. Ejemplo ya incluido: `pink/` = `classic` recoloreado.
 
+## `theme_format = 3` — sprite sheet (mascotas animadas, en curso)
+
+Formato de rejilla estilo [wayland-vpets](https://github.com/furudbat/wayland-vpets)
+(spec `specs/0014-*`): un PNG con las poses en filas (`state_<estado>_row` /
+`_frames`), `frame_w` × `frame_h` por celda, escalado nearest-neighbor a escala
+entera. Ejemplo mínimo: `demo/` (`sheet.png` es arte propio CC0, regenerable con
+`cargo run -p bongocat --example gen_demo_sheet`). **M1**: solo carga y muestra el
+primer fotograma de `idle` / `writing` / `sleep`; la animación completa y el
+importador de mascotas llegan en hitos siguientes.
+
 Si algo falla al cargar (falta un SVG, no parsea, formato futuro…), bongocat
 **avisa y sigue con el gato embebido** — nunca se queda sin gato.

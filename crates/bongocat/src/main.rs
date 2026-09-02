@@ -18,6 +18,7 @@ mod input;
 mod input_child;
 mod ipc;
 mod pidfile;
+mod png_decode;
 mod service;
 mod theme;
 mod toggle;
@@ -201,17 +202,7 @@ fn main() -> ExitCode {
             loaded.config.keyboard_devices,
         );
         match theme::resolve(&loaded.config.theme) {
-            Some(t) => println!(
-                "dry-run: tema '{}' aspecto {}:{} desde {}",
-                if t.meta.name.is_empty() {
-                    &loaded.config.theme
-                } else {
-                    &t.meta.name
-                },
-                t.meta.aspect.0,
-                t.meta.aspect.1,
-                t.dir.display(),
-            ),
+            Some(t) => println!("dry-run: tema {} desde {}", t.describe(), t.dir.display()),
             None => println!("dry-run: tema = embebido (classic)"),
         }
         println!("dry-run: temas disponibles: {:?}", theme::list());

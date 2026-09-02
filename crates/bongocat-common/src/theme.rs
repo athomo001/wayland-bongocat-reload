@@ -7,7 +7,11 @@ use crate::config::split_line;
 
 /// Versión del **formato** de tema que entiende este bongocat. Un tema con
 /// `theme_format` mayor se rechaza (fallback al embebido).
-pub const THEME_FORMAT_SUPPORTED: u32 = 1;
+///
+/// - `1`: 5 SVG con nombres fijos (`classic`).
+/// - `2`: reservado.
+/// - `3`: sprite sheet PNG en rejilla, estilo wayland-vpets (spec 0014).
+pub const THEME_FORMAT_SUPPORTED: u32 = 3;
 
 /// Relación de aspecto de referencia por defecto (la del `classic`).
 pub const DEFAULT_ASPECT: (u32, u32) = (500, 277);

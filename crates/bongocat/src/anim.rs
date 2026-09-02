@@ -4,8 +4,10 @@
 //! `src/graphics/animation.c`. La máquina de estados (qué fotograma toca según
 //! el teclado) llega en la rebanada 4.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 
+use bongocat_common::sheet::{self, SheetTheme};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
 
@@ -133,6 +135,127 @@ pub fn rasterize_from<S: AsRef<[u8]>>(
         w,
         h,
         aspect: (aw, ah),
+        frames,
+    })
+}
+
+/// Caché de un tema de sprite sheet (`theme_format = 3`, spec 0014): por cada
+/// estado, sus frames ya recortados de la hoja, escalados a escala **entera**
+/// nearest-neighbor (pixel-art nítido), convertidos a **BGRA premultiplicado** y
+/// con el espejo H/V aplicado. Clave = nombre del estado (`idle`, `writing`, …).
+///
+/// `png_rgba` es la hoja decodificada a RGBA8 recto (`png_w`×`png_h`).
+/// `cat_height` es la altura objetivo en píxeles; el factor entero real puede
+/// quedar por debajo si `frame_h` no la divide (el `classic` SVG no tiene esta
+/// limitación; es el precio del pixel-art).
+#[must_use]
+pub fn build_sheet_cache(
+    sheet: &SheetTheme,
+    png_rgba: &[u8],
+    png_w: u32,
+    png_h: u32,
+    cat_height: u32,
+    mirror_x: bool,
+    mirror_y: bool,
+) -> BTreeMap<String, Vec<Vec<u8>>> {
+    let (fw, fh) = (sheet.frame_w.max(1), sheet.frame_h.max(1));
+    let k = sheet::integer_scale(fh, cat_height.max(1));
+    let (w, h) = (fw * k, fh * k);
+
+    let mut cache: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
+    for st in &sheet.states {
+        let mut frames_st = Vec::with_capacity(st.frames as usize);
+        for i in 0..st.frames {
+            let rect = sheet::frame_rect(sheet, st, i);
+            let cropped = sheet::crop_frame(png_rgba, png_w, png_h, rect);
+            let mut px = if k > 1 {
+                sheet::scale_nearest(&cropped, fw, fh, k).0
+            } else {
+                cropped
+            };
+            sheet::premul_bgra_from_straight_rgba(&mut px);
+            if mirror_x {
+                flip_h(&mut px, w, h);
+            }
+            if mirror_y {
+                flip_v(&mut px, w, h);
+            }
+            frames_st.push(px);
+        }
+        if !frames_st.is_empty() {
+            cache.insert(st.name.clone(), frames_st);
+        }
+    }
+    cache
+}
+
+/// Rasteriza un tema de sprite sheet a la estructura `Frames` de 5 huecos que
+/// hoy consume el render (spec 0014 M1).
+///
+/// Los 5 huecos "clásicos" de `paw.rs` se mapean a estados de la hoja con la
+/// "regla de oro" de la spec §5.2: si el estado pedido falta, se cae al
+/// siguiente candidato; si no hay ninguno, al hueco 0; si la hoja no produjo
+/// **ningún** frame, es error (el llamante cae al gato embebido).
+///
+/// **M1 solo usa el frame 0 de cada estado.** La animación multi-frame dentro
+/// de un estado, los estados de bucle/one-shot y las transiciones
+/// reposo↔writing↔sleep son el hito M2, que sustituirá este colapso a 5 huecos
+/// por una máquina de estados sobre [`build_sheet_cache`].
+pub fn rasterize_sheet(
+    sheet: &SheetTheme,
+    png_rgba: &[u8],
+    png_w: u32,
+    png_h: u32,
+    cat_height: u32,
+    mirror_x: bool,
+    mirror_y: bool,
+) -> Result<Frames, Box<dyn Error>> {
+    let (fw, fh) = (sheet.frame_w.max(1), sheet.frame_h.max(1));
+    let k = sheet::integer_scale(fh, cat_height.max(1));
+    let (w, h) = (fw * k, fh * k);
+
+    let cache = build_sheet_cache(
+        sheet, png_rgba, png_w, png_h, cat_height, mirror_x, mirror_y,
+    );
+    if cache.is_empty() {
+        return Err("el sprite sheet no produjo ningún frame".into());
+    }
+
+    // Qué estados sirve cada hueco, en orden de preferencia.
+    const SLOT_WANTS: [&[&str]; 5] = [
+        &["idle", "boring", "writing"],         // FRAME_BOTH_UP
+        &["writing", "start_writing", "idle"],  // FRAME_LEFT_DOWN
+        &["writing", "start_writing", "idle"],  // FRAME_RIGHT_DOWN
+        &["writing", "start_writing", "idle"],  // FRAME_BOTH_DOWN
+        &["sleep", "asleep", "boring", "idle"], // FRAME_SLEEPING
+    ];
+    let pick0 = |wants: &[&str]| -> Option<Vec<u8>> {
+        wants
+            .iter()
+            .find_map(|n| cache.get(*n))
+            .and_then(|v| v.first())
+            .cloned()
+    };
+    // Último recurso para el hueco 0: el primer frame de cualquier estado.
+    let slot0 = pick0(SLOT_WANTS[0]).unwrap_or_else(|| {
+        cache
+            .values()
+            .next()
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_else(|| vec![0u8; (w * h * 4) as usize])
+    });
+
+    let mut frames: [Vec<u8>; 5] = Default::default();
+    frames[0] = slot0.clone();
+    for (s, wants) in SLOT_WANTS.iter().enumerate().skip(1) {
+        frames[s] = pick0(wants).unwrap_or_else(|| slot0.clone());
+    }
+
+    Ok(Frames {
+        w,
+        h,
+        aspect: (fw, fh),
         frames,
     })
 }
@@ -291,6 +414,88 @@ mod tests {
         assert_eq!(&dst[i..i + 4], &[0x10, 0x20, 0x30, 0xFF]);
         // esquina (0,0) sigue vacía
         assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
+    }
+
+    /// Hoja sintética 3×3 celdas de 4×4 px: cada celda `(fila, col)` pintada de
+    /// un color RGBA recto único `[fila*3+col, 0, 50, 255]`.
+    fn hoja_sintetica() -> (Vec<u8>, u32, u32) {
+        let (cols, rows, fw, fh) = (3u32, 3u32, 4u32, 4u32);
+        let (w, h) = (cols * fw, rows * fh);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        for cy in 0..rows {
+            for cx in 0..cols {
+                let r = (cy * cols + cx) as u8;
+                for y in 0..fh {
+                    for x in 0..fw {
+                        let px = (((cy * fh + y) * w) + (cx * fw + x)) * 4;
+                        buf[px as usize..px as usize + 4].copy_from_slice(&[r, 0, 50, 255]);
+                    }
+                }
+            }
+        }
+        (buf, w, h)
+    }
+
+    const SHEET_INI: &str = "\
+theme_format = 3
+frame_w = 4
+frame_h = 4
+state_idle_row = 1
+state_idle_frames = 2
+state_writing_row = 2
+state_writing_frames = 3
+state_sleep_row = 3
+state_sleep_frames = 1
+";
+
+    #[test]
+    fn cache_de_sprite_sheet_recorta_escala_y_premultiplica() {
+        let sheet = bongocat_common::sheet::parse_sheet_ini(SHEET_INI);
+        let (buf, w, h) = hoja_sintetica();
+        // cat_height 8, frame_h 4 -> factor entero 2.
+        let cache = build_sheet_cache(&sheet, &buf, w, h, 8, false, false);
+
+        assert_eq!(cache.len(), 3, "idle, writing, sleep");
+        assert_eq!(cache["idle"].len(), 2);
+        assert_eq!(cache["writing"].len(), 3);
+        assert_eq!(cache["sleep"].len(), 1);
+
+        // Cada frame cacheado: 8×8 px BGRA.
+        assert_eq!(cache["idle"][0].len(), 8 * 8 * 4);
+
+        // idle frame 0 = celda (0,0), r=0. Recto [0,0,50,255] -> BGRA [50,0,0,255].
+        assert_eq!(&cache["idle"][0][0..4], &[50, 0, 0, 255]);
+        // writing frame 1 = celda (1,1), r=4 -> BGRA [50,0,4,255].
+        assert_eq!(&cache["writing"][1][0..4], &[50, 0, 4, 255]);
+        // El escalado 2× replica: el píxel (5,5) del frame 8×8 sigue en la celda.
+        let i = ((5 * 8 + 5) * 4) as usize;
+        assert_eq!(
+            &cache["sleep"][0][i..i + 4],
+            &[50, 0, 6, 255],
+            "celda (2,0), r=6"
+        );
+    }
+
+    #[test]
+    fn rasterize_sheet_mapea_los_cinco_huecos_con_fallback() {
+        let sheet = bongocat_common::sheet::parse_sheet_ini(SHEET_INI);
+        let (buf, w, h) = hoja_sintetica();
+        let f = rasterize_sheet(&sheet, &buf, w, h, 8, false, false).unwrap();
+
+        assert_eq!((f.w, f.h), (8, 8));
+        assert_eq!(f.aspect, (4, 4));
+        // hueco 0 -> idle f0 (r=0); huecos 1..3 -> writing f0 (r=3); hueco 4 -> sleep f0 (r=6).
+        assert_eq!(&f.frame(0)[0..4], &[50, 0, 0, 255]);
+        assert_eq!(&f.frame(1)[0..4], &[50, 0, 3, 255]);
+        assert_eq!(&f.frame(3)[0..4], &[50, 0, 3, 255]);
+        assert_eq!(&f.frame(4)[0..4], &[50, 0, 6, 255]);
+
+        // Sin estado 'sleep': el hueco 4 cae al hueco 0.
+        let solo_idle = bongocat_common::sheet::parse_sheet_ini(
+            "frame_w=4\nframe_h=4\nstate_idle_row=1\nstate_idle_frames=1\n",
+        );
+        let f2 = rasterize_sheet(&solo_idle, &buf, w, h, 4, false, false).unwrap();
+        assert_eq!(f2.frame(4), f2.frame(0), "sin sleep -> fallback al hueco 0");
     }
 
     #[test]

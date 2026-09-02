@@ -66,6 +66,7 @@ dependencies = [
  "evdev",
  "inotify",
  "libc",
+ "png",
  "resvg",
  "rustix 0.38.44",
  "seccompiler",

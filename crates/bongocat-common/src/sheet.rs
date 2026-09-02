@@ -254,6 +254,31 @@ pub fn scale_nearest(src: &[u8], w: u32, h: u32, k: u32) -> (Vec<u8>, u32, u32) 
     (out, ow, oh)
 }
 
+/// Convierte un frame de **RGBA recto** (el que entrega un PNG) a **BGRA
+/// premultiplicado** in situ — el formato que consume `anim::blit_over` y que
+/// espera `WL_SHM_FORMAT_ARGB8888`. Cada canal de color se multiplica por el
+/// alfa (`c·a/255`, redondeado) y se intercambian R↔B. Con `a = 255` la
+/// operación es solo el swap (exacta); con `a = 0` el píxel queda a cero.
+pub fn premul_bgra_from_straight_rgba(buf: &mut [u8]) {
+    for px in buf.chunks_exact_mut(4) {
+        let a = u16::from(px[3]);
+        let mul = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
+        let (r, g, b) = (px[0], px[1], px[2]);
+        px[0] = mul(b);
+        px[1] = mul(g);
+        px[2] = mul(r);
+        // px[3] (alfa) no cambia.
+    }
+}
+
+/// Primer estado de `wanted` (por nombre) que el tema define. Semilla de la
+/// "regla de oro" de la spec 0014 §5.2: si el estado pedido no existe se cae al
+/// siguiente candidato; el llamante decide el último recurso.
+#[must_use]
+pub fn pick_state<'a>(sheet: &'a SheetTheme, wanted: &[&str]) -> Option<&'a SheetState> {
+    wanted.iter().find_map(|name| sheet.state(name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +364,32 @@ state_writing_col = 2
         assert_eq!(big[0], 2);
         assert_eq!(big[4], 2, "réplica horizontal");
         assert_eq!(big[(4 * 4) as usize], 2, "réplica vertical");
+    }
+
+    #[test]
+    fn premul_bgra_swap_y_multiplica() {
+        // Opaco: solo swap R↔B, sin pérdida.
+        let mut a = [10u8, 20, 30, 255];
+        premul_bgra_from_straight_rgba(&mut a);
+        assert_eq!(a, [30, 20, 10, 255]);
+        // Alfa 0: píxel a cero salvo el propio alfa.
+        let mut z = [10u8, 20, 30, 0];
+        premul_bgra_from_straight_rgba(&mut z);
+        assert_eq!(z, [0, 0, 0, 0]);
+        // Alfa 128 (~50 %): cada canal ≈ mitad, y en orden BGRA.
+        let mut h = [200u8, 100, 40, 128];
+        premul_bgra_from_straight_rgba(&mut h);
+        assert_eq!(h, [20, 50, 100, 128]);
+    }
+
+    #[test]
+    fn pick_state_cae_al_siguiente() {
+        let t = parse_sheet_ini(INI); // define idle y writing, no sleep
+        assert_eq!(
+            pick_state(&t, &["sleep", "boring", "idle"]).unwrap().name,
+            "idle"
+        );
+        assert_eq!(pick_state(&t, &["writing"]).unwrap().name, "writing");
+        assert!(pick_state(&t, &["nope", "nada"]).is_none());
     }
 }
