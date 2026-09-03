@@ -137,6 +137,9 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
     let mut t = SheetTheme::default();
     let mut per_state: BTreeMap<String, StateAccum> = BTreeMap::new();
     let mut row_base: u32 = 1;
+    // ¿Trae el `.ini` un `input_model =` explícito? Si no, se autodetecta al
+    // final por la presencia de poses izquierda/derecha (spec 0014 §5.7).
+    let mut input_model_set = false;
 
     for raw in text.lines() {
         let s = raw.trim_start_matches([' ', '\t']);
@@ -164,6 +167,7 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
                 }
             }
             "input_model" => {
+                input_model_set = true;
                 t.input_model = match v.as_str() {
                     "hands" => InputModel::Hands,
                     _ => InputModel::Activity,
@@ -234,7 +238,36 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
             col_start: 0,
         });
     }
+
+    // Autodetección de `input_model` (spec 0014 §5.7) si no vino explícito: un
+    // tema con poses izquierda/derecha es "con manos"; el resto, "de actividad".
+    if !input_model_set {
+        let has_hand_poses = t.states.iter().any(|s| is_hand_pose(&s.name));
+        t.input_model = if has_hand_poses {
+            InputModel::Hands
+        } else {
+            InputModel::Activity
+        };
+    }
     t
+}
+
+/// ¿Es `name` una de las poses del modelo "con manos" (izquierda / derecha /
+/// ambas), en cualquiera de sus alias?
+#[must_use]
+fn is_hand_pose(name: &str) -> bool {
+    matches!(
+        name,
+        "active_left"
+            | "left_down"
+            | "left-down"
+            | "active_right"
+            | "right_down"
+            | "right-down"
+            | "active_both"
+            | "both_down"
+            | "both-down"
+    )
 }
 
 /// Rectángulo `(x, y, w, h)` en píxeles del frame `i` de `state` dentro de la
@@ -296,6 +329,44 @@ pub fn scale_nearest(src: &[u8], w: u32, h: u32, k: u32) -> (Vec<u8>, u32, u32) 
             let si = ((sy * w + sx) * 4) as usize;
             let di = ((oy * ow + ox) * 4) as usize;
             out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    (out, ow, oh)
+}
+
+/// Escala `src` por un factor entero `k` con **interpolación bilineal**. Pensado
+/// para temas con `scale_filter = linear` (arte no pixel-art que prefiere bordes
+/// suaves). `src` debe estar en **alfa premultiplicado** para que la mezcla no
+/// arrastre color de los píxeles transparentes. Devuelve `(bytes, w*k, h*k)`.
+#[must_use]
+pub fn scale_bilinear(src: &[u8], w: u32, h: u32, k: u32) -> (Vec<u8>, u32, u32) {
+    let k = k.max(1);
+    let (ow, oh) = (w * k, h * k);
+    if k == 1 || w == 0 || h == 0 {
+        return (src.to_vec(), ow, oh);
+    }
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    let kf = k as f32;
+    let (wmax, hmax) = ((w - 1) as f32, (h - 1) as f32);
+    let sample =
+        |x: u32, y: u32, c: usize| -> f32 { f32::from(src[((y * w + x) * 4) as usize + c]) };
+    for oy in 0..oh {
+        // Centro del texel de salida en coordenadas de origen.
+        let fy = ((oy as f32 + 0.5) / kf - 0.5).clamp(0.0, hmax);
+        let y0 = fy as u32;
+        let y1 = (y0 + 1).min(h - 1);
+        let wy = fy - y0 as f32;
+        for ox in 0..ow {
+            let fx = ((ox as f32 + 0.5) / kf - 0.5).clamp(0.0, wmax);
+            let x0 = fx as u32;
+            let x1 = (x0 + 1).min(w - 1);
+            let wx = fx - x0 as f32;
+            let di = ((oy * ow + ox) * 4) as usize;
+            for c in 0..4 {
+                let top = sample(x0, y0, c) * (1.0 - wx) + sample(x1, y0, c) * wx;
+                let bot = sample(x0, y1, c) * (1.0 - wx) + sample(x1, y1, c) * wx;
+                out[di + c] = (top * (1.0 - wy) + bot * wy).round().clamp(0.0, 255.0) as u8;
+            }
         }
     }
     (out, ow, oh)
@@ -367,6 +438,34 @@ state_writing_col = 2
     }
 
     #[test]
+    fn input_model_se_autodetecta_por_las_poses() {
+        // Sin `input_model =`: poses izq./der. → hands.
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\nsheet=s.png\n\
+             state_idle_row=1\nstate_idle_frames=1\n\
+             state_active_left_row=2\nstate_active_left_frames=1\n\
+             state_active_right_row=3\nstate_active_right_frames=1\n",
+        );
+        assert_eq!(t.input_model, InputModel::Hands);
+
+        // Sin poses → activity (el default de los packs de vpets).
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\nsheet=s.png\n\
+             state_idle_row=1\nstate_idle_frames=1\n\
+             state_writing_row=2\nstate_writing_frames=2\n",
+        );
+        assert_eq!(t.input_model, InputModel::Activity);
+
+        // `input_model =` explícito manda aunque haya poses.
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\nsheet=s.png\ninput_model=activity\n\
+             state_left_down_row=1\nstate_left_down_frames=1\n\
+             state_right_down_row=2\nstate_right_down_frames=1\n",
+        );
+        assert_eq!(t.input_model, InputModel::Activity, "explícito gana");
+    }
+
+    #[test]
     fn row_base_0_no_desplaza() {
         let t = parse_sheet_ini(
             "row_base = 0\nframe_w=8\nframe_h=8\nstate_idle_row=0\nstate_idle_frames=1\n",
@@ -411,6 +510,24 @@ state_writing_col = 2
         assert_eq!(big[0], 2);
         assert_eq!(big[4], 2, "réplica horizontal");
         assert_eq!(big[(4 * 4) as usize], 2, "réplica vertical");
+    }
+
+    #[test]
+    fn scale_bilinear_interpola_y_conserva_esquinas() {
+        // 2×1, dos colores planos opacos; k=4 escala **ambas** dimensiones → 8×4.
+        let src = [0u8, 0, 0, 255, 255, 255, 255, 255];
+        let (out, w, h) = scale_bilinear(&src, 2, 1, 4);
+        assert_eq!((w, h), (8, 4));
+        // Fila 0 (bytes 0..32): esquinas clavadas a los extremos y rampa en medio.
+        assert_eq!(&out[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&out[28..32], &[255, 255, 255, 255]);
+        let r: Vec<u8> = out[0..32].chunks_exact(4).map(|p| p[0]).collect();
+        assert!(r.windows(2).all(|w| w[0] <= w[1]), "rampa monótona: {r:?}");
+        assert!(r[3] > 0 && r[4] < 255, "los centrales son intermedios");
+        // Todas las filas son iguales (el origen tenía una sola).
+        assert_eq!(&out[0..32], &out[32..64]);
+        // k=1 es identidad.
+        assert_eq!(scale_bilinear(&src, 2, 1, 1).0, src);
     }
 
     #[test]

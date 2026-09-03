@@ -408,6 +408,15 @@ pub fn check(spec: &str) -> bool {
     match resolve(spec) {
         Some(t) => {
             println!("OK: {}", t.describe());
+            // Aviso §5.7: en un tema "de actividad" el mapeo de manos no aplica.
+            if let ThemeArt::Sheet(s) = &t.art {
+                if s.sheet.input_model == bongocat_common::sheet::InputModel::Activity {
+                    println!(
+                        "  nota: modelo 'activity' — 'enable_hand_mapping' y 'mouse_paw' \
+                         no tienen efecto con este tema"
+                    );
+                }
+            }
             true
         }
         None => {

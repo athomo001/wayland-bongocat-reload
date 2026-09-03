@@ -211,12 +211,19 @@ pub fn build_sheet_cache(
     let (w, h) = (fw * k, fh * k);
 
     // Ajusta un frame RGBA recto (`frame_w`×`frame_h`, ya recortado) a BGRA
-    // premultiplicado, escalado y con el espejo aplicado.
+    // premultiplicado, escalado y con el espejo aplicado. Se premultiplica
+    // **antes** de escalar para que el filtro bilineal (`scale_filter = linear`)
+    // no arrastre color de los píxeles transparentes.
+    let linear = sheet.scale_filter == sheet::ScaleFilter::Linear;
     let finish = |mut px: Vec<u8>| -> Vec<u8> {
-        if k > 1 {
-            px = sheet::scale_nearest(&px, fw, fh, k).0;
-        }
         sheet::premul_bgra_from_straight_rgba(&mut px);
+        if k > 1 {
+            px = if linear {
+                sheet::scale_bilinear(&px, fw, fh, k).0
+            } else {
+                sheet::scale_nearest(&px, fw, fh, k).0
+            };
+        }
         if mirror_x {
             flip_h(&mut px, w, h);
         }
