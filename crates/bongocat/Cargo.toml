@@ -52,6 +52,12 @@ libc = "0.2" # solo para constantes de flags de open (O_NOFOLLOW)
 # Vigilancia del bongocat.conf para --watch-config.
 inotify = { version = "0.11", default-features = false }
 
+# Icono de bandeja (StatusNotifierItem, spec 0011). `async-io` en vez de `tokio`
+# → D-Bus puro Rust vía `zbus`, sin `libdbus` del sistema y sin arrastrar tokio.
+ksni = { version = "0.3", default-features = false, features = ["async-io"] }
+# `block_on` para el hilo dedicado del servicio del tray.
+futures-lite = "2"
+
 # COSMIC no expone wlr-foreign-toplevel: generamos nosotros el cliente del
 # protocolo `zcosmic_toplevel_info_v1` a partir del XML (MIT) vendido en
 # `protocols/`. El crate `cosmic-protocols` es GPL-3.0 y contaminaría la

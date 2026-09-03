@@ -75,7 +75,7 @@ use crate::cosmic::{
     zcosmic_toplevel_handle_v1::{self as cosmic_handle, ZcosmicToplevelHandleV1},
     zcosmic_toplevel_info_v1::{self as cosmic_info, ZcosmicToplevelInfoV1},
 };
-use crate::{input, input_child, ipc, theme, watch};
+use crate::{input, input_child, ipc, theme, tray, watch};
 
 /// Valores del enum `state` de `zwlr_foreign_toplevel_handle_v1` (y del enum
 /// homónimo de `zcosmic_toplevel_handle_v1`: mismos números).
@@ -217,6 +217,7 @@ pub fn run_overlay(
     config_path: Option<PathBuf>,
     watch_config: bool,
     no_toplevel: bool,
+    tray_enabled: bool,
     input: input::Isolated,
     target_output_name: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
@@ -466,15 +467,31 @@ pub fn run_overlay(
         // tema con `-w` lo recarga de disco en caliente. El watcher no sigue a
         // un cambio de tema en runtime; para eso, reiniciar.
         if let Some(dir) = state.theme.as_ref().map(|t| t.dir.clone()) {
-            let (ttx, trx) = calloop::channel::channel::<()>();
-            watch::spawn_dir(dir, ttx);
-            lh.insert_source(trx, |ev, _, state| {
+            let (dtx, drx) = calloop::channel::channel::<()>();
+            watch::spawn_dir(dir, dtx);
+            lh.insert_source(drx, |ev, _, state| {
                 if let calloop::channel::Event::Msg(()) = ev {
                     state.reload_theme();
                 }
             })?;
         }
     }
+
+    // Icono de bandeja (spec 0011): hilo `ksni` → cada clic de menú llega como un
+    // `TrayCommand` que se ejecuta con la misma lógica que los verbos IPC. El
+    // handle se mantiene vivo mientras dure el overlay; al soltarse, el servicio
+    // SNI se apaga.
+    let _tray = if tray_enabled {
+        let (trtx, trrx) = calloop::channel::channel::<tray::TrayCommand>();
+        lh.insert_source(trrx, |ev, _, state| {
+            if let calloop::channel::Event::Msg(cmd) = ev {
+                state.apply_tray_command(cmd);
+            }
+        })?;
+        tray::spawn(trtx, theme::list(), config.theme.clone())
+    } else {
+        None
+    };
 
     // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
     let _ipc_guard = if config.enable_ipc {
@@ -875,6 +892,40 @@ impl State {
         self.rerasterize();
         self.draw();
         eprintln!("bongocat: tema recargado desde disco");
+    }
+
+    /// Ejecuta un [`tray::TrayCommand`] (clic en el menú del icono, spec 0011).
+    /// Cada rama reutiliza la misma lógica que el verbo IPC equivalente.
+    fn apply_tray_command(&mut self, cmd: tray::TrayCommand) {
+        use tray::TrayCommand as C;
+        match cmd {
+            C::ToggleVisibility => {
+                self.manual_hidden = Some(!self.effective_hidden());
+                self.draw();
+            }
+            // M1: re-rasteriza y redibuja. El teardown+rebuild completo de las
+            // surfaces con reintentos es M2.
+            C::RestartOverlays => {
+                self.rerasterize();
+                self.draw();
+                eprintln!("bongocat: overlay re-rasterizado (tray)");
+            }
+            C::Reload => {
+                if self.config_path.is_some() {
+                    self.reload();
+                }
+            }
+            C::SetTheme(name) => {
+                let r = self.set_theme(&name);
+                eprintln!("bongocat: tray → tema {name}: {r}");
+            }
+            C::LaunchConfig => tray::launch_config(),
+            C::About => eprintln!(
+                "Bongo Cat {} — https://github.com/athomo001/wayland-bongocat-reload",
+                env!("CARGO_PKG_VERSION")
+            ),
+            C::Quit => self.exit = true,
+        }
     }
 
     /// Recalcula el estado *deseado* de ocultar: algún toplevel activado y a

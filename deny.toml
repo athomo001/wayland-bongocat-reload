@@ -20,6 +20,7 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "CC0-1.0",
+    "Unlicense", # ksni (icono de bandeja): dominio público, equivalente a CC0
 ]
 confidence-threshold = 0.9
 

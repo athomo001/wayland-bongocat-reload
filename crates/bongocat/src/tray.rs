@@ -1,16 +1,29 @@
-//! Núcleo del icono de bandeja (spec 0011). Aquí vive la parte **pura y
-//! testeable**: el mapeo ítem-de-menú → [`TrayCommand`] (`T-0011-M1-map`), la
-//! máquina de estado del icono [`Tray`] / [`TrayStatus`] (`T-0011-status`), y la
-//! decisión de si arrancar el tray ([`wanted`]).
+//! Icono de bandeja (StatusNotifierItem, spec 0011).
 //!
-//! El *frontend* StatusNotifierItem (hilo `ksni` ↔ bucle del supervisor por un
-//! `calloop::channel`) está **aplazado** (decisión 2026-09: opción (c)): tanto
-//! `ksni 0.2` (necesita `libdbus-1-dev` del sistema) como `ksni 0.3` (arrastra
-//! `async-io` y sube el MSRV a 1.80) tienen un coste que no compensa ahora. El
-//! usuario ya maneja todo por `bongocatctl` (`show`/`hide`/`toggle`/`reload`/
-//! `restart`/`stop`), atable a atajos del compositor. Este núcleo queda listo
-//! para cuando se retome el icono.
-#![allow(dead_code)] // el consumidor (frontend SNI) es una rebanada futura
+//! Dos partes:
+//! - **Pura y testeable**: mapeo ítem-de-menú → [`TrayCommand`] (`T-0011-M1-map`),
+//!   máquina de estado del icono [`Tray`] / [`TrayStatus`] (`T-0011-status`), y la
+//!   decisión de si arrancar el tray ([`wanted`]).
+//! - **Frontend** ([`spawn`]): un hilo dedicado corre el servicio `ksni` (D-Bus
+//!   puro Rust vía `zbus`/`async-io`, sin `libdbus`). Los clics del menú viajan
+//!   por un `calloop::channel::Sender<TrayCommand>` al bucle del overlay, que los
+//!   ejecuta con la **misma** lógica que los verbos IPC (spec 0011: el tray es
+//!   otro cliente, no un camino paralelo).
+//!
+//! Sin host SNI en el escritorio, `spawn` avisa por stderr y no molesta; el
+//! usuario sigue teniendo `bongocatctl` (`show`/`hide`/`reload`/`restart`/`stop`).
+
+// Algunos ganchos de la máquina de estado (`on_overlay_down`, …) los consume la
+// rebanada M2 (icono Normal/Hidden/Error en vivo); hoy el frontend solo usa
+// `TrayCommand` / `wanted`.
+#![allow(dead_code)]
+
+use std::sync::mpsc;
+use std::thread;
+
+use calloop::channel::Sender;
+use ksni::menu::{StandardItem, SubMenu};
+use ksni::{Icon, MenuItem, TrayMethods};
 
 /// ¿Hay que arrancar el tray? `enable_tray` de la config, salvo `--no-tray`.
 #[must_use]
@@ -139,6 +152,227 @@ impl Tray {
             TrayStatus::Error => "bongocat — overlay caído (clic para reiniciar)".to_string(),
         }
     }
+}
+
+// --- Frontend StatusNotifierItem (ksni) -----------------------------------
+
+/// Instrucción del hilo del overlay al hilo del tray (por ahora solo apagarlo
+/// al salir; los cambios de icono Normal/Hidden/Error son de M2).
+enum ToTray {
+    Shutdown,
+}
+
+/// El objeto `ksni::Tray`. Cada clic de menú manda un [`TrayCommand`] por
+/// `cmd_tx` al bucle del overlay; no hace trabajo pesado aquí (spec 0011).
+struct SniTray {
+    cmd_tx: Sender<TrayCommand>,
+    /// Temas instalados para el submenú "Tema"; el activo va marcado.
+    themes: Vec<String>,
+    active_theme: String,
+    icon: Vec<Icon>,
+}
+
+impl SniTray {
+    fn send(&self, cmd: TrayCommand) {
+        // `calloop::channel::Sender` es no bloqueante; si el bucle ya cerró, da igual.
+        let _ = self.cmd_tx.send(cmd);
+    }
+}
+
+impl ksni::Tray for SniTray {
+    fn id(&self) -> String {
+        "bongocat".into()
+    }
+    fn title(&self) -> String {
+        "Bongo Cat".into()
+    }
+    fn icon_name(&self) -> String {
+        // Si el tema del panel tiene un icono llamado "bongocat", lo usa; si no,
+        // cae al pixmap embebido de abajo.
+        "bongocat".into()
+    }
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        self.icon.clone()
+    }
+    fn tool_tip(&self) -> ksni::ToolTip {
+        ksni::ToolTip {
+            title: "Bongo Cat".into(),
+            description: "Overlay activo — clic derecho para el menú".into(),
+            icon_name: String::new(),
+            icon_pixmap: Vec::new(),
+        }
+    }
+
+    fn menu(&self) -> Vec<MenuItem<Self>> {
+        let item = |label: &str, cmd: TrayCommand| {
+            MenuItem::Standard(StandardItem {
+                label: label.into(),
+                activate: Box::new(move |t: &mut Self| t.send(cmd.clone())),
+                ..Default::default()
+            })
+        };
+        let temas: Vec<MenuItem<Self>> = self
+            .themes
+            .iter()
+            .cloned()
+            .map(|name| {
+                let activo = name == self.active_theme;
+                let label = if activo {
+                    format!("● {name}")
+                } else {
+                    format!("   {name}")
+                };
+                let cmd = TrayCommand::SetTheme(name);
+                MenuItem::Standard(StandardItem {
+                    label,
+                    activate: Box::new(move |t: &mut Self| t.send(cmd.clone())),
+                    ..Default::default()
+                })
+            })
+            .collect();
+
+        vec![
+            item("Mostrar / Ocultar", TrayCommand::ToggleVisibility),
+            item("Reiniciar overlay", TrayCommand::RestartOverlays),
+            item("Recargar configuración", TrayCommand::Reload),
+            item("Configurar…", TrayCommand::LaunchConfig),
+            MenuItem::SubMenu(SubMenu {
+                label: "Tema".into(),
+                submenu: temas,
+                ..Default::default()
+            }),
+            MenuItem::Separator,
+            item("Acerca de", TrayCommand::About),
+            item("Cerrar", TrayCommand::Quit),
+        ]
+    }
+}
+
+/// Handle del hilo del tray: al soltarlo (o llamar [`TrayHandle::stop`]) el
+/// servicio SNI se apaga y el icono desaparece.
+pub struct TrayHandle {
+    to_tray: mpsc::Sender<ToTray>,
+}
+
+impl TrayHandle {
+    /// Apaga el servicio del tray (se llama al salir del overlay).
+    pub fn stop(&self) {
+        let _ = self.to_tray.send(ToTray::Shutdown);
+    }
+}
+
+/// Arranca el servicio del tray en un hilo dedicado. `cmd_tx` recibe un
+/// [`TrayCommand`] por cada clic de menú. Devuelve `None` si no se pudo crear el
+/// hilo; que **no haya host SNI** no es un error aquí (se avisa por stderr).
+#[must_use]
+pub fn spawn(
+    cmd_tx: Sender<TrayCommand>,
+    themes: Vec<String>,
+    active_theme: String,
+) -> Option<TrayHandle> {
+    let (to_tray, from_main) = mpsc::channel::<ToTray>();
+    let icon = embedded_icon();
+    thread::Builder::new()
+        .name("tray:sni".into())
+        .spawn(move || run(cmd_tx, themes, active_theme, icon, &from_main))
+        .ok()?;
+    Some(TrayHandle { to_tray })
+}
+
+fn run(
+    cmd_tx: Sender<TrayCommand>,
+    themes: Vec<String>,
+    active_theme: String,
+    icon: Vec<Icon>,
+    from_main: &mpsc::Receiver<ToTray>,
+) {
+    let tray = SniTray {
+        cmd_tx,
+        themes,
+        active_theme,
+        icon,
+    };
+    // `ksni` con `async-io` gestiona su propio hilo ejecutor; aquí solo hay que
+    // llevar el futuro de `spawn()` a término y mantener vivo el `Handle`.
+    futures_lite::future::block_on(async move {
+        let handle = match tray.spawn().await {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!(
+                    "bongocat: no hay icono de bandeja ({e}); usa `bongocatctl` \
+                     (show/hide/reload/restart/stop)"
+                );
+                return;
+            }
+        };
+        eprintln!("bongocat: icono de bandeja activo");
+        // Bloquea hasta que el overlay pida apagar (o cierre el canal al salir).
+        let _ = from_main.recv();
+        handle.shutdown();
+    });
+}
+
+/// "Configurar…": lanza una GUI dedicada si existe, si no `bongocatctl` en un
+/// terminal conocido. Lista fija de binarios, **sin shell** ni interpolar nada
+/// (spec 0011 §Seguridad).
+pub fn launch_config() {
+    use std::process::Command;
+    if Command::new("bongocat-config").spawn().is_ok() {
+        return;
+    }
+    for term in [
+        "x-terminal-emulator",
+        "foot",
+        "kitty",
+        "alacritty",
+        "wezterm",
+        "konsole",
+        "gnome-terminal",
+    ] {
+        if Command::new(term)
+            .arg("-e")
+            .arg("bongocatctl")
+            .spawn()
+            .is_ok()
+        {
+            return;
+        }
+    }
+    eprintln!(
+        "bongocat: no encuentro un terminal para 'Configurar…'; ejecuta `bongocatctl` a mano"
+    );
+}
+
+/// Icono ARGB32 embebido (24×24): el fotograma `both-up` del `classic`, para
+/// escritorios sin un icono de tema llamado "bongocat".
+fn embedded_icon() -> Vec<Icon> {
+    use resvg::tiny_skia::{Pixmap, Transform};
+    use resvg::usvg::{Options, Tree};
+
+    const SIZE: u32 = 24;
+    let svg = crate::anim::classic_frame_svgs();
+    let Ok(tree) = Tree::from_data(svg[0].as_bytes(), &Options::default()) else {
+        return Vec::new();
+    };
+    let Some(mut pm) = Pixmap::new(SIZE, SIZE) else {
+        return Vec::new();
+    };
+    let sz = tree.size();
+    let t = Transform::from_scale(SIZE as f32 / sz.width(), SIZE as f32 / sz.height());
+    resvg::render(&tree, t, &mut pm.as_mut());
+
+    // tiny-skia entrega RGBA premultiplicado (bytes R,G,B,A); ksni quiere ARGB32
+    // en orden de red (bytes A,R,G,B).
+    let mut data = pm.data().to_vec();
+    for px in data.chunks_exact_mut(4) {
+        let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
+        px.copy_from_slice(&[a, r, g, b]);
+    }
+    vec![Icon {
+        width: SIZE as i32,
+        height: SIZE as i32,
+        data,
+    }]
 }
 
 #[cfg(test)]

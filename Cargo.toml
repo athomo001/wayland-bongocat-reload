@@ -7,7 +7,9 @@ members = ["crates/bongocat-common", "crates/bongocat", "crates/bongocatctl"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
-rust-version = "1.75"
+# 1.80 lo impone `ksni` (icono de bandeja, spec 0011): D-Bus puro Rust vía
+# `zbus`/`async-io`, sin `libdbus` del sistema.
+rust-version = "1.80"
 repository = "https://github.com/athomo001/wayland-bongocat-reload"
 
 [profile.release]

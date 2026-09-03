@@ -340,11 +340,13 @@ fn main() -> ExitCode {
         }
     };
 
+    let tray_enabled = tray::wanted(loaded.config.enable_tray, args.no_tray);
     match wl::run_overlay(
         &loaded.config,
         loaded.path.clone(),
         args.watch_config,
         args.no_toplevel,
+        tray_enabled,
         input,
         target,
     ) {
