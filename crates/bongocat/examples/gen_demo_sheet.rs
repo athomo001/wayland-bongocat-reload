@@ -1,14 +1,15 @@
 //! Genera `themes/demo/sheet.png`: una hoja de sprites de juguete para probar
 //! `theme_format = 3` (spec 0014) sin arte de terceros. Arte propio, trivial:
-//! un blob con ojos que parpadea (idle), mueve las "patas" (writing) y duerme
-//! (sleep). Reproducible:  `cargo run -p bongocat --example gen_demo_sheet`.
+//! un blob con ojos que parpadea (idle), mueve las "patas" (writing sale de un
+//! APNG), duerme (sleep), sonríe con KPM alto (happy) y se aburre tras un rato
+//! sin actividad (boring). Reproducible:  `cargo run -p bongocat --example gen_demo_sheet`.
 
 use std::path::Path;
 
 const FW: u32 = 48;
 const FH: u32 = 48;
 const COLS: u32 = 4;
-const ROWS: u32 = 3;
+const ROWS: u32 = 5;
 
 type Rgba = [u8; 4];
 const BODY: Rgba = [0x6c, 0xc0, 0x4a, 0xff]; // verde
@@ -65,6 +66,17 @@ impl Sheet {
             }
         }
     }
+
+    /// Boca: `w` píxeles de ancho centrada, arco simple hacia abajo (sonrisa).
+    fn smile(&mut self, gx: u32, gy: u32, w: i32) {
+        let cx = 24;
+        for i in 0..w {
+            let x = cx - w / 2 + i;
+            let dip = ((i - w / 2).abs() < w / 4) as i32; // hunde el centro
+            self.put(gx, gy, x, 33 + dip, DARK);
+            self.put(gx, gy, x, 34 + dip, DARK);
+        }
+    }
 }
 
 fn main() {
@@ -94,6 +106,21 @@ fn main() {
             s.put(col, 2, 34, zy + k, ZZZ);
             s.put(col, 2, 34 + k, zy + 5, ZZZ);
             s.put(col, 2, 38 - k, zy + k, ZZZ);
+        }
+    }
+    // Fila 3 — happy: ojos abiertos + sonrisa que crece (KPM alto).
+    for (col, w) in [(0u32, 12), (1, 18)] {
+        s.body(col, 3);
+        s.eyes(col, 3, true);
+        s.smile(col, 3, w);
+    }
+    // Fila 4 — boring: ojos entornados, se balancea un poco (inactividad).
+    for (col, off) in [(0u32, -1), (1, 1)] {
+        s.body(col, 4);
+        s.eyes(col, 4, false);
+        // boca plana ligeramente desplazada
+        for i in 0..8 {
+            s.put(col, 4, 20 + i + off, 34, DARK);
         }
     }
 
