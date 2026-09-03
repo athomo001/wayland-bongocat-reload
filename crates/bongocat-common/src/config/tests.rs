@@ -36,6 +36,25 @@ fn clamping_de_enteros() {
 }
 
 #[test]
+fn happy_kpm_parsea_y_se_recorta() {
+    let (c, w) = parse_ini("");
+    assert_eq!(c.happy_kpm, 0, "desactivado por defecto");
+    assert!(w.is_empty());
+
+    let (c, w) = parse_ini("happy_kpm=180\n");
+    assert!(w.is_empty());
+    assert_eq!(c.happy_kpm, 180);
+
+    let (c, w) = parse_ini("happy_kpm=99999\n");
+    assert_eq!(c.happy_kpm, 10_000, "tope 10000");
+    assert_eq!(w.len(), 1);
+
+    // ida y vuelta por to_ini
+    let (round, _) = parse_ini(&c.to_ini());
+    assert_eq!(round.happy_kpm, c.happy_kpm);
+}
+
+#[test]
 fn cat_opacity_por_defecto_y_ronda() {
     let (c, _) = parse_ini("");
     assert_eq!(c.cat_opacity, 100, "por defecto opaco");

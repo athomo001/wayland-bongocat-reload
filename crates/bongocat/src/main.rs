@@ -18,6 +18,7 @@ mod import_vpets;
 mod input;
 mod input_child;
 mod ipc;
+mod kpm;
 mod pidfile;
 mod png_decode;
 mod service;

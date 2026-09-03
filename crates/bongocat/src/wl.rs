@@ -392,6 +392,7 @@ pub fn run_overlay(
         left_hold_until: now,
         right_hold_until: now,
         last_activity: now,
+        kpm: crate::kpm::Kpm::new(),
         last_reload: now,
         _ftl_mgr: ftl_mgr,
         _ext_list: ext_list,
@@ -546,6 +547,9 @@ struct State {
     right_hold_until: Instant,
     /// Última pulsación (para el reposo por inactividad).
     last_activity: Instant,
+    /// Teclas/minuto en ventana deslizante, para el estado `happy` (spec 0014
+    /// M6). Solo cuenta eventos de **teclado**, sin identidad de tecla.
+    kpm: crate::kpm::Kpm,
     /// Última recarga de config (para el debounce de 300 ms).
     last_reload: Instant,
     /// El manager de foreign-toplevel wlr, si el compositor lo soporta (se
@@ -725,8 +729,11 @@ impl State {
 
     /// Llega un bit de pata del lector de teclado: extiende la ventana de esa
     /// pata y marca actividad. Porta `anim_press_paw` / `anim_take_pending_paws`.
-    fn on_paw(&mut self, bit: u8) {
-        let bit = apply_mirror(bit, self.config.mirror_x);
+    fn on_paw(&mut self, raw: u8) {
+        // `PAW_KEY` marca los eventos de teclado; se separa antes de `apply_mirror`
+        // (que solo mira los bits de pata).
+        let from_key = raw & paw::PAW_KEY != 0;
+        let bit = apply_mirror(raw & paw::PAW_BOTH, self.config.mirror_x);
         let dur = Duration::from_millis(self.config.keypress_duration.max(0) as u64);
         let now = Instant::now();
         if bit & paw::PAW_LEFT != 0 {
@@ -734,6 +741,9 @@ impl State {
         }
         if bit & paw::PAW_RIGHT != 0 {
             self.right_hold_until = now + dur;
+        }
+        if from_key {
+            self.kpm.hit(now);
         }
         self.last_activity = now;
         self.tick(); // respuesta inmediata, no hasta el siguiente tick
@@ -776,8 +786,14 @@ impl State {
                 self.frame = next;
                 c
             }
-            // `happy_kpm` (estado `Happy`) llega en M6: por ahora `false`.
-            anim::FramesKind::Sheet(sa) => sa.tick(now, sleeping, left, right, false),
+            anim::FramesKind::Sheet(sa) => {
+                // `happy` (spec 0014 §5.7 M6): teclas/min ≥ `happy_kpm` (0 =
+                // desactivado). El estado `happy` solo existe si el tema lo trae;
+                // si no, `SheetAnim` cae a su reserva.
+                let happy = self.config.happy_kpm > 0
+                    && self.kpm.per_minute(now) >= self.config.happy_kpm as usize;
+                sa.tick(now, sleeping, left, right, happy)
+            }
         };
 
         if changed {

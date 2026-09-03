@@ -84,8 +84,12 @@ mouse_move_interval=50
 # fps               : fotogramas por segundo (1–120).
 # idle_frame        : fotograma que se muestra en reposo (0–4).
 # keypress_duration : ms que se mantiene la pata bajada tras una pulsación (10–5000).
+# happy_kpm         : teclas/minuto a partir de las cuales un tema de sprite sheet
+#                     con estado "happy" lo muestra (0–10000; 0 = desactivado).
+#                     Solo cuenta eventos de teclado, sin registrar qué tecla.
 fps=60
 idle_frame=0
+happy_kpm=0
 keypress_duration=100
 
 # Mapeo de manos: 0 = pata al azar; 1 = teclas de la izquierda → pata izquierda,

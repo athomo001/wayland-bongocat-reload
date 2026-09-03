@@ -108,6 +108,11 @@ pub struct Config {
 
     // Animación
     pub idle_frame: i32,
+    /// Teclas/minuto a partir de las cuales un tema de sprite sheet con estado
+    /// `happy` lo muestra (spec 0014 §5.7 M6). 0 = desactivado. Se cuenta como
+    /// un contador de eventos en ventana deslizante, sin identidad de tecla
+    /// (spec 0013).
+    pub happy_kpm: i32,
     pub keypress_duration: i32,
     pub test_animation_duration: i32,
     pub test_animation_interval: i32,
@@ -159,6 +164,7 @@ impl Default for Config {
             cat_align: Align::Center,
             theme: String::new(),
             idle_frame: 0,
+            happy_kpm: 0,
             keypress_duration: 100,
             test_animation_duration: 200,
             test_animation_interval: 0,
@@ -311,6 +317,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "overlay_height" => c.overlay_height = int()?,
         "overlay_opacity" => c.overlay_opacity = int()?,
         "idle_frame" => c.idle_frame = int()?,
+        "happy_kpm" => c.happy_kpm = int()?,
         "keypress_duration" => c.keypress_duration = int()?,
         "test_animation_duration" => c.test_animation_duration = int()?,
         "test_animation_interval" => c.test_animation_interval = int()?,
@@ -488,6 +495,7 @@ fn validate(c: &mut Config, warnings: &mut Vec<String>) {
     );
     clamp(&mut c.overlay_opacity, 0, 255, "overlay_opacity", warnings);
     clamp(&mut c.cat_opacity, 0, 100, "cat_opacity", warnings);
+    clamp(&mut c.happy_kpm, 0, 10_000, "happy_kpm", warnings);
 
     if c.idle_frame < 0 || c.idle_frame >= NUM_FRAMES {
         warnings.push(format!(
@@ -576,6 +584,7 @@ impl Config {
         w("layer", &self.layer.as_str());
         w("fps", &self.fps);
         w("idle_frame", &self.idle_frame);
+        w("happy_kpm", &self.happy_kpm);
         w("keypress_duration", &self.keypress_duration);
         w("enable_hand_mapping", &b(self.enable_hand_mapping));
         w("test_animation_duration", &self.test_animation_duration);

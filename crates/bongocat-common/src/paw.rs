@@ -10,6 +10,10 @@ pub const PAW_LEFT: u8 = 1;
 pub const PAW_RIGHT: u8 = 2;
 /// Ambas patas.
 pub const PAW_BOTH: u8 = PAW_LEFT | PAW_RIGHT;
+/// Marca "el evento vino de una **tecla**" (no del ratón). El lector aislado la
+/// activa en el byte de cada pulsación; el padre la usa para contar
+/// teclas/minuto (`happy_kpm`, spec 0014 M6) sin conocer la tecla (spec 0013).
+pub const PAW_KEY: u8 = 4;
 
 /// Índices de fotograma (coinciden con `BONGOCAT_FRAME_*` de `include/core/bongocat.h`).
 pub const FRAME_BOTH_UP: u8 = 0;

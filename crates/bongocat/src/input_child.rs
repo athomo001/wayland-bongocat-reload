@@ -114,9 +114,14 @@ fn keyboard_thread(mut dev: Device, path: &str, write_fd: RawFd) {
             }
         };
         for ev in batch {
+            // `| PAW_KEY`: marca el byte como "de teclado" para el contador de
+            // teclas/min del padre (`happy_kpm`). El keycode sigue sin salir.
             if ev.event_type() == EventType::KEY
                 && ev.value() == 1
-                && !send_bit(write_fd, paw_for_keycode(i32::from(ev.code())))
+                && !send_bit(
+                    write_fd,
+                    paw_for_keycode(i32::from(ev.code())) | bongocat_common::paw::PAW_KEY,
+                )
             {
                 return; // el padre cerró la tubería
             }

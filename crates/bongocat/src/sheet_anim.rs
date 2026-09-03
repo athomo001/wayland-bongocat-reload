@@ -251,6 +251,11 @@ impl SheetAnim {
         if sleeping {
             return StateId::Sleep;
         }
+        // Actividad sostenida con KPM alto → `Happy` (spec 0014 §5.3), por
+        // encima de las poses de tecleo; solo si el tema define ese estado.
+        if happy && self.cache.contains_key(&StateId::Happy) {
+            return StateId::Happy;
+        }
         if left || right {
             return match self.model {
                 // `left || right` es cierto aquí; el caso `(false, false)` no se da.
@@ -259,9 +264,6 @@ impl SheetAnim {
                 InputModel::Hands => StateId::ActiveRight,
                 InputModel::Activity => StateId::Writing,
             };
-        }
-        if happy && self.cache.contains_key(&StateId::Happy) {
-            return StateId::Happy;
         }
         StateId::Idle
     }
@@ -529,5 +531,40 @@ state_start_writing_frames = 1
         assert_eq!(a.current(), &[20], "hands: pata izq -> active_left");
         a.tick(advance(t0, 20), false, true, true, false);
         assert_eq!(a.current(), &[22], "ambas -> active_both");
+    }
+
+    #[test]
+    fn happy_manda_sobre_el_tecleo_si_el_tema_lo_trae() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        let mut a = SheetAnim::from_cache(
+            cache(&[("idle", &[0]), ("writing", &[10, 11]), ("happy", &[30, 31])]),
+            &sheet,
+            t0,
+        );
+        // Tecleando (pata izq) pero con `happy` -> gana `happy`.
+        a.tick(advance(t0, 10), false, true, false, true);
+        assert_eq!(
+            a.debug_pos().0,
+            "happy",
+            "KPM alto -> happy aunque se teclee"
+        );
+        // Sin `happy`, el mismo tecleo -> writing.
+        a.tick(advance(t0, 20), false, true, false, false);
+        assert_eq!(a.debug_pos().0, "writing");
+    }
+
+    #[test]
+    fn happy_sin_estado_en_el_tema_cae_a_la_reserva() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI); // sin `happy`
+        let mut a =
+            SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10, 11])]), &sheet, t0);
+        a.tick(advance(t0, 10), false, false, false, true);
+        assert_eq!(
+            a.debug_pos().0,
+            "idle",
+            "sin estado happy, `happy=true` no hace nada"
+        );
     }
 }
