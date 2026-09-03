@@ -199,7 +199,8 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
     }
 
     for (name, acc) in per_state {
-        // Un estado necesita al menos fila y nº de frames para ser utilizable.
+        // Un estado de **rejilla** necesita fila y nº de frames para ser
+        // utilizable; sin ellos se deja para la ronda de "solo hoja" de abajo.
         let (Some(row), Some(frames)) = (acc.row, acc.frames) else {
             continue;
         };
@@ -212,6 +213,25 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
             frames,
             fps: acc.fps.filter(|&n| n > 0).unwrap_or(t.default_fps),
             col_start: acc.col_start.unwrap_or(row_base).saturating_sub(row_base),
+        });
+    }
+
+    // Estados con **hoja propia** (`sheet_<estado> =`, típicamente un APNG) y sin
+    // ningún `state_<estado>_*`: los fotogramas vienen del fichero, así que `row`
+    // y `frames` no aplican (quedan a 0) y el ritmo es `default_fps`.
+    let solo_hoja: Vec<String> = t
+        .sheets_per_state
+        .keys()
+        .filter(|k| !t.states.iter().any(|s| &s.name == *k))
+        .cloned()
+        .collect();
+    for name in solo_hoja {
+        t.states.push(SheetState {
+            name,
+            row: 0,
+            frames: 0,
+            fps: t.default_fps,
+            col_start: 0,
         });
     }
     t
@@ -443,6 +463,27 @@ state_writing_col = 2
             t.sheet_files().into_iter().collect::<Vec<_>>(),
             ["base.png", "duerme.png", "escribe.png"]
         );
+    }
+
+    #[test]
+    fn estado_con_solo_hoja_propia_existe_sin_row_ni_frames() {
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\ndefault_fps=9\n\
+             sheet = base.png\n\
+             sheet_writing = w.apng\n\
+             state_idle_row=1\nstate_idle_frames=2\n",
+        );
+        let w = t
+            .state("writing")
+            .expect("writing existe por su sheet_writing");
+        assert_eq!(
+            (w.row, w.frames, w.fps),
+            (0, 0, 9),
+            "row/frames 0, fps default"
+        );
+        assert_eq!(t.sheet_for("writing"), Some("w.apng"));
+        // idle sigue siendo un estado de rejilla normal.
+        assert_eq!(t.state("idle").unwrap().frames, 2);
     }
 
     #[test]

@@ -99,6 +99,8 @@ fn main() {
 
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/demo");
     std::fs::create_dir_all(&out_dir).unwrap();
+
+    // Hoja de rejilla: idle + sleep (writing sale del APNG de abajo).
     let path = out_dir.join("sheet.png");
     let file = std::fs::File::create(&path).unwrap();
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
@@ -109,4 +111,80 @@ fn main() {
         .write_image_data(&s.buf)
         .unwrap();
     println!("escrito {} ({w}x{h})", path.display());
+
+    // APNG de `writing`: 3 marcos completos de 48×48 (patas arriba/abajo/arriba),
+    // para probar el camino `SheetSource::Frames` (spec 0014 M3).
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    for down in [false, true, false] {
+        let mut fr = Frame {
+            buf: vec![0u8; (FW * FH * 4) as usize],
+        };
+        fr.body();
+        fr.eyes();
+        fr.paws(down);
+        frames.push(fr.buf);
+    }
+    let path = out_dir.join("writing.apng");
+    let file = std::fs::File::create(&path).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), FW, FH);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.set_animated(frames.len() as u32, 0).unwrap();
+    let mut w = enc.write_header().unwrap();
+    for f in &frames {
+        w.set_frame_delay(1, 10).unwrap();
+        w.write_image_data(f).unwrap();
+    }
+    w.finish().unwrap();
+    println!(
+        "escrito {} (APNG {}×{}, {} marcos)",
+        path.display(),
+        FW,
+        FH,
+        frames.len()
+    );
+}
+
+/// Un único frame 48×48 (para el APNG de `writing`).
+struct Frame {
+    buf: Vec<u8>,
+}
+
+impl Frame {
+    fn put(&mut self, x: i32, y: i32, c: Rgba) {
+        if x < 0 || y < 0 || x >= FW as i32 || y >= FH as i32 {
+            return;
+        }
+        let i = ((y as u32 * FW + x as u32) * 4) as usize;
+        self.buf[i..i + 4].copy_from_slice(&c);
+    }
+    fn body(&mut self) {
+        for y in 0..FH as i32 {
+            for x in 0..FW as i32 {
+                let (dx, dy) = (x - 24, y - 26);
+                if dx * dx + dy * dy <= 18 * 18 {
+                    self.put(x, y, BODY);
+                }
+            }
+        }
+    }
+    fn eyes(&mut self) {
+        for cx in [18, 30] {
+            for y in 0..6 {
+                for x in 0..4 {
+                    self.put(cx + x, 22 + y, DARK);
+                }
+            }
+        }
+    }
+    fn paws(&mut self, down: bool) {
+        let y = if down { 40 } else { 34 };
+        for x0 in [12, 30] {
+            for yy in 0..6 {
+                for xx in 0..8 {
+                    self.put(x0 + xx, y + yy, BODY);
+                }
+            }
+        }
+    }
 }

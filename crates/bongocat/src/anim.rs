@@ -15,9 +15,19 @@ use resvg::usvg::{Options, Tree};
 use crate::png_decode::DecodedPng;
 use crate::sheet_anim::SheetAnim;
 
-/// Hojas de un tema de sprite sheet ya decodificadas a RGBA8 recto, indexadas
-/// por **nombre de fichero** (`sheet =` y cada `sheet_<estado> =`).
-pub type SheetImages = BTreeMap<String, DecodedPng>;
+/// Origen de píxeles de un fichero de hoja (`sheet =` / `sheet_<estado> =`).
+pub enum SheetSource {
+    /// Imagen única: los fotogramas del estado salen de la **rejilla**
+    /// (`frame_rect`) según `state_<n>_row` / `_frames` / `_col`.
+    Grid(DecodedPng),
+    /// APNG (o GIF, en el futuro): los fotogramas ya vienen **separados** en el
+    /// fichero; la rejilla se ignora para este estado.
+    Frames(Vec<DecodedPng>),
+}
+
+/// Ficheros de hoja de un tema de sprite sheet ya decodificados, por **nombre de
+/// fichero** (`sheet =` y cada `sheet_<estado> =`).
+pub type SheetImages = BTreeMap<String, SheetSource>;
 
 /// Relación de aspecto de referencia del gato (`CAT_IMAGE_WIDTH/HEIGHT`).
 const REF_W: u64 = 500;
@@ -181,11 +191,13 @@ pub fn rasterize_from<S: AsRef<[u8]>>(
 /// convertidos a **BGRA premultiplicado** y con el espejo H/V aplicado. Clave =
 /// nombre del estado (`idle`, `writing`, …).
 ///
-/// `images` son las hojas decodificadas a RGBA8 recto, por nombre de fichero.
-/// Un estado sin fuente (ni propia ni global) se omite. `cat_height` es la
-/// altura objetivo; el factor entero real puede quedar por debajo si `frame_h`
-/// no la divide (el `classic` SVG no tiene esta limitación; es el precio del
-/// pixel-art).
+/// La fuente de cada estado puede ser una **rejilla** ([`SheetSource::Grid`],
+/// se recortan `state_<n>_frames` celdas) o un **APNG** ([`SheetSource::Frames`],
+/// cada fotograma del fichero es un frame; la rejilla se ignora). En ambos casos
+/// el frame se ajusta a `frame_w`×`frame_h` (rellenando/recortando si el APNG no
+/// coincide). Un estado sin fuente se omite. `cat_height` es la altura objetivo;
+/// el factor entero real puede quedar por debajo si `frame_h` no la divide (el
+/// `classic` SVG no tiene esta limitación; es el precio del pixel-art).
 #[must_use]
 pub fn build_sheet_cache(
     sheet: &SheetTheme,
@@ -198,29 +210,41 @@ pub fn build_sheet_cache(
     let k = sheet::integer_scale(fh, cat_height.max(1));
     let (w, h) = (fw * k, fh * k);
 
+    // Ajusta un frame RGBA recto (`frame_w`×`frame_h`, ya recortado) a BGRA
+    // premultiplicado, escalado y con el espejo aplicado.
+    let finish = |mut px: Vec<u8>| -> Vec<u8> {
+        if k > 1 {
+            px = sheet::scale_nearest(&px, fw, fh, k).0;
+        }
+        sheet::premul_bgra_from_straight_rgba(&mut px);
+        if mirror_x {
+            flip_h(&mut px, w, h);
+        }
+        if mirror_y {
+            flip_v(&mut px, w, h);
+        }
+        px
+    };
+
     let mut cache: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
     for st in &sheet.states {
-        let Some(png) = sheet.sheet_for(&st.name).and_then(|f| images.get(f)) else {
+        let Some(src) = sheet.sheet_for(&st.name).and_then(|f| images.get(f)) else {
             continue; // sin hoja para este estado
         };
-        let mut frames_st = Vec::with_capacity(st.frames as usize);
-        for i in 0..st.frames {
-            let rect = sheet::frame_rect(sheet, st, i);
-            let cropped = sheet::crop_frame(&png.rgba, png.w, png.h, rect);
-            let mut px = if k > 1 {
-                sheet::scale_nearest(&cropped, fw, fh, k).0
-            } else {
-                cropped
-            };
-            sheet::premul_bgra_from_straight_rgba(&mut px);
-            if mirror_x {
-                flip_h(&mut px, w, h);
-            }
-            if mirror_y {
-                flip_v(&mut px, w, h);
-            }
-            frames_st.push(px);
-        }
+        let frames_st: Vec<Vec<u8>> = match src {
+            SheetSource::Grid(png) => (0..st.frames)
+                .map(|i| {
+                    let rect = sheet::frame_rect(sheet, st, i);
+                    finish(sheet::crop_frame(&png.rgba, png.w, png.h, rect))
+                })
+                .collect(),
+            // Un APNG manda sus propios fotogramas; `state_<n>_frames` (concepto
+            // de rejilla) se ignora para ese estado.
+            SheetSource::Frames(fs) => fs
+                .iter()
+                .map(|f| finish(sheet::crop_frame(&f.rgba, f.w, f.h, (0, 0, fw, fh))))
+                .collect(),
+        };
         if !frames_st.is_empty() {
             cache.insert(st.name.clone(), frames_st);
         }
@@ -441,7 +465,7 @@ mod tests {
 
     /// Un `SheetImages` con la hoja sintética bajo el nombre `hoja.png`.
     fn imgs() -> SheetImages {
-        BTreeMap::from([("hoja.png".to_string(), hoja_sintetica())])
+        BTreeMap::from([("hoja.png".to_string(), SheetSource::Grid(hoja_sintetica()))])
     }
 
     const SHEET_INI: &str = "\
@@ -524,8 +548,8 @@ state_writing_frames = 1
             rgba: [99u8, 0, 50, 255].repeat(16),
         };
         let images = BTreeMap::from([
-            ("base.png".to_string(), hoja_sintetica()),
-            ("w.png".to_string(), solo_99),
+            ("base.png".to_string(), SheetSource::Grid(hoja_sintetica())),
+            ("w.png".to_string(), SheetSource::Grid(solo_99)),
         ]);
         let cache = build_sheet_cache(&sheet, &images, 4, false, false);
         assert_eq!(
@@ -538,6 +562,40 @@ state_writing_frames = 1
             &[50, 0, 99, 255],
             "writing <- w.png"
         );
+    }
+
+    #[test]
+    fn estado_con_fuente_apng_toma_los_fotogramas_del_fichero() {
+        // `writing` desde un APNG de 3 fotogramas; la rejilla (row/frames) se
+        // ignora para ese estado.
+        let ini = "\
+frame_w = 4
+frame_h = 4
+sheet = base.png
+sheet_writing = anim.apng
+state_idle_row = 1
+state_idle_frames = 1
+state_writing_row = 1
+state_writing_frames = 1
+";
+        let sheet = bongocat_common::sheet::parse_sheet_ini(ini);
+        let mk = |r: u8| DecodedPng {
+            w: 4,
+            h: 4,
+            rgba: [r, 0, 50, 255].repeat(16),
+        };
+        let images = BTreeMap::from([
+            ("base.png".to_string(), SheetSource::Grid(hoja_sintetica())),
+            (
+                "anim.apng".to_string(),
+                SheetSource::Frames(vec![mk(11), mk(22), mk(33)]),
+            ),
+        ]);
+        let cache = build_sheet_cache(&sheet, &images, 4, false, false);
+        assert_eq!(cache["writing"].len(), 3, "3 fotogramas del APNG");
+        assert_eq!(&cache["writing"][0][0..4], &[50, 0, 11, 255]);
+        assert_eq!(&cache["writing"][2][0..4], &[50, 0, 33, 255]);
+        assert_eq!(cache["idle"].len(), 1, "idle sigue por rejilla");
     }
 
     #[test]

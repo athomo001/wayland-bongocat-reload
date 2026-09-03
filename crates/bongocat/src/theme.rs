@@ -13,7 +13,7 @@ use bongocat_common::theme::{
     format_supported, parse_theme_ini, ThemeMeta, DEFAULT_FRAME_FILES, THEME_FORMAT_SUPPORTED,
 };
 
-use crate::anim::SheetImages;
+use crate::anim::{SheetImages, SheetSource};
 use crate::png_decode;
 
 const MAX_FRAME_BYTES: u64 = 2 * 1024 * 1024;
@@ -60,25 +60,34 @@ impl LoadedTheme {
                 self.meta.aspect.0, self.meta.aspect.1, self.meta.theme_format
             ),
             ThemeArt::Sheet(s) => {
+                // Nº de fotogramas real por estado: de la rejilla, o del APNG.
                 let estados: Vec<String> = s
                     .sheet
                     .states
                     .iter()
-                    .map(|st| format!("{}×{}", st.name, st.frames))
+                    .map(|st| {
+                        let n = match s.sheet.sheet_for(&st.name).and_then(|f| s.images.get(f)) {
+                            Some(SheetSource::Frames(fs)) => fs.len(),
+                            _ => st.frames as usize,
+                        };
+                        format!("{}×{n}", st.name)
+                    })
                     .collect();
-                let hojas = s.images.len();
+                let hojas: Vec<String> = s
+                    .images
+                    .iter()
+                    .map(|(n, src)| match src {
+                        SheetSource::Grid(p) => format!("{n} {}×{}", p.w, p.h),
+                        SheetSource::Frames(fs) => format!("{n} APNG×{}", fs.len()),
+                    })
+                    .collect();
                 format!(
-                    "'{label}' — sprite sheet, {hoja_txt}, frame {}×{}, {:?} model, estados: {}",
+                    "'{label}' — sprite sheet, frame {}×{}, {:?} model, hojas: {}, estados: {}",
                     s.sheet.frame_w,
                     s.sheet.frame_h,
                     s.sheet.input_model,
+                    hojas.join(", "),
                     estados.join(", "),
-                    hoja_txt = if hojas == 1 {
-                        let (n, p) = s.images.iter().next().unwrap();
-                        format!("hoja {n} {}×{}", p.w, p.h)
-                    } else {
-                        format!("{hojas} hojas")
-                    },
                 )
             }
         }
@@ -291,23 +300,41 @@ fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
             }
         }
         let bytes = std::fs::read(&path).ok()?;
-        let png = match png_decode::decode_rgba8(&bytes) {
-            Ok(p) => p,
+        let mut fs = match png_decode::decode_frames(&bytes) {
+            Ok(v) => v,
             Err(e) => {
                 eprintln!("bongocat: tema: {}: {e}; uso el clásico", path.display());
                 return None;
             }
         };
-        if png.w < need_w || png.h < need_h {
-            eprintln!(
-                "bongocat: tema {}: la hoja {name} ({}×{}) es menor que la rejilla \
-                 ({need_w}×{need_h}); los frames que falten saldrán transparentes",
-                dir.display(),
-                png.w,
-                png.h
-            );
-        }
-        images.insert(name.to_string(), png);
+        let src = if fs.len() == 1 {
+            let png = fs.pop().unwrap();
+            if png.w < need_w || png.h < need_h {
+                eprintln!(
+                    "bongocat: tema {}: la hoja {name} ({}×{}) es menor que la rejilla \
+                     ({need_w}×{need_h}); los frames que falten saldrán transparentes",
+                    dir.display(),
+                    png.w,
+                    png.h
+                );
+            }
+            SheetSource::Grid(png)
+        } else {
+            // APNG: cada fotograma del fichero es un frame del estado.
+            if fs[0].w != sheet.frame_w || fs[0].h != sheet.frame_h {
+                eprintln!(
+                    "bongocat: tema {}: el APNG {name} es {}×{}, no {}×{} (frame_w/frame_h); \
+                     se ajustará recortando/rellenando",
+                    dir.display(),
+                    fs[0].w,
+                    fs[0].h,
+                    sheet.frame_w,
+                    sheet.frame_h
+                );
+            }
+            SheetSource::Frames(fs)
+        };
+        images.insert(name.to_string(), src);
     }
 
     let loaded = LoadedTheme {
