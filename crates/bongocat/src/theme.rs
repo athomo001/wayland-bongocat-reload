@@ -54,9 +54,16 @@ impl LoadedTheme {
         } else {
             &self.meta.name
         };
+        // Altura sugerida por el tema (`default_cat_height`); informativa —
+        // `cat_height` de la config siempre manda.
+        let sugerida = self
+            .meta
+            .default_cat_height
+            .map(|h| format!(", altura sugerida {h}"))
+            .unwrap_or_default();
         match &self.art {
             ThemeArt::Svg(_) => format!(
-                "'{label}' — SVG, aspecto {}:{}, theme_format {}",
+                "'{label}' — SVG, aspecto {}:{}, theme_format {}{sugerida}",
                 self.meta.aspect.0, self.meta.aspect.1, self.meta.theme_format
             ),
             ThemeArt::Sheet(s) => {
@@ -82,7 +89,7 @@ impl LoadedTheme {
                     })
                     .collect();
                 format!(
-                    "'{label}' — sprite sheet, frame {}×{}, {:?} model, hojas: {}, estados: {}",
+                    "'{label}' — sprite sheet, frame {}×{}, {:?} model{sugerida}, hojas: {}, estados: {}",
                     s.sheet.frame_w,
                     s.sheet.frame_h,
                     s.sheet.input_model,

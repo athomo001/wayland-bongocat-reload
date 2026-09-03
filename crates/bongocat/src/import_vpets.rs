@@ -158,6 +158,42 @@ fn is_state_field(field: &str) -> bool {
     matches!(field, "row" | "frames" | "col" | "fps")
 }
 
+/// Parsea un `--state` con forma `NOMBRE=row:R,frames:F[,fps:X][,col:C]`
+/// (índices 1-based, spec 0014 §5.5). `Err` con motivo si no cuadra.
+fn parse_state_spec(spec: &str) -> Result<VpetsState, String> {
+    let (name, rest) = spec
+        .split_once('=')
+        .ok_or_else(|| format!("--state '{spec}': falta '=' (usa NOMBRE=row:R,frames:F)"))?;
+    if name.is_empty() {
+        return Err(format!("--state '{spec}': nombre vacío"));
+    }
+    let (mut row, mut frames, mut fps, mut col) = (None, None, None, None);
+    for kv in rest.split(',').filter(|s| !s.is_empty()) {
+        let (k, v) = kv
+            .split_once(':')
+            .ok_or_else(|| format!("--state '{spec}': '{kv}' no es clave:valor"))?;
+        let n: u32 = v
+            .parse()
+            .map_err(|_| format!("--state '{spec}': '{v}' no es un número"))?;
+        match k {
+            "row" => row = Some(n),
+            "frames" => frames = Some(n),
+            "fps" => fps = Some(n),
+            "col" => col = Some(n),
+            other => return Err(format!("--state '{spec}': clave '{other}' desconocida")),
+        }
+    }
+    let row = row.ok_or_else(|| format!("--state '{spec}': falta 'row'"))?;
+    let frames = frames.ok_or_else(|| format!("--state '{spec}': falta 'frames'"))?;
+    Ok(VpetsState {
+        name: name.to_string(),
+        row: row.max(1),
+        frames: frames.max(1),
+        col_start: col.unwrap_or(1).max(1),
+        fps: fps.filter(|&n| n > 0),
+    })
+}
+
 /// Deriva `(frame_w, frame_h)` del tamaño de la hoja cuando el `.conf` no los
 /// declara (spec 0014 §5.5): columnas = máximo `col_start-1 + frames` sobre los
 /// estados; filas = fila máxima. `None` si no hay datos suficientes o la hoja no
@@ -350,9 +386,11 @@ pub struct ImportArgs<'a> {
     /// derivar de la hoja).
     pub frame_w: Option<u32>,
     pub frame_h: Option<u32>,
-    /// Estado destino cuando el origen es una animación de un solo fichero
-    /// (APNG). Default: `writing`.
-    pub state: Option<&'a str>,
+    /// `--state` repetible. Para un **APNG** suelto: un nombre a secas
+    /// (`--state writing`, default `writing`). Para una **hoja PNG** suelta sin
+    /// `.conf`: `NOMBRE=row:R,frames:F[,fps:X][,col:C]` (1-based) define un
+    /// estado de rejilla (spec 0014 §5.5).
+    pub states: &'a [String],
 }
 
 /// Lo que hay que escribir en el directorio del tema: el `theme.ini` ya
@@ -513,15 +551,23 @@ fn build_from_single_file(args: &ImportArgs, file: &Path) -> Result<Built, Strin
     if frames.len() > 1 {
         return build_anim_state(args, file, bytes, &frames);
     }
-    let conf = VpetsConf::default();
+    // Estados definidos por `--state NOMBRE=row:R,frames:F[,...]` (spec §5.5).
+    let mut conf = VpetsConf::default();
+    for spec in args.states {
+        conf.states.push(parse_state_spec(spec)?);
+    }
     let sheet_dims = (frames[0].w, frames[0].h);
-    let (fw, fh) = args.frame_w.zip(args.frame_h).ok_or_else(|| {
-        format!(
-            "una hoja suelta de {}×{} necesita --frame-w y --frame-h (o pásala \
-                 con su .conf)",
-            sheet_dims.0, sheet_dims.1
-        )
-    })?;
+    let (fw, fh) = args
+        .frame_w
+        .zip(args.frame_h)
+        .or_else(|| derive_frame_size(sheet_dims.0, sheet_dims.1, &conf.states))
+        .ok_or_else(|| {
+            format!(
+                "una hoja suelta de {}×{} necesita --frame-w y --frame-h, o \
+                 --state NOMBRE=row:R,frames:F para deducirlos",
+                sheet_dims.0, sheet_dims.1
+            )
+        })?;
     let base = file
         .file_name()
         .and_then(|s| s.to_str())
@@ -692,7 +738,12 @@ fn build_anim_state(
     bytes: Vec<u8>,
     frames: &[png_decode::DecodedPng],
 ) -> Result<Built, String> {
-    let state = args.state.unwrap_or("writing");
+    // El 1er `--state` a secas (sin `=`) nombra el estado; default `writing`.
+    let state = args
+        .states
+        .iter()
+        .find(|s| !s.contains('='))
+        .map_or("writing", String::as_str);
     if StateId::from_theme_name(state).is_none() {
         return Err(format!(
             "--state '{state}' no es un estado conducible (usa idle/writing/sleep/…)"
@@ -988,7 +1039,7 @@ custom_working_frames = 3
             dry_run: false,
             frame_w: None,
             frame_h: None,
-            state: None,
+            states: &[],
         };
         let created = run(&args).expect("import OK");
         assert_eq!(created, out);
@@ -1018,7 +1069,7 @@ custom_working_frames = 3
             dry_run: true,
             frame_w: Some(32),
             frame_h: Some(32),
-            state: None,
+            states: &[],
         };
         run(&args).expect("dry-run OK");
         assert!(!out.exists(), "--dry-run no crea el directorio");
@@ -1057,7 +1108,7 @@ custom_working_frames = 3
             dry_run: false,
             frame_w: None,
             frame_h: None,
-            state: None,
+            states: &[],
         };
         run(&args).expect("import de PNGs sueltos OK");
         // Se ensambló una hoja 80×80 (2 columnas × 2 filas).
@@ -1078,6 +1129,7 @@ custom_working_frames = 3
         let file = dir.join("fly.apng");
         std::fs::write(&file, toy_apng(48, 48, 4)).unwrap();
         let out = dir.join("out");
+        let st = [String::from("writing")];
         let args = ImportArgs {
             source: file.to_str().unwrap(),
             name: Some("flyer"),
@@ -1085,7 +1137,7 @@ custom_working_frames = 3
             dry_run: false,
             frame_w: None,
             frame_h: None,
-            state: Some("writing"),
+            states: &st,
         };
         run(&args).expect("import de APNG OK");
         assert!(out.join("writing.apng").is_file());
@@ -1215,6 +1267,7 @@ custom_working_frames = 3
                 pet.clone()
             };
             let out = root.join(format!("{name}-out"));
+            let st: Vec<String> = state.iter().map(|s| (*s).to_string()).collect();
             let args = ImportArgs {
                 source: source.to_str().unwrap(),
                 name: Some(name),
@@ -1222,7 +1275,7 @@ custom_working_frames = 3
                 dry_run: false,
                 frame_w: None,
                 frame_h: None,
-                state,
+                states: &st,
             };
             run(&args).unwrap_or_else(|e| panic!("mascota '{name}': el import falló: {e}"));
             assert!(
@@ -1231,6 +1284,47 @@ custom_working_frames = 3
             );
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hoja_suelta_con_flags_de_estado() {
+        // `--state idle=row:1,frames:2` sobre una hoja PNG sin `.conf` (spec §5.5).
+        assert_eq!(
+            parse_state_spec("writing=row:2,frames:3,fps:10").unwrap(),
+            VpetsState {
+                name: "writing".into(),
+                row: 2,
+                frames: 3,
+                col_start: 1,
+                fps: Some(10),
+            }
+        );
+        assert!(parse_state_spec("mal").is_err(), "sin '='");
+        assert!(parse_state_spec("x=frames:2").is_err(), "falta row");
+
+        let dir = scratch("state-flags");
+        let png = dir.join("s.png");
+        std::fs::write(&png, toy_png(48, 32)).unwrap(); // 3 cols × 2 filas de 16
+        let out = dir.join("out");
+        let st = [
+            String::from("idle=row:1,frames:2"),
+            String::from("writing=row:2,frames:3"),
+        ];
+        let args = ImportArgs {
+            source: png.to_str().unwrap(),
+            name: Some("porflags"),
+            out_dir: Some(out.clone()),
+            dry_run: false,
+            frame_w: Some(16),
+            frame_h: Some(16),
+            states: &st,
+        };
+        run(&args).expect("hoja + --state OK");
+        let ini = std::fs::read_to_string(out.join("theme.ini")).unwrap();
+        assert!(ini.contains("state_idle_frames = 2"));
+        assert!(ini.contains("state_writing_row = 2"));
+        assert!(crate::theme::check(&out.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1245,7 +1339,7 @@ custom_working_frames = 3
             dry_run: true,
             frame_w: Some(8),
             frame_h: Some(8),
-            state: None,
+            states: &[],
         };
         let err = run(&args).unwrap_err();
         assert!(err.contains("GIF"), "el error menciona GIF: {err}");

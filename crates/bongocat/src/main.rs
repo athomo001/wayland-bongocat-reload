@@ -153,7 +153,9 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
             eprintln!(
                 "bongocat: uso: bongocat theme new NOMBRE | theme check NOMBRE|RUTA | theme list\n\
                  \x20                  | theme import-vpets ORIGEN [--name N] [--out DIR] [--dry-run]\n\
-                 \x20                    [--frame-w W] [--frame-h H] [--state NOMBRE]"
+                 \x20                    [--frame-w W] [--frame-h H]\n\
+                 \x20                    [--state NOMBRE]            (APNG suelto → un estado)\n\
+                 \x20                    [--state N=row:R,frames:F]  (hoja PNG suelta, repetible)"
             );
             ExitCode::from(2)
         }
@@ -166,7 +168,7 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
 fn import_vpets_cmd(rest: &[String]) -> ExitCode {
     let mut source: Option<&str> = None;
     let mut name: Option<&str> = None;
-    let mut state: Option<&str> = None;
+    let mut states: Vec<String> = Vec::new();
     let mut out_dir: Option<std::path::PathBuf> = None;
     let mut dry_run = false;
     let (mut frame_w, mut frame_h) = (None, None);
@@ -175,7 +177,11 @@ fn import_vpets_cmd(rest: &[String]) -> ExitCode {
         match a.as_str() {
             "--dry-run" => dry_run = true,
             "--name" => name = it.next().map(String::as_str),
-            "--state" => state = it.next().map(String::as_str),
+            "--state" => {
+                if let Some(v) = it.next() {
+                    states.push(v.clone());
+                }
+            }
             "--out" => out_dir = it.next().map(std::path::PathBuf::from),
             "--frame-w" => frame_w = it.next().and_then(|s| s.parse().ok()),
             "--frame-h" => frame_h = it.next().and_then(|s| s.parse().ok()),
@@ -197,7 +203,7 @@ fn import_vpets_cmd(rest: &[String]) -> ExitCode {
         dry_run,
         frame_w,
         frame_h,
-        state,
+        states: &states,
     };
     match import_vpets::run(&args) {
         Ok(dir) => {
