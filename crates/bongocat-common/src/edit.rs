@@ -127,6 +127,33 @@ mod tests {
     }
 
     #[test]
+    fn aspecto_2_1_da_doble_ancho_y_el_hit_test_usa_el_mismo(/* T-0006-M4-aspect */) {
+        // A igual `cat_height`, un aspecto 2:1 es el doble de ancho que 1:1.
+        assert_eq!(cat_width_for_height(80, (2, 1)), 160);
+        assert_eq!(cat_width_for_height(80, (1, 1)), 80);
+        assert_eq!(
+            cat_width_for_height(80, (2, 1)),
+            2 * cat_width_for_height(80, (1, 1))
+        );
+
+        // `cat_rect` con cada aspecto: misma altura, ancho ×2, y el hit-test
+        // (0005) usa exactamente ese rectángulo — un punto dentro del gato
+        // ancho puede caer **fuera** del estrecho.
+        let (bw, bh) = (1920, 120);
+        let c = cfg(Align::Center, 0, 0, 80);
+        let wide = cat_rect(&c, bw, bh, (2, 1));
+        let narrow = cat_rect(&c, bw, bh, (1, 1));
+        assert_eq!(wide.3, narrow.3, "misma altura");
+        assert_eq!(wide.2, 2 * narrow.2, "doble ancho");
+        // Punto a 60 px a la derecha del centro de la barra: dentro del ancho,
+        // fuera del estrecho (que solo llega a ±40).
+        let px = bw / 2 + 60;
+        let py = bh / 2;
+        assert!(hit(wide, px, py), "dentro del gato 2:1");
+        assert!(!hit(narrow, px, py), "fuera del gato 1:1");
+    }
+
+    #[test]
     fn hit_test() {
         let r = (100, 10, 40, 30);
         assert!(hit(r, 100, 10));

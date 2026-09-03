@@ -36,6 +36,15 @@ fn clamping_de_enteros() {
 }
 
 #[test]
+fn enable_tray_por_defecto_y_parseo() {
+    assert!(parse_ini("").0.enable_tray, "activo por defecto");
+    let (c, w) = parse_ini("enable_tray=0\n");
+    assert!(w.is_empty());
+    assert!(!c.enable_tray);
+    assert!(parse_ini("enable_tray=2\n").1.len() == 1, "solo 0/1");
+}
+
+#[test]
 fn happy_kpm_parsea_y_se_recorta() {
     let (c, w) = parse_ini("");
     assert_eq!(c.happy_kpm, 0, "desactivado por defecto");

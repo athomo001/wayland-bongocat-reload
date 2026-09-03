@@ -144,6 +144,11 @@ sleep_end=06:00
 # Solo lo atiende tu propio usuario (modo 0600 + SO_PEERCRED). 1 = activo.
 enable_ipc=1
 
+# Icono en la bandeja del sistema (menú: mostrar/ocultar, reiniciar, recargar,
+# cerrar). 1 = activo; `--no-tray` lo desactiva para una ejecución.
+# (El icono gráfico está en curso; hoy usa `bongocatctl` para lo mismo.)
+enable_tray=1
+
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ DEPURACIÓN                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘

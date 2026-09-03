@@ -25,6 +25,7 @@ mod service;
 mod sheet_anim;
 mod theme;
 mod toggle;
+mod tray;
 mod watch;
 mod wl;
 
@@ -42,6 +43,8 @@ struct Args {
     /// en pantalla completa). Escotilla por si el protocolo del compositor da
     /// problemas.
     no_toplevel: bool,
+    /// Fuerza `enable_tray=0` para esta ejecución (spec 0011 §5).
+    no_tray: bool,
     // Utilidades sin compositor:
     validate: bool,
     print_default_config: bool,
@@ -66,6 +69,7 @@ fn print_help(prog: &str) {
          \x20     --print-default-config Imprime la configuración por defecto como INI\n\
          \x20     --dry-run              Resuelve config + tema sin abrir Wayland y sale\n\
          \x20     --no-toplevel          No usar protocolos de toplevels (sin auto-ocultar)\n\
+         \x20     --no-tray              No arrancar el icono de bandeja\n\
          \x20     --install-service      Instala la unidad systemd de usuario y sale\n\
          \x20     --uninstall-service    Quita la unidad systemd de usuario y sale\n"
     );
@@ -98,6 +102,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-S" | "--supervise" => a.supervise = true,
             "--multi-monitor-child" => a.multi_monitor_child = true,
             "--no-toplevel" => a.no_toplevel = true,
+            "--no-tray" => a.no_tray = true,
             "--validate" => a.validate = true,
             "--print-default-config" => a.print_default_config = true,
             "--dry-run" => a.dry_run = true,
@@ -268,6 +273,14 @@ fn main() -> ExitCode {
             None => println!("dry-run: tema = embebido (classic)"),
         }
         println!("dry-run: temas disponibles: {:?}", theme::list());
+        println!(
+            "dry-run: tray = {} (icono SNI pendiente; usa bongocatctl)",
+            if tray::wanted(loaded.config.enable_tray, args.no_tray) {
+                "activado"
+            } else {
+                "desactivado"
+            }
+        );
         return ExitCode::SUCCESS;
     }
 

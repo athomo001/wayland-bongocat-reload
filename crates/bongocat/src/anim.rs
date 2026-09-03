@@ -413,6 +413,31 @@ mod tests {
     }
 
     #[test]
+    fn golden_classic_de_disco_igual_al_embebido() {
+        // T-0006-M7-golden: `themes/classic/` son los 5 SVG del embebido ya
+        // recortados; rasterizarlos (sin `crop`) debe dar exactamente lo mismo
+        // que el embebido (con `crop`). Si divergen, `themes/classic` quedó
+        // desincronizado del arte embebido.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/classic");
+        let files = [
+            "both-up.svg",
+            "left-down.svg",
+            "right-down.svg",
+            "both-down.svg",
+            "sleeping.svg",
+        ];
+        let svgs: [Vec<u8>; 5] = std::array::from_fn(|i| {
+            std::fs::read(format!("{dir}/{}", files[i])).expect("SVG de themes/classic")
+        });
+        let disk = rasterize_from(&svgs, (500, 277), false, 40, false, false).unwrap();
+        let embedded = rasterize(40, false, false).unwrap();
+        assert_eq!((disk.w, disk.h), (embedded.w, embedded.h));
+        for i in 0..5 {
+            assert_eq!(disk.frame(i), embedded.frame(i), "fotograma {i} difiere");
+        }
+    }
+
+    #[test]
     fn snapshot_rasterizado_classic() {
         // T-0010-M4: fija el resultado de rasterizar los 5 SVG a la altura por
         // defecto (`cat_height=40`). Si `resvg`/`usvg` cambian el render, este

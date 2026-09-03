@@ -142,6 +142,10 @@ pub struct Config {
     pub enable_debug: bool,
     /// Socket de control IPC (spec 0003). Por defecto activo; `0` lo desactiva.
     pub enable_ipc: bool,
+    /// Icono de bandeja (spec 0011). Por defecto activo; `--no-tray` lo fuerza a
+    /// 0 para esa ejecución. (El frontend SNI es una rebanada pendiente; hoy
+    /// solo se parsea y se refleja en `--dry-run`.)
+    pub enable_tray: bool,
 }
 
 impl Default for Config {
@@ -185,6 +189,7 @@ impl Default for Config {
             disable_fullscreen_hide: false,
             enable_debug: false,
             enable_ipc: true,
+            enable_tray: true,
         }
     }
 }
@@ -333,6 +338,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "enable_hand_mapping" => c.enable_hand_mapping = boolean()?,
         "enable_debug" => c.enable_debug = boolean()?,
         "enable_ipc" => c.enable_ipc = boolean()?,
+        "enable_tray" => c.enable_tray = boolean()?,
         "enable_scheduled_sleep" => c.enable_scheduled_sleep = boolean()?,
         "disable_fullscreen_hide" => c.disable_fullscreen_hide = boolean()?,
 
@@ -603,6 +609,7 @@ impl Config {
         w("disable_fullscreen_hide", &b(self.disable_fullscreen_hide));
         w("enable_debug", &b(self.enable_debug));
         w("enable_ipc", &b(self.enable_ipc));
+        w("enable_tray", &b(self.enable_tray));
         for dev in &self.keyboard_devices {
             w("keyboard_device", dev);
         }
