@@ -247,7 +247,14 @@ impl SheetAnim {
 
     /// Estado de bucle deseado según las entradas (sin contar one-shots).
     #[must_use]
-    fn desired_loop(&self, sleeping: bool, left: bool, right: bool, happy: bool) -> StateId {
+    fn desired_loop(
+        &self,
+        sleeping: bool,
+        left: bool,
+        right: bool,
+        happy: bool,
+        boring: bool,
+    ) -> StateId {
         if sleeping {
             return StateId::Sleep;
         }
@@ -264,6 +271,11 @@ impl SheetAnim {
                 InputModel::Hands => StateId::ActiveRight,
                 InputModel::Activity => StateId::Writing,
             };
+        }
+        // Inactividad prolongada antes del sueño (spec §5.2): `boring` si el
+        // tema lo trae, si no `idle` (la cadena de reserva lo resuelve igual).
+        if boring && self.cache.contains_key(&StateId::Boring) {
+            return StateId::Boring;
         }
         StateId::Idle
     }
@@ -310,6 +322,7 @@ impl SheetAnim {
         left: bool,
         right: bool,
         happy: bool,
+        boring: bool,
     ) -> bool {
         let before = (self.state, self.frame);
 
@@ -324,7 +337,7 @@ impl SheetAnim {
             return before != (self.state, self.frame);
         }
 
-        let want = self.desired_loop(sleeping, left, right, happy);
+        let want = self.desired_loop(sleeping, left, right, happy, boring);
         if want != self.state && self.resolve(want) != self.state {
             // Cambio de estado de bucle: intenta un puente one-shot.
             let bridge = if self.state == StateId::Sleep {
@@ -398,11 +411,11 @@ state_start_writing_frames = 1
         );
         assert_eq!(a.current(), &[0]);
         // idle a 10 fps -> 100 ms/frame. Antes de 100 ms no cambia.
-        assert!(!a.tick(advance(t0, 50), false, false, false, false));
+        assert!(!a.tick(advance(t0, 50), false, false, false, false, false));
         assert_eq!(a.current(), &[0]);
-        assert!(a.tick(advance(t0, 120), false, false, false, false));
+        assert!(a.tick(advance(t0, 120), false, false, false, false, false));
         assert_eq!(a.current(), &[1]);
-        assert!(a.tick(advance(t0, 240), false, false, false, false));
+        assert!(a.tick(advance(t0, 240), false, false, false, false, false));
         assert_eq!(a.current(), &[0], "wrap");
     }
 
@@ -420,16 +433,16 @@ state_start_writing_frames = 1
             t0,
         );
         // Actividad: entra en el puente start_writing.
-        a.tick(advance(t0, 10), false, true, false, false);
+        a.tick(advance(t0, 10), false, true, false, false, false);
         assert_eq!(a.debug_pos().0, "start_writing");
         assert_eq!(a.current(), &[5]);
         // start_writing tiene 1 frame -> al siguiente tick con tiempo, termina y
         // salta a writing.
-        a.tick(advance(t0, 200), false, true, false, false);
+        a.tick(advance(t0, 200), false, true, false, false, false);
         assert_eq!(a.debug_pos().0, "writing");
         assert_eq!(a.current(), &[10]);
         // writing a 20 fps -> 50 ms/frame; hace bucle.
-        a.tick(advance(t0, 260), false, true, false, false);
+        a.tick(advance(t0, 260), false, true, false, false, false);
         assert_eq!(a.current(), &[11]);
     }
 
@@ -442,7 +455,7 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false);
+        a.tick(advance(t0, 10), false, true, false, false, false);
         assert_eq!(
             a.debug_pos().0,
             "writing",
@@ -460,7 +473,7 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), true, true, true, false);
+        a.tick(advance(t0, 10), true, true, true, false, false);
         assert_eq!(a.debug_pos().0, "idle", "Sleep ausente -> idle");
     }
 
@@ -477,7 +490,7 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false);
+        a.tick(advance(t0, 10), false, true, false, false, false);
         assert_eq!(
             a.debug_pos().0,
             "writing",
@@ -495,9 +508,9 @@ state_start_writing_frames = 1
             t0,
         );
         // Llévalo a writing, frame 2.
-        a.tick(advance(t0, 10), false, true, false, false);
-        a.tick(advance(t0, 60), false, true, false, false);
-        a.tick(advance(t0, 120), false, true, false, false);
+        a.tick(advance(t0, 10), false, true, false, false, false);
+        a.tick(advance(t0, 60), false, true, false, false, false);
+        a.tick(advance(t0, 120), false, true, false, false, false);
         assert_eq!(a.debug_pos(), ("writing", 2));
 
         // Simula el re-rasterizado: caché nueva (writing ahora con 2 frames).
@@ -527,9 +540,9 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false);
+        a.tick(advance(t0, 10), false, true, false, false, false);
         assert_eq!(a.current(), &[20], "hands: pata izq -> active_left");
-        a.tick(advance(t0, 20), false, true, true, false);
+        a.tick(advance(t0, 20), false, true, true, false, false);
         assert_eq!(a.current(), &[22], "ambas -> active_both");
     }
 
@@ -543,14 +556,14 @@ state_start_writing_frames = 1
             t0,
         );
         // Tecleando (pata izq) pero con `happy` -> gana `happy`.
-        a.tick(advance(t0, 10), false, true, false, true);
+        a.tick(advance(t0, 10), false, true, false, true, false);
         assert_eq!(
             a.debug_pos().0,
             "happy",
             "KPM alto -> happy aunque se teclee"
         );
         // Sin `happy`, el mismo tecleo -> writing.
-        a.tick(advance(t0, 20), false, true, false, false);
+        a.tick(advance(t0, 20), false, true, false, false, false);
         assert_eq!(a.debug_pos().0, "writing");
     }
 
@@ -560,11 +573,35 @@ state_start_writing_frames = 1
         let sheet = parse_sheet_ini(INI); // sin `happy`
         let mut a =
             SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10, 11])]), &sheet, t0);
-        a.tick(advance(t0, 10), false, false, false, true);
+        a.tick(advance(t0, 10), false, false, false, true, false);
         assert_eq!(
             a.debug_pos().0,
             "idle",
             "sin estado happy, `happy=true` no hace nada"
         );
+    }
+
+    #[test]
+    fn boring_entra_por_inactividad_si_el_tema_lo_trae() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        let mut a = SheetAnim::from_cache(
+            cache(&[("idle", &[0]), ("writing", &[10]), ("boring", &[7, 8])]),
+            &sheet,
+            t0,
+        );
+        // Sin actividad y sin `boring` → idle.
+        a.tick(advance(t0, 10), false, false, false, false, false);
+        assert_eq!(a.debug_pos().0, "idle");
+        // `boring` activo → boring; el tecleo lo saca.
+        a.tick(advance(t0, 20), false, false, false, false, true);
+        assert_eq!(a.debug_pos().0, "boring");
+        a.tick(advance(t0, 30), false, true, false, false, true);
+        assert_eq!(a.debug_pos().0, "writing", "el tecleo manda sobre boring");
+
+        // Un tema sin estado `boring`: `boring=true` no cambia nada (idle).
+        let mut b = SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10])]), &sheet, t0);
+        b.tick(advance(t0, 10), false, false, false, false, true);
+        assert_eq!(b.debug_pos().0, "idle");
     }
 }

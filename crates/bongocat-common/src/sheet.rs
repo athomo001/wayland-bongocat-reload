@@ -202,6 +202,14 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
         }
     }
 
+    // `state_<n>_fps` declarado sin `_row`/`_frames`: se usa abajo para el
+    // estado "solo hoja" (un APNG lleva su propio nº de frames, pero el ritmo
+    // sí puede fijarse).
+    let solo_hoja_fps: BTreeMap<String, u32> = per_state
+        .iter()
+        .filter_map(|(n, a)| a.fps.filter(|&f| f > 0).map(|f| (n.clone(), f)))
+        .collect();
+
     for (name, acc) in per_state {
         // Un estado de **rejilla** necesita fila y nº de frames para ser
         // utilizable; sin ellos se deja para la ronda de "solo hoja" de abajo.
@@ -230,11 +238,12 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
         .cloned()
         .collect();
     for name in solo_hoja {
+        let fps = solo_hoja_fps.get(&name).copied().unwrap_or(t.default_fps);
         t.states.push(SheetState {
             name,
             row: 0,
             frames: 0,
-            fps: t.default_fps,
+            fps,
             col_start: 0,
         });
     }
@@ -601,6 +610,13 @@ state_writing_col = 2
         assert_eq!(t.sheet_for("writing"), Some("w.apng"));
         // idle sigue siendo un estado de rejilla normal.
         assert_eq!(t.state("idle").unwrap().frames, 2);
+
+        // `state_<n>_fps` sí se respeta aunque no haya row/frames (APNG).
+        let t2 = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\ndefault_fps=9\n\
+             sheet_writing = w.apng\nstate_writing_fps = 24\n",
+        );
+        assert_eq!(t2.state("writing").unwrap().fps, 24, "fps propio del APNG");
     }
 
     #[test]

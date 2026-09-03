@@ -768,9 +768,13 @@ impl State {
     fn tick(&mut self) {
         self.apply_pending_hidden();
         let now = Instant::now();
+        let idle_secs = now.duration_since(self.last_activity).as_secs();
         let idle_sleep = self.config.idle_sleep_timeout_sec > 0
-            && now.duration_since(self.last_activity).as_secs()
-                >= self.config.idle_sleep_timeout_sec as u64;
+            && idle_secs >= self.config.idle_sleep_timeout_sec as u64;
+        // `boring` (spec 0014 §5.2): inactividad prolongada **antes** del sueño,
+        // a mitad del `idle_sleep_timeout`. Sin ese timeout no hay `boring`.
+        let boring = self.config.idle_sleep_timeout_sec > 0
+            && idle_secs >= (self.config.idle_sleep_timeout_sec as u64 / 2).max(1);
 
         // Reposo por horario: si `enable_scheduled_sleep` y la hora local cae en
         // la franja `[sleep_begin, sleep_end)`. Porta `anim_is_sleep_time`.
@@ -805,7 +809,7 @@ impl State {
                 // si no, `SheetAnim` cae a su reserva.
                 let happy = self.config.happy_kpm > 0
                     && self.kpm.per_minute(now) >= self.config.happy_kpm as usize;
-                sa.tick(now, sleeping, left, right, happy)
+                sa.tick(now, sleeping, left, right, happy, boring && !sleeping)
             }
         };
 
