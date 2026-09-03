@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::time::Instant;
 
-use bongocat_common::sheet::{self, SheetTheme};
+use bongocat_common::sheet::{self, Anchor, SheetTheme};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
 
@@ -53,6 +53,9 @@ pub struct Frames {
     /// Relación de aspecto del tema activo (`(w, h)`); el blit y el hit-test del
     /// modo edición la usan como única fuente.
     pub aspect: (u32, u32),
+    /// Anclaje vertical en la barra: `Center` (`classic` / SVG) o `Baseline`
+    /// (sprite sheets, spec 0014 §5.7).
+    pub anchor: Anchor,
     pub kind: FramesKind,
 }
 
@@ -181,6 +184,7 @@ pub fn rasterize_from<S: AsRef<[u8]>>(
         w,
         h,
         aspect: (aw, ah),
+        anchor: Anchor::Center, // `classic` y temas SVG: centrado, como siempre
         kind: FramesKind::Classic(Box::new(frames)),
     })
 }
@@ -290,6 +294,7 @@ pub fn rasterize_sheet(
         w,
         h,
         aspect: (fw, fh),
+        anchor: sheet.anchor,
         kind: FramesKind::Sheet(anim),
     })
 }

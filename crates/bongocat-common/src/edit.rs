@@ -7,6 +7,7 @@
 //! aquí sin saber nada de HiDPI.
 
 use crate::config::{Align, Config};
+use crate::sheet::Anchor;
 
 /// Relación de aspecto de referencia del `classic` (`(w, h)`).
 pub const DEFAULT_ASPECT: (i32, i32) = (500, 277);
@@ -22,14 +23,31 @@ pub fn cat_width_for_height(h: i32, aspect: (i32, i32)) -> i32 {
     (h.max(1) * aw / ah).max(1)
 }
 
-/// Rectángulo `(x, y, w, h)` del gato dentro de una barra de `bar_w`×`bar_h`,
-/// en píxeles lógicos, para la relación de aspecto del tema activo. Reproduce el
-/// posicionamiento de `draw_bar` / `cat_origin`.
+/// Y del gato dentro de la barra según el anclaje: `Center` = centrado vertical
+/// (por defecto del `classic` y los temas SVG); `Baseline` = apoyado en el borde
+/// inferior (por defecto de los sprite sheets, spec 0014 §5.7).
 #[must_use]
-pub fn cat_rect(cfg: &Config, bar_w: i32, bar_h: i32, aspect: (i32, i32)) -> (i32, i32, i32, i32) {
+fn anchor_y(bar_h: i32, cat_h: i32, anchor: Anchor) -> i32 {
+    match anchor {
+        Anchor::Center => (bar_h - cat_h) / 2,
+        Anchor::Baseline => bar_h - cat_h,
+    }
+}
+
+/// Rectángulo `(x, y, w, h)` del gato dentro de una barra de `bar_w`×`bar_h`,
+/// en píxeles lógicos, para la relación de aspecto y el anclaje del tema activo.
+/// Reproduce el posicionamiento de `draw_bar` / `cat_origin`.
+#[must_use]
+pub fn cat_rect(
+    cfg: &Config,
+    bar_w: i32,
+    bar_h: i32,
+    aspect: (i32, i32),
+    anchor: Anchor,
+) -> (i32, i32, i32, i32) {
     let ch = cfg.cat_height.clamp(MIN_CAT_HEIGHT, MAX_CAT_HEIGHT);
     let cw = cat_width_for_height(ch, aspect);
-    let y = (bar_h - ch) / 2 + cfg.cat_y_offset;
+    let y = anchor_y(bar_h, ch, anchor) + cfg.cat_y_offset;
     let x = match cfg.cat_align {
         Align::Left => cfg.cat_x_offset,
         Align::Center => (bar_w - cw) / 2 + cfg.cat_x_offset,
@@ -56,10 +74,11 @@ pub fn origin_to_x_offset(align: Align, origin_x: i32, bar_w: i32, cat_w: i32) -
     }
 }
 
-/// Ídem para el eje Y (siempre centrado + offset).
+/// Ídem para el eje Y: dado el origen Y deseado (borde superior del gato),
+/// devuelve el `cat_y_offset` que lo produce con ese anclaje.
 #[must_use]
-pub fn origin_to_y_offset(origin_y: i32, bar_h: i32, cat_h: i32) -> i32 {
-    origin_y - (bar_h - cat_h) / 2
+pub fn origin_to_y_offset(origin_y: i32, bar_h: i32, cat_h: i32, anchor: Anchor) -> i32 {
+    origin_y - anchor_y(bar_h, cat_h, anchor)
 }
 
 /// Recorta el **origen** `(ox, oy)` para que el **centro** del gato no salga de
@@ -113,17 +132,32 @@ mod tests {
     #[test]
     fn ida_y_vuelta_origen_offset_por_alineacion() {
         let (bar_w, bar_h) = (1920, 120);
-        for align in [Align::Left, Align::Center, Align::Right] {
-            let c = cfg(align, 37, -11, 90);
-            let (x, y, w, h) = cat_rect(&c, bar_w, bar_h, DEFAULT_ASPECT);
-            // origen -> offset -> debería reproducir los offsets originales.
-            assert_eq!(
-                origin_to_x_offset(align, x, bar_w, w),
-                c.cat_x_offset,
-                "{align:?}"
-            );
-            assert_eq!(origin_to_y_offset(y, bar_h, h), c.cat_y_offset, "{align:?}");
+        for anchor in [Anchor::Center, Anchor::Baseline] {
+            for align in [Align::Left, Align::Center, Align::Right] {
+                let c = cfg(align, 37, -11, 90);
+                let (x, y, w, h) = cat_rect(&c, bar_w, bar_h, DEFAULT_ASPECT, anchor);
+                // origen -> offset -> debería reproducir los offsets originales.
+                assert_eq!(
+                    origin_to_x_offset(align, x, bar_w, w),
+                    c.cat_x_offset,
+                    "{align:?}"
+                );
+                assert_eq!(
+                    origin_to_y_offset(y, bar_h, h, anchor),
+                    c.cat_y_offset,
+                    "{align:?}/{anchor:?}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn anchor_baseline_pega_el_gato_al_borde_inferior() {
+        let c = cfg(Align::Center, 0, 0, 80);
+        let (_, y_c, _, h) = cat_rect(&c, 1920, 120, (1, 1), Anchor::Center);
+        let (_, y_b, _, _) = cat_rect(&c, 1920, 120, (1, 1), Anchor::Baseline);
+        assert_eq!(y_c, (120 - h) / 2, "center: centrado");
+        assert_eq!(y_b, 120 - h, "baseline: borde inferior");
     }
 
     #[test]
@@ -141,8 +175,8 @@ mod tests {
         // ancho puede caer **fuera** del estrecho.
         let (bw, bh) = (1920, 120);
         let c = cfg(Align::Center, 0, 0, 80);
-        let wide = cat_rect(&c, bw, bh, (2, 1));
-        let narrow = cat_rect(&c, bw, bh, (1, 1));
+        let wide = cat_rect(&c, bw, bh, (2, 1), Anchor::Center);
+        let narrow = cat_rect(&c, bw, bh, (1, 1), Anchor::Center);
         assert_eq!(wide.3, narrow.3, "misma altura");
         assert_eq!(wide.2, 2 * narrow.2, "doble ancho");
         // Punto a 60 px a la derecha del centro de la barra: dentro del ancho,

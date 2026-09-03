@@ -637,7 +637,12 @@ impl State {
         let (cw, ch) = (self.frames.w as i32, self.frames.h as i32);
         let xoff = scale_offset_120(self.config.cat_x_offset, s);
         let yoff = scale_offset_120(self.config.cat_y_offset, s);
-        let y = (phys_h - ch) / 2 + yoff;
+        // Anclaje vertical: `Center` (clásico) centra; `Baseline` (sprite sheets)
+        // apoya el frame en el borde inferior de la barra.
+        let y = match self.frames.anchor {
+            bongocat_common::sheet::Anchor::Center => (phys_h - ch) / 2,
+            bongocat_common::sheet::Anchor::Baseline => phys_h - ch,
+        } + yoff;
         let x = match self.config.cat_align {
             Align::Center => (phys_w - cw) / 2 + xoff,
             Align::Left => xoff,
@@ -649,6 +654,11 @@ impl State {
     /// Relación de aspecto del tema activo, en `i32` (para `edit::cat_rect`).
     fn cat_aspect(&self) -> (i32, i32) {
         (self.frames.aspect.0 as i32, self.frames.aspect.1 as i32)
+    }
+
+    /// Anclaje vertical del tema activo (para `edit::cat_rect` / `origin_to_y_offset`).
+    fn cat_anchor(&self) -> bongocat_common::sheet::Anchor {
+        self.frames.anchor
     }
 
     /// Cambia el tema en caliente (IPC `THEME`). `spec` vacío / `embedded` /
@@ -947,6 +957,7 @@ impl State {
                 self.width as i32,
                 self.height as i32,
                 self.cat_aspect(),
+                self.cat_anchor(),
             );
             eprintln!(
                 "bongocat: modo edición {} — región del gato = {:?}",
@@ -960,7 +971,13 @@ impl State {
     /// Botón izquierdo dentro del gato: empezar a arrastrar.
     fn edit_press(&mut self, px: f64, py: f64) {
         let (bw, bh) = (self.width as i32, self.height as i32);
-        let rect = bongocat_common::edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
+        let rect = bongocat_common::edit::cat_rect(
+            &self.config,
+            bw,
+            bh,
+            self.cat_aspect(),
+            self.cat_anchor(),
+        );
         let inside = bongocat_common::edit::hit(rect, px as i32, py as i32);
         if inside {
             self.edit.dragging = true;
@@ -975,12 +992,13 @@ impl State {
         use bongocat_common::edit;
         self.edit.ptr = (px, py);
         let (bw, bh) = (self.width as i32, self.height as i32);
-        let (_, _, cw, ch) = edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
+        let (_, _, cw, ch) =
+            edit::cat_rect(&self.config, bw, bh, self.cat_aspect(), self.cat_anchor());
         let ox = (px - self.edit.grab_dx).round() as i32;
         let oy = (py - self.edit.grab_dy).round() as i32;
         let (ox, oy) = edit::clamp_origin(ox, oy, bw, bh, cw, ch);
         self.config.cat_x_offset = edit::origin_to_x_offset(self.config.cat_align, ox, bw, cw);
-        self.config.cat_y_offset = edit::origin_to_y_offset(oy, bh, ch);
+        self.config.cat_y_offset = edit::origin_to_y_offset(oy, bh, ch, self.cat_anchor());
         self.draw();
     }
 
@@ -995,8 +1013,13 @@ impl State {
         self.rerasterize();
         if self.edit.dragging {
             let (bw, bh) = (self.width as i32, self.height as i32);
-            let (rx, ry, ..) =
-                bongocat_common::edit::cat_rect(&self.config, bw, bh, self.cat_aspect());
+            let (rx, ry, ..) = bongocat_common::edit::cat_rect(
+                &self.config,
+                bw,
+                bh,
+                self.cat_aspect(),
+                self.cat_anchor(),
+            );
             self.edit.grab_dx = self.edit.ptr.0 - f64::from(rx);
             self.edit.grab_dy = self.edit.ptr.1 - f64::from(ry);
         }
