@@ -1097,6 +1097,143 @@ custom_working_frames = 3
     }
 
     #[test]
+    fn corpus_de_conformidad() {
+        // T-0014-conformidad (versión de juguete, spec §5.6): un abanico de
+        // mascotas estilo wayland-vpets con todas las variantes que el
+        // importador debe **tolerar sin fallar**; cada una se importa y pasa
+        // `theme check`. Cero arte de terceros: PNGs de color plano.
+        let root = scratch("corpus");
+        let grid = |cols: u32, rows: u32| toy_png(cols * 16, rows * 16);
+
+        /// Una mascota de juguete del corpus.
+        struct Pet {
+            name: &'static str,
+            files: Vec<(&'static str, Vec<u8>)>,
+            state: Option<&'static str>,
+            /// El origen que se le pasa al importador es el 1er fichero, no la carpeta.
+            source_is_file: bool,
+        }
+        let p = |name, files, state, source_is_file| Pet {
+            name,
+            files,
+            state,
+            source_is_file,
+        };
+
+        let pets: Vec<Pet> = vec![
+            p(
+                "hoja-unica",
+                vec![
+                    ("bongocat.conf", b"animation_name=custom\ncustom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\nfps=12\ncustom_idle_row=1\ncustom_idle_frames=2\ncustom_writing_row=2\ncustom_writing_frames=3\ncustom_sleep_row=3\ncustom_sleep_frames=2\n".to_vec()),
+                    ("s.png", grid(3, 3)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "row-base-0",
+                vec![
+                    ("bongocat.conf", b"custom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\nrow_base=0\ncustom_idle_row=0\ncustom_idle_frames=1\ncustom_writing_row=1\ncustom_writing_frames=2\n".to_vec()),
+                    ("s.png", grid(2, 2)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "animation-speed",
+                vec![
+                    ("pet.conf", b"custom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\nanimation_speed=8\ncustom_idle_row=1\ncustom_idle_frames=2\n".to_vec()),
+                    ("s.png", grid(2, 1)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "solo-idle-faltan-reserva",
+                vec![
+                    ("bongocat.conf", b"custom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\ncustom_idle_row=1\ncustom_idle_frames=1\n".to_vec()),
+                    ("s.png", grid(1, 1)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "con-manos",
+                vec![
+                    ("bongocat.conf", b"custom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\ncustom_idle_row=1\ncustom_idle_frames=1\ncustom_left_down_row=2\ncustom_left_down_frames=1\ncustom_right_down_row=3\ncustom_right_down_frames=1\n".to_vec()),
+                    ("s.png", grid(1, 3)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "working-moving-ignorados",
+                vec![
+                    ("bongocat.conf", b"custom_sprite_sheet_filename=s.png\ncustom_frame_width=16\ncustom_frame_height=16\ncustom_idle_row=1\ncustom_idle_frames=1\ncustom_writing_row=2\ncustom_writing_frames=1\ncustom_working_row=3\ncustom_working_frames=2\ncustom_moving_row=4\ncustom_moving_frames=2\n".to_vec()),
+                    ("s.png", grid(2, 4)),
+                ],
+                None,
+                false,
+            ),
+            p(
+                "pngs-sueltos",
+                vec![
+                    ("idle_0.png", toy_png(16, 16)),
+                    ("idle_1.png", toy_png(16, 16)),
+                    ("writing_0.png", toy_png(16, 16)),
+                ],
+                None,
+                false,
+            ),
+            p("apng-un-estado", vec![("anim.apng", toy_apng(16, 16, 3))], Some("writing"), true),
+            p(
+                "frame-derivado-del-tamano",
+                vec![
+                    ("bongocat.conf", b"custom_sprite_sheet_filename=s.png\ncustom_idle_row=1\ncustom_idle_frames=2\ncustom_writing_row=2\ncustom_writing_frames=2\n".to_vec()),
+                    ("s.png", grid(2, 2)),
+                ],
+                None,
+                false,
+            ),
+        ];
+
+        for Pet {
+            name,
+            files,
+            state,
+            source_is_file,
+        } in pets
+        {
+            let pet = root.join(name);
+            std::fs::create_dir_all(&pet).unwrap();
+            for (f, bytes) in &files {
+                std::fs::write(pet.join(f), bytes).unwrap();
+            }
+            let source = if source_is_file {
+                pet.join(files[0].0)
+            } else {
+                pet.clone()
+            };
+            let out = root.join(format!("{name}-out"));
+            let args = ImportArgs {
+                source: source.to_str().unwrap(),
+                name: Some(name),
+                out_dir: Some(out.clone()),
+                dry_run: false,
+                frame_w: None,
+                frame_h: None,
+                state,
+            };
+            run(&args).unwrap_or_else(|e| panic!("mascota '{name}': el import falló: {e}"));
+            assert!(
+                crate::theme::check(&out.to_string_lossy()),
+                "mascota '{name}': no pasa `theme check`"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn gif_da_error_claro() {
         let dir = scratch("gif");
         let file = dir.join("x.gif");

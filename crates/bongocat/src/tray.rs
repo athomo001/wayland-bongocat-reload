@@ -4,10 +4,12 @@
 //! decisión de si arrancar el tray ([`wanted`]).
 //!
 //! El *frontend* StatusNotifierItem (hilo `ksni` ↔ bucle del supervisor por un
-//! `calloop::channel`) es una rebanada aparte, a la espera de decidir la
-//! dependencia D-Bus (`ksni 0.2` con `libdbus` del sistema vs `ksni 0.3` con
-//! `async-io` y MSRV 1.80). Sin ese frontend el usuario ya maneja todo por
-//! `bongocatctl` (`show`/`hide`/`toggle`/`reload`/`restart`/`stop`).
+//! `calloop::channel`) está **aplazado** (decisión 2026-09: opción (c)): tanto
+//! `ksni 0.2` (necesita `libdbus-1-dev` del sistema) como `ksni 0.3` (arrastra
+//! `async-io` y sube el MSRV a 1.80) tienen un coste que no compensa ahora. El
+//! usuario ya maneja todo por `bongocatctl` (`show`/`hide`/`toggle`/`reload`/
+//! `restart`/`stop`), atable a atajos del compositor. Este núcleo queda listo
+//! para cuando se retome el icono.
 #![allow(dead_code)] // el consumidor (frontend SNI) es una rebanada futura
 
 /// ¿Hay que arrancar el tray? `enable_tray` de la config, salvo `--no-tray`.
