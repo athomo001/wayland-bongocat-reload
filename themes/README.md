@@ -61,15 +61,37 @@ carga igual con metadatos vacíos y `theme_format = 1`.
 Copia `classic/` (la plantilla de referencia) y edita los SVG con Inkscape o Boxy
 SVG. Ejemplo ya incluido: `pink/` = `classic` recoloreado.
 
-## `theme_format = 3` — sprite sheet (mascotas animadas, en curso)
+## `theme_format = 3` — sprite sheet (mascotas animadas)
 
 Formato de rejilla estilo [wayland-vpets](https://github.com/furudbat/wayland-vpets)
-(spec `specs/0014-*`): un PNG con las poses en filas (`state_<estado>_row` /
-`_frames`), `frame_w` × `frame_h` por celda, escalado nearest-neighbor a escala
-entera. Ejemplo mínimo: `demo/` (`sheet.png` es arte propio CC0, regenerable con
-`cargo run -p bongocat --example gen_demo_sheet`). **M1**: solo carga y muestra el
-primer fotograma de `idle` / `writing` / `sleep`; la animación completa y el
-importador de mascotas llegan en hitos siguientes.
+(spec `specs/0014-*`): un PNG (o **APNG**) con las poses en filas
+(`state_<estado>_row` / `_frames` / `_fps` / `_col`), `frame_w` × `frame_h` por
+celda, escalado nearest-neighbor a escala entera (`scale_filter = linear` para
+arte no pixel-art). Estados animados con máquina de estados completa
+(`idle` / `writing` / `sleep` / `happy` / `boring` + one-shots
+`start_writing` / `end_writing` / `wake_up`) y modelo `hands` (poses
+izquierda/derecha, autodetectado) vs `activity` (cualquier tecla → `writing`).
+
+- Una hoja global (`sheet = x.png`) y/o una por estado (`sheet_writing = w.apng`).
+- `happy_kpm` en el `bongocat.conf` activa el estado `happy` al superar N
+  teclas/minuto (si el tema lo trae).
+- `anchor = baseline` (default) | `center` (mascotas voladoras).
+
+Ejemplo: `demo/` (`sheet.png` + `writing.apng`, arte propio CC0, regenerable con
+`cargo run -p bongocat --example gen_demo_sheet`).
+
+### Importar una mascota de wayland-vpets
+
+```
+bongocat theme import-vpets <ORIGEN> [--name N] [--dry-run]
+```
+
+`<ORIGEN>` puede ser una carpeta de mascota (`.conf` + hoja), un `.conf` suelto,
+una hoja PNG (`--frame-w`/`--frame-h`), una carpeta de PNGs `<estado>_<n>.png`, o
+un APNG (`--state`). Traduce las claves `custom_*`, escribe el tema en
+`~/.local/share/bongocat/themes/<N>/` y lo valida con `theme check`. Nunca falla
+por un estado ausente: usa su reserva y lo informa. Ver
+[`COMUNIDAD.md`](COMUNIDAD.md) para packs y **licencias**.
 
 Si algo falla al cargar (falta un SVG, no parsea, formato futuro…), bongocat
 **avisa y sigue con el gato embebido** — nunca se queda sin gato.
