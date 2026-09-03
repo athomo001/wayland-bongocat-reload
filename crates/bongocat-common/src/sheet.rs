@@ -4,6 +4,8 @@
 //! búfer RGBA/BGRA ya decodificado, y escalado **nearest-neighbor a escala
 //! entera** (pixel-art). La decodificación PNG/APNG/GIF vive en el binario.
 
+use std::collections::BTreeMap;
+
 use crate::config::split_line;
 
 /// Filtro de escalado de un tema de rejilla.
@@ -60,8 +62,12 @@ pub struct SheetTheme {
     pub default_fps: u32,
     pub input_model: InputModel,
     pub anchor: Anchor,
-    /// Nombre de la hoja única (`sheet =`), si no hay una por estado.
+    /// Nombre de la hoja única (`sheet =` / `custom_sprite_sheet_filename =`).
+    /// Es el respaldo para cualquier estado sin hoja propia.
     pub sheet: Option<String>,
+    /// Hojas por estado (`sheet_<estado> =`): nombre de estado → fichero. Tienen
+    /// prioridad sobre `sheet`.
+    pub sheets_per_state: BTreeMap<String, String>,
     pub states: Vec<SheetState>,
 }
 
@@ -75,6 +81,7 @@ impl Default for SheetTheme {
             input_model: InputModel::Activity, // los packs de vpets suelen no tener manos
             anchor: Anchor::Baseline,
             sheet: None,
+            sheets_per_state: BTreeMap::new(),
             states: Vec::new(),
         }
     }
@@ -85,6 +92,31 @@ impl SheetTheme {
     #[must_use]
     pub fn state(&self, name: &str) -> Option<&SheetState> {
         self.states.iter().find(|s| s.name == name)
+    }
+
+    /// Fichero de hoja del que sale el estado `name`: su `sheet_<estado> =` si lo
+    /// tiene, si no la hoja global. `None` = no hay ninguna fuente para ese
+    /// estado (tema mal formado).
+    #[must_use]
+    pub fn sheet_for(&self, name: &str) -> Option<&str> {
+        self.sheets_per_state
+            .get(name)
+            .or(self.sheet.as_ref())
+            .map(String::as_str)
+    }
+
+    /// Todos los ficheros de hoja que el tema referencia (global + por estado),
+    /// sin repetidos.
+    #[must_use]
+    pub fn sheet_files(&self) -> std::collections::BTreeSet<&str> {
+        let mut set = std::collections::BTreeSet::new();
+        if let Some(g) = &self.sheet {
+            set.insert(g.as_str());
+        }
+        for f in self.sheets_per_state.values() {
+            set.insert(f.as_str());
+        }
+        set
     }
 }
 
@@ -102,11 +134,9 @@ struct StateAccum {
 /// de que hay algo usable la hace el llamante).
 #[must_use]
 pub fn parse_sheet_ini(text: &str) -> SheetTheme {
-    use std::collections::BTreeMap;
     let mut t = SheetTheme::default();
     let mut per_state: BTreeMap<String, StateAccum> = BTreeMap::new();
     let mut row_base: u32 = 1;
-    let mut sheets_per_state: BTreeMap<String, String> = BTreeMap::new();
 
     for raw in text.lines() {
         let s = raw.trim_start_matches([' ', '\t']);
@@ -148,7 +178,7 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
             _ => {
                 // state_<n>_row / _frames / _fps / _col_start ; sheet_<n>
                 if let Some(rest) = k.strip_prefix("sheet_") {
-                    sheets_per_state.insert(rest.to_string(), v);
+                    t.sheets_per_state.insert(rest.to_string(), v);
                 } else if let Some(rest) = k.strip_prefix("state_") {
                     let (name, field) = match rest.rsplit_once('_') {
                         Some(x) => x,
@@ -184,9 +214,6 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
             col_start: acc.col_start.unwrap_or(row_base).saturating_sub(row_base),
         });
     }
-    // `sheet_<estado>` no se guarda aquí (el llamante lo lee por estado); dejamos
-    // `sheet` a None si no había una global.
-    let _ = sheets_per_state;
     t
 }
 
@@ -391,5 +418,43 @@ state_writing_col = 2
         );
         assert_eq!(pick_state(&t, &["writing"]).unwrap().name, "writing");
         assert!(pick_state(&t, &["nope", "nada"]).is_none());
+    }
+
+    #[test]
+    fn hojas_por_estado_tienen_prioridad_sobre_la_global() {
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\n\
+             sheet = base.png\n\
+             sheet_writing = escribe.png\n\
+             sheet_sleep = duerme.png\n\
+             state_idle_row=1\nstate_idle_frames=1\n\
+             state_writing_row=1\nstate_writing_frames=2\n\
+             state_sleep_row=1\nstate_sleep_frames=1\n",
+        );
+        assert_eq!(t.sheet.as_deref(), Some("base.png"));
+        assert_eq!(
+            t.sheet_for("idle"),
+            Some("base.png"),
+            "sin override -> global"
+        );
+        assert_eq!(t.sheet_for("writing"), Some("escribe.png"));
+        assert_eq!(t.sheet_for("sleep"), Some("duerme.png"));
+        assert_eq!(
+            t.sheet_files().into_iter().collect::<Vec<_>>(),
+            ["base.png", "duerme.png", "escribe.png"]
+        );
+    }
+
+    #[test]
+    fn sin_hoja_global_solo_los_estados_con_la_suya() {
+        let t = parse_sheet_ini(
+            "frame_w=8\nframe_h=8\n\
+             sheet_writing = w.png\n\
+             state_idle_row=1\nstate_idle_frames=1\n\
+             state_writing_row=1\nstate_writing_frames=1\n",
+        );
+        assert_eq!(t.sheet, None);
+        assert_eq!(t.sheet_for("writing"), Some("w.png"));
+        assert_eq!(t.sheet_for("idle"), None, "sin global ni propia -> None");
     }
 }

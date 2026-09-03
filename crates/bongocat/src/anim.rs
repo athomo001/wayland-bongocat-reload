@@ -6,10 +6,18 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::time::Instant;
 
 use bongocat_common::sheet::{self, SheetTheme};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
+
+use crate::png_decode::DecodedPng;
+use crate::sheet_anim::SheetAnim;
+
+/// Hojas de un tema de sprite sheet ya decodificadas a RGBA8 recto, indexadas
+/// por **nombre de fichero** (`sheet =` y cada `sheet_<estado> =`).
+pub type SheetImages = BTreeMap<String, DecodedPng>;
 
 /// Relación de aspecto de referencia del gato (`CAT_IMAGE_WIDTH/HEIGHT`).
 const REF_W: u64 = 500;
@@ -25,22 +33,50 @@ const SVGS: [&[u8]; 5] = [
     include_bytes!("../../../assets/new/bongo-sleeping.svg"),
 ];
 
-/// Los 5 fotogramas ya rasterizados a `w`x`h`, en BGRA premultiplicado
-/// (formato nativo de `WL_SHM_FORMAT_ARGB8888`).
+/// Fotogramas del gato ya rasterizados a `w`×`h` en BGRA premultiplicado
+/// (formato nativo de `WL_SHM_FORMAT_ARGB8888`). El `classic` (5 SVG) y un tema
+/// de sprite sheet (spec 0014) comparten `w`/`h`/`aspect`; se diferencian en
+/// cómo se elige el fotograma visible (`kind`).
 pub struct Frames {
     pub w: u32,
     pub h: u32,
     /// Relación de aspecto del tema activo (`(w, h)`); el blit y el hit-test del
     /// modo edición la usan como única fuente.
     pub aspect: (u32, u32),
-    frames: [Vec<u8>; 5],
+    pub kind: FramesKind,
+}
+
+/// Cómo se decide el fotograma a pintar.
+pub enum FramesKind {
+    /// `classic` / temas SVG: 5 fotogramas fijos; el índice 0–4 lo elige la
+    /// máquina "clásica" (`paw::frame_from_paw_state`).
+    Classic(Box<[Vec<u8>; 5]>),
+    /// Sprite sheet: caché por estado + cursor de la máquina de estados
+    /// (`sheet_anim::SheetAnim`).
+    Sheet(SheetAnim),
 }
 
 impl Frames {
-    /// Bytes BGRA del fotograma `i` (0–4).
+    /// Bytes BGRA del fotograma `i` (0–4) de un tema `Classic`. Solo lo usan los
+    /// tests del `classic`; el render usa [`Frames::current`].
+    #[cfg(test)]
     #[must_use]
     pub fn frame(&self, i: usize) -> &[u8] {
-        &self.frames[i.min(4)]
+        match &self.kind {
+            FramesKind::Classic(f) => &f[i.min(4)],
+            FramesKind::Sheet(_) => panic!("Frames::frame sobre un sprite sheet"),
+        }
+    }
+
+    /// Bytes BGRA a pintar ahora mismo. Para `Classic`, el fotograma `classic_idx`
+    /// (el que mantiene `State::frame`); para un sprite sheet, el que marque su
+    /// máquina de estados.
+    #[must_use]
+    pub fn current(&self, classic_idx: u8) -> &[u8] {
+        match &self.kind {
+            FramesKind::Classic(f) => &f[classic_idx.min(4) as usize],
+            FramesKind::Sheet(a) => a.current(),
+        }
     }
 }
 
@@ -135,25 +171,25 @@ pub fn rasterize_from<S: AsRef<[u8]>>(
         w,
         h,
         aspect: (aw, ah),
-        frames,
+        kind: FramesKind::Classic(Box::new(frames)),
     })
 }
 
 /// Caché de un tema de sprite sheet (`theme_format = 3`, spec 0014): por cada
-/// estado, sus frames ya recortados de la hoja, escalados a escala **entera**
-/// nearest-neighbor (pixel-art nítido), convertidos a **BGRA premultiplicado** y
-/// con el espejo H/V aplicado. Clave = nombre del estado (`idle`, `writing`, …).
+/// estado, sus frames ya recortados de **su** hoja (`sheet_<estado> =`, o la
+/// global), escalados a escala **entera** nearest-neighbor (pixel-art nítido),
+/// convertidos a **BGRA premultiplicado** y con el espejo H/V aplicado. Clave =
+/// nombre del estado (`idle`, `writing`, …).
 ///
-/// `png_rgba` es la hoja decodificada a RGBA8 recto (`png_w`×`png_h`).
-/// `cat_height` es la altura objetivo en píxeles; el factor entero real puede
-/// quedar por debajo si `frame_h` no la divide (el `classic` SVG no tiene esta
-/// limitación; es el precio del pixel-art).
+/// `images` son las hojas decodificadas a RGBA8 recto, por nombre de fichero.
+/// Un estado sin fuente (ni propia ni global) se omite. `cat_height` es la
+/// altura objetivo; el factor entero real puede quedar por debajo si `frame_h`
+/// no la divide (el `classic` SVG no tiene esta limitación; es el precio del
+/// pixel-art).
 #[must_use]
 pub fn build_sheet_cache(
     sheet: &SheetTheme,
-    png_rgba: &[u8],
-    png_w: u32,
-    png_h: u32,
+    images: &SheetImages,
     cat_height: u32,
     mirror_x: bool,
     mirror_y: bool,
@@ -164,10 +200,13 @@ pub fn build_sheet_cache(
 
     let mut cache: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
     for st in &sheet.states {
+        let Some(png) = sheet.sheet_for(&st.name).and_then(|f| images.get(f)) else {
+            continue; // sin hoja para este estado
+        };
         let mut frames_st = Vec::with_capacity(st.frames as usize);
         for i in 0..st.frames {
             let rect = sheet::frame_rect(sheet, st, i);
-            let cropped = sheet::crop_frame(png_rgba, png_w, png_h, rect);
+            let cropped = sheet::crop_frame(&png.rgba, png.w, png.h, rect);
             let mut px = if k > 1 {
                 sheet::scale_nearest(&cropped, fw, fh, k).0
             } else {
@@ -189,23 +228,14 @@ pub fn build_sheet_cache(
     cache
 }
 
-/// Rasteriza un tema de sprite sheet a la estructura `Frames` de 5 huecos que
-/// hoy consume el render (spec 0014 M1).
-///
-/// Los 5 huecos "clásicos" de `paw.rs` se mapean a estados de la hoja con la
-/// "regla de oro" de la spec §5.2: si el estado pedido falta, se cae al
-/// siguiente candidato; si no hay ninguno, al hueco 0; si la hoja no produjo
-/// **ningún** frame, es error (el llamante cae al gato embebido).
-///
-/// **M1 solo usa el frame 0 de cada estado.** La animación multi-frame dentro
-/// de un estado, los estados de bucle/one-shot y las transiciones
-/// reposo↔writing↔sleep son el hito M2, que sustituirá este colapso a 5 huecos
-/// por una máquina de estados sobre [`build_sheet_cache`].
+/// Rasteriza un tema de sprite sheet (`theme_format = 3`, spec 0014) y monta su
+/// máquina de estados. Cada estado que el tema **conduce** (spec §5.2) entra en
+/// la caché con todos sus fotogramas; el cursor arranca en `idle` (con su cadena
+/// de reserva). Error solo si no se produjo **ningún** fotograma (el llamante
+/// cae al gato embebido).
 pub fn rasterize_sheet(
     sheet: &SheetTheme,
-    png_rgba: &[u8],
-    png_w: u32,
-    png_h: u32,
+    images: &SheetImages,
     cat_height: u32,
     mirror_x: bool,
     mirror_y: bool,
@@ -214,49 +244,22 @@ pub fn rasterize_sheet(
     let k = sheet::integer_scale(fh, cat_height.max(1));
     let (w, h) = (fw * k, fh * k);
 
-    let cache = build_sheet_cache(
-        sheet, png_rgba, png_w, png_h, cat_height, mirror_x, mirror_y,
-    );
+    let cache = build_sheet_cache(sheet, images, cat_height, mirror_x, mirror_y);
     if cache.is_empty() {
         return Err("el sprite sheet no produjo ningún frame".into());
     }
-
-    // Qué estados sirve cada hueco, en orden de preferencia.
-    const SLOT_WANTS: [&[&str]; 5] = [
-        &["idle", "boring", "writing"],         // FRAME_BOTH_UP
-        &["writing", "start_writing", "idle"],  // FRAME_LEFT_DOWN
-        &["writing", "start_writing", "idle"],  // FRAME_RIGHT_DOWN
-        &["writing", "start_writing", "idle"],  // FRAME_BOTH_DOWN
-        &["sleep", "asleep", "boring", "idle"], // FRAME_SLEEPING
-    ];
-    let pick0 = |wants: &[&str]| -> Option<Vec<u8>> {
-        wants
-            .iter()
-            .find_map(|n| cache.get(*n))
-            .and_then(|v| v.first())
-            .cloned()
-    };
-    // Último recurso para el hueco 0: el primer frame de cualquier estado.
-    let slot0 = pick0(SLOT_WANTS[0]).unwrap_or_else(|| {
-        cache
-            .values()
-            .next()
-            .and_then(|v| v.first())
-            .cloned()
-            .unwrap_or_else(|| vec![0u8; (w * h * 4) as usize])
-    });
-
-    let mut frames: [Vec<u8>; 5] = Default::default();
-    frames[0] = slot0.clone();
-    for (s, wants) in SLOT_WANTS.iter().enumerate().skip(1) {
-        frames[s] = pick0(wants).unwrap_or_else(|| slot0.clone());
+    let anim = SheetAnim::from_cache(cache, sheet, Instant::now());
+    if anim.is_empty() {
+        // La caché tenía claves, pero ninguna era un estado que la v1 conduzca
+        // (p. ej. solo `working`/`moving`): sin nada que animar.
+        return Err("el sprite sheet no define ningún estado conducible".into());
     }
 
     Ok(Frames {
         w,
         h,
         aspect: (fw, fh),
-        frames,
+        kind: FramesKind::Sheet(anim),
     })
 }
 
@@ -418,28 +421,34 @@ mod tests {
 
     /// Hoja sintética 3×3 celdas de 4×4 px: cada celda `(fila, col)` pintada de
     /// un color RGBA recto único `[fila*3+col, 0, 50, 255]`.
-    fn hoja_sintetica() -> (Vec<u8>, u32, u32) {
+    fn hoja_sintetica() -> DecodedPng {
         let (cols, rows, fw, fh) = (3u32, 3u32, 4u32, 4u32);
         let (w, h) = (cols * fw, rows * fh);
-        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
         for cy in 0..rows {
             for cx in 0..cols {
                 let r = (cy * cols + cx) as u8;
                 for y in 0..fh {
                     for x in 0..fw {
                         let px = (((cy * fh + y) * w) + (cx * fw + x)) * 4;
-                        buf[px as usize..px as usize + 4].copy_from_slice(&[r, 0, 50, 255]);
+                        rgba[px as usize..px as usize + 4].copy_from_slice(&[r, 0, 50, 255]);
                     }
                 }
             }
         }
-        (buf, w, h)
+        DecodedPng { w, h, rgba }
+    }
+
+    /// Un `SheetImages` con la hoja sintética bajo el nombre `hoja.png`.
+    fn imgs() -> SheetImages {
+        BTreeMap::from([("hoja.png".to_string(), hoja_sintetica())])
     }
 
     const SHEET_INI: &str = "\
 theme_format = 3
 frame_w = 4
 frame_h = 4
+sheet = hoja.png
 state_idle_row = 1
 state_idle_frames = 2
 state_writing_row = 2
@@ -451,9 +460,8 @@ state_sleep_frames = 1
     #[test]
     fn cache_de_sprite_sheet_recorta_escala_y_premultiplica() {
         let sheet = bongocat_common::sheet::parse_sheet_ini(SHEET_INI);
-        let (buf, w, h) = hoja_sintetica();
         // cat_height 8, frame_h 4 -> factor entero 2.
-        let cache = build_sheet_cache(&sheet, &buf, w, h, 8, false, false);
+        let cache = build_sheet_cache(&sheet, &imgs(), 8, false, false);
 
         assert_eq!(cache.len(), 3, "idle, writing, sleep");
         assert_eq!(cache["idle"].len(), 2);
@@ -477,25 +485,59 @@ state_sleep_frames = 1
     }
 
     #[test]
-    fn rasterize_sheet_mapea_los_cinco_huecos_con_fallback() {
+    fn rasterize_sheet_monta_frames_y_arranca_en_idle() {
         let sheet = bongocat_common::sheet::parse_sheet_ini(SHEET_INI);
-        let (buf, w, h) = hoja_sintetica();
-        let f = rasterize_sheet(&sheet, &buf, w, h, 8, false, false).unwrap();
+        let f = rasterize_sheet(&sheet, &imgs(), 8, false, false).unwrap();
 
         assert_eq!((f.w, f.h), (8, 8));
         assert_eq!(f.aspect, (4, 4));
-        // hueco 0 -> idle f0 (r=0); huecos 1..3 -> writing f0 (r=3); hueco 4 -> sleep f0 (r=6).
-        assert_eq!(&f.frame(0)[0..4], &[50, 0, 0, 255]);
-        assert_eq!(&f.frame(1)[0..4], &[50, 0, 3, 255]);
-        assert_eq!(&f.frame(3)[0..4], &[50, 0, 3, 255]);
-        assert_eq!(&f.frame(4)[0..4], &[50, 0, 6, 255]);
+        assert!(matches!(f.kind, FramesKind::Sheet(_)));
+        // Arranca en idle, fotograma 0 = celda (0,0), r=0 -> BGRA [50,0,0,255].
+        // `current` ignora el índice clásico para un sprite sheet.
+        assert_eq!(&f.current(0)[0..4], &[50, 0, 0, 255]);
+        assert_eq!(&f.current(3)[0..4], &[50, 0, 0, 255]);
 
-        // Sin estado 'sleep': el hueco 4 cae al hueco 0.
-        let solo_idle = bongocat_common::sheet::parse_sheet_ini(
-            "frame_w=4\nframe_h=4\nstate_idle_row=1\nstate_idle_frames=1\n",
+        // Un tema sin ningún estado conducible (solo `working`) es error.
+        let no_driv = bongocat_common::sheet::parse_sheet_ini(
+            "frame_w=4\nframe_h=4\nsheet=hoja.png\nstate_working_row=1\nstate_working_frames=1\n",
         );
-        let f2 = rasterize_sheet(&solo_idle, &buf, w, h, 4, false, false).unwrap();
-        assert_eq!(f2.frame(4), f2.frame(0), "sin sleep -> fallback al hueco 0");
+        assert!(rasterize_sheet(&no_driv, &imgs(), 4, false, false).is_err());
+    }
+
+    #[test]
+    fn hoja_por_estado_gana_a_la_global() {
+        // `writing` sale de su propia hoja (todo r=99); el resto, de la global.
+        let ini = "\
+frame_w = 4
+frame_h = 4
+sheet = base.png
+sheet_writing = w.png
+state_idle_row = 1
+state_idle_frames = 1
+state_writing_row = 1
+state_writing_frames = 1
+";
+        let sheet = bongocat_common::sheet::parse_sheet_ini(ini);
+        let solo_99 = DecodedPng {
+            w: 4,
+            h: 4,
+            rgba: [99u8, 0, 50, 255].repeat(16),
+        };
+        let images = BTreeMap::from([
+            ("base.png".to_string(), hoja_sintetica()),
+            ("w.png".to_string(), solo_99),
+        ]);
+        let cache = build_sheet_cache(&sheet, &images, 4, false, false);
+        assert_eq!(
+            &cache["idle"][0][0..4],
+            &[50, 0, 0, 255],
+            "idle <- base.png"
+        );
+        assert_eq!(
+            &cache["writing"][0][0..4],
+            &[50, 0, 99, 255],
+            "writing <- w.png"
+        );
     }
 
     #[test]

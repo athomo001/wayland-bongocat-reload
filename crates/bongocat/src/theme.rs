@@ -13,7 +13,8 @@ use bongocat_common::theme::{
     format_supported, parse_theme_ini, ThemeMeta, DEFAULT_FRAME_FILES, THEME_FORMAT_SUPPORTED,
 };
 
-use crate::png_decode::{self, DecodedPng};
+use crate::anim::SheetImages;
+use crate::png_decode;
 
 const MAX_FRAME_BYTES: u64 = 2 * 1024 * 1024;
 /// Tope al tamaño en disco de una hoja de sprites (`theme_format = 3`).
@@ -28,12 +29,12 @@ pub enum ThemeArt {
     Sheet(SheetArt),
 }
 
-/// Arte de un tema de sprite sheet: la rejilla parseada + la hoja decodificada.
+/// Arte de un tema de sprite sheet: la rejilla parseada + las hojas
+/// decodificadas (la global y/o las de `sheet_<estado> =`), por nombre de
+/// fichero.
 pub struct SheetArt {
     pub sheet: SheetTheme,
-    /// Hoja única (`sheet =`) decodificada a RGBA8 recto. Las hojas por estado
-    /// (`sheet_<n> =`) llegan en un hito posterior.
-    pub png: DecodedPng,
+    pub images: SheetImages,
 }
 
 /// Un tema ya cargado en memoria: metadatos + el arte (SVG o sprite sheet).
@@ -65,14 +66,19 @@ impl LoadedTheme {
                     .iter()
                     .map(|st| format!("{}×{}", st.name, st.frames))
                     .collect();
+                let hojas = s.images.len();
                 format!(
-                    "'{label}' — sprite sheet {}×{} px, frame {}×{}, {:?} model, estados: {}",
-                    s.png.w,
-                    s.png.h,
+                    "'{label}' — sprite sheet, {hoja_txt}, frame {}×{}, {:?} model, estados: {}",
                     s.sheet.frame_w,
                     s.sheet.frame_h,
                     s.sheet.input_model,
-                    estados.join(", ")
+                    estados.join(", "),
+                    hoja_txt = if hojas == 1 {
+                        let (n, p) = s.images.iter().next().unwrap();
+                        format!("hoja {n} {}×{}", p.w, p.h)
+                    } else {
+                        format!("{hojas} hojas")
+                    },
                 )
             }
         }
@@ -218,8 +224,8 @@ fn load_dir(dir: &Path) -> Option<LoadedTheme> {
 /// Carga un tema `theme_format = 3` (sprite sheet). Cualquier fallo → `None` y
 /// el llamante se queda con el gato embebido — como con los temas SVG.
 ///
-/// M1 (spec 0014): solo la **hoja única** (`sheet =`). Las hojas por estado
-/// (`sheet_<n> =`), APNG y GIF llegan en hitos posteriores.
+/// Acepta una **hoja global** (`sheet =`) y/o **hojas por estado**
+/// (`sheet_<estado> =`), spec 0014 §5.1. Cada fichero se decodifica una sola vez.
 fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
     let sheet = parse_sheet_ini(ini);
     if sheet.frame_w == 0 || sheet.frame_h == 0 {
@@ -236,47 +242,16 @@ fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
         );
         return None;
     }
-    let Some(name) = sheet.sheet.clone() else {
+    let files = sheet.sheet_files();
+    if files.is_empty() {
         eprintln!(
-            "bongocat: tema {}: falta 'sheet ='; las hojas por estado llegan en M3; uso el clásico",
-            dir.display()
-        );
-        return None;
-    };
-    // La hoja tiene que ser un nombre de fichero simple, junto al theme.ini.
-    if name.contains("..") || name.contains(['/', '\\', '\0']) {
-        eprintln!(
-            "bongocat: tema {}: 'sheet = {name}' debe ser un nombre de fichero simple",
+            "bongocat: tema {}: ni 'sheet =' ni 'sheet_<estado> ='; uso el clásico",
             dir.display()
         );
         return None;
     }
-    let path = dir.join(&name);
-    match std::fs::symlink_metadata(&path) {
-        Ok(m) if m.is_file() && m.len() <= MAX_SHEET_BYTES => {}
-        Ok(_) => {
-            eprintln!(
-                "bongocat: tema: {} no es un fichero regular ≤ 16 MiB",
-                path.display()
-            );
-            return None;
-        }
-        Err(e) => {
-            eprintln!("bongocat: tema: falta {} ({e})", path.display());
-            return None;
-        }
-    }
-    let bytes = std::fs::read(&path).ok()?;
-    let png = match png_decode::decode_rgba8(&bytes) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("bongocat: tema: {}: {e}; uso el clásico", path.display());
-            return None;
-        }
-    };
 
-    // Aviso no fatal: si la hoja es más pequeña que lo que la rejilla implica,
-    // los frames que se salgan saldrán transparentes (`crop_frame` rellena 0).
+    // Cota superior de la rejilla, para el aviso "hoja más pequeña de la cuenta".
     let need_w = sheet
         .states
         .iter()
@@ -289,20 +264,56 @@ fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
         .map(|s| (s.row + 1) * sheet.frame_h)
         .max()
         .unwrap_or(0);
-    if png.w < need_w || png.h < need_h {
-        eprintln!(
-            "bongocat: tema {}: la hoja {}×{} es menor que la rejilla ({need_w}×{need_h}); \
-             los frames que falten saldrán transparentes",
-            dir.display(),
-            png.w,
-            png.h
-        );
+
+    let mut images = SheetImages::new();
+    for name in files {
+        // Cada hoja: nombre de fichero simple, junto al theme.ini.
+        if name.contains("..") || name.contains(['/', '\\', '\0']) {
+            eprintln!(
+                "bongocat: tema {}: 'sheet = {name}' debe ser un nombre de fichero simple",
+                dir.display()
+            );
+            return None;
+        }
+        let path = dir.join(name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_file() && m.len() <= MAX_SHEET_BYTES => {}
+            Ok(_) => {
+                eprintln!(
+                    "bongocat: tema: {} no es un fichero regular ≤ 16 MiB",
+                    path.display()
+                );
+                return None;
+            }
+            Err(e) => {
+                eprintln!("bongocat: tema: falta {} ({e})", path.display());
+                return None;
+            }
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        let png = match png_decode::decode_rgba8(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("bongocat: tema: {}: {e}; uso el clásico", path.display());
+                return None;
+            }
+        };
+        if png.w < need_w || png.h < need_h {
+            eprintln!(
+                "bongocat: tema {}: la hoja {name} ({}×{}) es menor que la rejilla \
+                 ({need_w}×{need_h}); los frames que falten saldrán transparentes",
+                dir.display(),
+                png.w,
+                png.h
+            );
+        }
+        images.insert(name.to_string(), png);
     }
 
     let loaded = LoadedTheme {
         meta,
         dir: dir.to_path_buf(),
-        art: ThemeArt::Sheet(SheetArt { sheet, png }),
+        art: ThemeArt::Sheet(SheetArt { sheet, images }),
     };
     eprintln!(
         "bongocat: tema {} cargado de {}",

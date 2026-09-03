@@ -20,6 +20,7 @@ mod ipc;
 mod pidfile;
 mod png_decode;
 mod service;
+mod sheet_anim;
 mod theme;
 mod toggle;
 mod watch;

@@ -170,9 +170,7 @@ fn rasterize_loaded(
         theme::ThemeArt::Svg(svgs) => {
             anim::rasterize_from(svgs.as_ref(), t.meta.aspect, false, h, mx, my)
         }
-        theme::ThemeArt::Sheet(s) => {
-            anim::rasterize_sheet(&s.sheet, &s.png.rgba, s.png.w, s.png.h, h, mx, my)
-        }
+        theme::ThemeArt::Sheet(s) => anim::rasterize_sheet(&s.sheet, &s.images, h, mx, my),
     }
 }
 
@@ -659,12 +657,22 @@ impl State {
     }
 
     /// Re-rasteriza los fotogramas del gato a la altura física actual, desde el
-    /// tema activo o el embebido.
+    /// tema activo o el embebido. Para un tema de sprite sheet, el cursor de la
+    /// máquina de estados se traslada a la caché nueva (no salta a idle).
     fn rerasterize(&mut self) {
         let h = self.phys_cat_height();
         let (mx, my) = (self.config.mirror_x, self.config.mirror_y);
+        let prev_cursor = match &self.frames.kind {
+            anim::FramesKind::Sheet(sa) => Some(sa.cursor()),
+            anim::FramesKind::Classic(_) => None,
+        };
         match rasterize_loaded(self.theme.as_ref(), h, mx, my) {
-            Ok(f) => self.frames = f,
+            Ok(mut f) => {
+                if let (Some((st, fr)), anim::FramesKind::Sheet(sa)) = (prev_cursor, &mut f.kind) {
+                    sa.restore_cursor(st, fr, Instant::now());
+                }
+                self.frames = f;
+            }
             Err(e) => eprintln!("bongocat: re-rasterizado falló: {e}"),
         }
     }
@@ -732,8 +740,8 @@ impl State {
     }
 
     /// Recalcula qué fotograma toca y redibuja si cambió. Porta
-    /// `anim_select_frame`. (El reposo por horario `enable_scheduled_sleep`
-    /// llega en una rebanada posterior.)
+    /// `anim_select_frame` para el `classic`; para un tema de sprite sheet
+    /// (spec 0014 M2) delega en su máquina de estados (`SheetAnim::tick`).
     fn tick(&mut self) {
         self.apply_pending_hidden();
         let now = Instant::now();
@@ -752,16 +760,27 @@ impl State {
                 )
             });
 
-        let next = if idle_sleep || scheduled_sleep {
-            FRAME_SLEEPING
-        } else {
-            let left = now < self.left_hold_until;
-            let right = now < self.right_hold_until;
-            frame_from_paw_state(left, right, self.config.idle_frame.clamp(0, 4) as u8)
+        let sleeping = idle_sleep || scheduled_sleep;
+        let left = now < self.left_hold_until;
+        let right = now < self.right_hold_until;
+        let idle_f = self.config.idle_frame.clamp(0, 4) as u8;
+
+        let changed = match &mut self.frames.kind {
+            anim::FramesKind::Classic(_) => {
+                let next = if sleeping {
+                    FRAME_SLEEPING
+                } else {
+                    frame_from_paw_state(left, right, idle_f)
+                };
+                let c = next != self.frame;
+                self.frame = next;
+                c
+            }
+            // `happy_kpm` (estado `Happy`) llega en M6: por ahora `false`.
+            anim::FramesKind::Sheet(sa) => sa.tick(now, sleeping, left, right, false),
         };
 
-        if next != self.frame {
-            self.frame = next;
+        if changed {
             self.draw();
         }
     }
@@ -945,10 +964,17 @@ impl State {
         match verb.as_str() {
             "PING" => "PONG".to_string(),
             "STATE" => format!(
-                "pid={} frame={} hidden={} manual_hidden={} edit={} theme={} scale_120={} \
+                "pid={} frame={} sheet={} hidden={} manual_hidden={} edit={} theme={} scale_120={} \
                  fps={} width={} height={} cat_height={} cat_opacity={}",
                 std::process::id(),
                 self.frame,
+                match &self.frames.kind {
+                    anim::FramesKind::Sheet(sa) => {
+                        let (st, fr) = sa.debug_pos();
+                        format!("{st}:{fr}")
+                    }
+                    anim::FramesKind::Classic(_) => "-".to_string(),
+                },
                 self.effective_hidden(),
                 match self.manual_hidden {
                     Some(true) => "hide",
@@ -1106,7 +1132,7 @@ impl State {
         let (ox, oy) = self.cat_origin(pw as i32, ph as i32);
         let (fw, fh) = (self.frames.w, self.frames.h);
         let hidden = self.effective_hidden();
-        let frame = self.frames.frame(self.frame as usize);
+        let frame = self.frames.current(self.frame);
 
         if let Err(e) = self.pool.resize(needed.max(1)) {
             eprintln!("bongocat: no se pudo redimensionar el pool a {needed}: {e}");
