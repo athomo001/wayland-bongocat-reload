@@ -351,7 +351,7 @@ fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
 }
 
 /// Primer directorio de temas **escribible** (`$XDG_DATA_HOME/bongocat/themes`).
-fn user_themes_dir() -> PathBuf {
+pub fn user_themes_dir() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())

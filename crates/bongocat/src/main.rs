@@ -14,6 +14,7 @@ use bongocat_common::io;
 
 mod anim;
 mod cosmic;
+mod import_vpets;
 mod input;
 mod input_child;
 mod ipc;
@@ -113,6 +114,9 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
     if argv.get(1).map(String::as_str) != Some("theme") {
         return None;
     }
+    if argv.get(2).map(String::as_str) == Some("import-vpets") {
+        return Some(import_vpets_cmd(&argv[3..]));
+    }
     let rc = match (argv.get(2).map(String::as_str), argv.get(3)) {
         (Some("new"), Some(name)) => match theme::scaffold(name) {
             Ok(dir) => {
@@ -141,12 +145,65 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
         }
         _ => {
             eprintln!(
-                "bongocat: uso: bongocat theme new NOMBRE | theme check NOMBRE|RUTA | theme list"
+                "bongocat: uso: bongocat theme new NOMBRE | theme check NOMBRE|RUTA | theme list\n\
+                 \x20                  | theme import-vpets ORIGEN [--name N] [--out DIR] [--dry-run]\n\
+                 \x20                    [--frame-w W] [--frame-h H]"
             );
             ExitCode::from(2)
         }
     };
     Some(rc)
+}
+
+/// `bongocat theme import-vpets ORIGEN [flags]` (spec 0014 M4). Parsea sus
+/// propios flags porque no encajan con el parser global.
+fn import_vpets_cmd(rest: &[String]) -> ExitCode {
+    let mut source: Option<&str> = None;
+    let mut name: Option<&str> = None;
+    let mut out_dir: Option<std::path::PathBuf> = None;
+    let mut dry_run = false;
+    let (mut frame_w, mut frame_h) = (None, None);
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dry-run" => dry_run = true,
+            "--name" => name = it.next().map(String::as_str),
+            "--out" => out_dir = it.next().map(std::path::PathBuf::from),
+            "--frame-w" => frame_w = it.next().and_then(|s| s.parse().ok()),
+            "--frame-h" => frame_h = it.next().and_then(|s| s.parse().ok()),
+            other if other.starts_with('-') => {
+                eprintln!("bongocat: theme import-vpets: flag desconocido: {other}");
+                return ExitCode::from(2);
+            }
+            other => source = Some(other),
+        }
+    }
+    let Some(source) = source else {
+        eprintln!("bongocat: theme import-vpets: falta ORIGEN (carpeta, .conf o .png)");
+        return ExitCode::from(2);
+    };
+    let args = import_vpets::ImportArgs {
+        source,
+        name,
+        out_dir,
+        dry_run,
+        frame_w,
+        frame_h,
+    };
+    match import_vpets::run(&args) {
+        Ok(dir) => {
+            if dry_run {
+                println!("bongocat: revisión completada (no se ha escrito nada)");
+            } else {
+                println!("bongocat: tema importado en {}", dir.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("bongocat: theme import-vpets: {e}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn main() -> ExitCode {
