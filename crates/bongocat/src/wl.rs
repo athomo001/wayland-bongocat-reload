@@ -461,6 +461,19 @@ pub fn run_overlay(
         } else {
             eprintln!("bongocat: --watch-config sin fichero de configuración; se ignora");
         }
+
+        // Directorio del tema activo (spec 0006 M6): editar un SVG / PNG del
+        // tema con `-w` lo recarga de disco en caliente. El watcher no sigue a
+        // un cambio de tema en runtime; para eso, reiniciar.
+        if let Some(dir) = state.theme.as_ref().map(|t| t.dir.clone()) {
+            let (ttx, trx) = calloop::channel::channel::<()>();
+            watch::spawn_dir(dir, ttx);
+            lh.insert_source(trx, |ev, _, state| {
+                if let calloop::channel::Event::Msg(()) = ev {
+                    state.reload_theme();
+                }
+            })?;
+        }
     }
 
     // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
@@ -830,6 +843,24 @@ impl State {
         let old = std::mem::replace(&mut self.config, loaded.config);
         self.apply_config_diff(&old);
         eprintln!("bongocat: configuración recargada");
+    }
+
+    /// Recarga el **tema activo desde disco** y re-rasteriza (spec 0006 M6): el
+    /// watcher del directorio del tema llega aquí cuando se edita un SVG / PNG.
+    /// Comparte el debounce de 300 ms con [`State::reload`].
+    fn reload_theme(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_reload) < Duration::from_millis(300) {
+            return;
+        }
+        self.last_reload = now;
+        if self.config.theme.is_empty() {
+            return; // gato embebido: no hay nada en disco que recargar
+        }
+        self.theme = theme::resolve(&self.config.theme);
+        self.rerasterize();
+        self.draw();
+        eprintln!("bongocat: tema recargado desde disco");
     }
 
     /// Recalcula el estado *deseado* de ocultar: algún toplevel activado y a
