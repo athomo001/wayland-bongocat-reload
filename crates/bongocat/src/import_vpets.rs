@@ -231,13 +231,13 @@ impl ImportReport {
 }
 
 /// Traduce un `VpetsConf` a un `theme.ini` de `theme_format = 3` y su informe.
+/// No emite la clave `name` (la antepone el llamante con el nombre de salida).
 ///
 /// `sheet_basename` es el nombre con el que se copiará la hoja al directorio del
 /// tema (sin ruta). `frame_w`/`frame_h` ya resueltos (del `.conf` o derivados).
 #[must_use]
 pub fn translate(
     conf: &VpetsConf,
-    name: &str,
     license: &str,
     sheet_basename: &str,
     frame_w: u32,
@@ -291,7 +291,6 @@ pub fn translate(
         ini,
         "# Importado de wayland-vpets por `bongocat theme import-vpets`.\n\
          # No redistribuir arte de terceros; ver themes/COMUNIDAD.md.\n\
-         name = {name}\n\
          license = {license}\n\
          theme_format = 3\n\
          theme_version = 1\n\
@@ -351,84 +350,54 @@ pub struct ImportArgs<'a> {
     /// derivar de la hoja).
     pub frame_w: Option<u32>,
     pub frame_h: Option<u32>,
+    /// Estado destino cuando el origen es una animación de un solo fichero
+    /// (APNG). Default: `writing`.
+    pub state: Option<&'a str>,
+}
+
+/// Lo que hay que escribir en el directorio del tema: el `theme.ini` ya
+/// compuesto, los ficheros de imagen a copiar (nombre → bytes) y el informe.
+struct Built {
+    ini: String,
+    files: Vec<(String, Vec<u8>)>,
+    report: ImportReport,
+    info: String,
 }
 
 /// Ejecuta el import. Imprime el informe por stdout. Devuelve la ruta del tema
-/// creado, o `Err` con un motivo legible. **Solo falla** si no hay ninguna hoja
+/// creado, o `Err` con un motivo legible. **Solo falla** si no hay ningún estado
 /// utilizable o la E/S de escritura falla (spec 0014 §5.6).
 pub fn run(args: &ImportArgs) -> Result<PathBuf, String> {
     let src = Path::new(args.source);
     let meta = std::fs::metadata(src).map_err(|e| format!("{}: {e}", args.source))?;
 
-    // 1. Localizar el `.conf` (si lo hay) y la hoja.
-    let (conf_text, sheet_path, base_dir) = if meta.is_dir() {
-        let conf = find_conf(src);
-        let conf_text = conf
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_default();
-        (conf_text, None, src.to_path_buf())
+    // Clasifica el origen y compón lo que se escribiría.
+    let built = if meta.is_dir() {
+        if find_conf(src).is_some() {
+            build_from_mascot_dir(args, src)?
+        } else if let Some(groups) = loose_png_groups(src) {
+            build_from_loose_pngs(args, src, &groups)?
+        } else {
+            build_from_mascot_dir(args, src)? // carpeta con un solo PNG y sin .conf
+        }
     } else if src
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("conf"))
     {
-        let conf_text =
-            std::fs::read_to_string(src).map_err(|e| format!("{}: {e}", args.source))?;
-        let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
-        (conf_text, None, base)
+        build_from_conf_file(args, src)?
+    } else if src
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
+    {
+        return Err("GIF todavía no soportado (falta decidir la crate `gif`); \
+             convierte a APNG o a una hoja PNG"
+            .to_string());
     } else {
-        // Una hoja suelta: sin `.conf`. Necesita `--frame-w/--frame-h`.
-        let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
-        (String::new(), Some(src.to_path_buf()), base)
+        // `.png` / `.apng` suelto: hoja de rejilla o animación de un estado.
+        build_from_single_file(args, src)?
     };
 
-    let conf = parse_vpets_conf(&conf_text);
-
-    // Hoja: la pasada directa, o la del `.conf` (relativa a su carpeta), o el
-    // único PNG de la carpeta de la mascota.
-    let sheet = sheet_path
-        .or_else(|| conf.sheet_path.as_ref().map(|s| resolve_rel(&base_dir, s)))
-        .or_else(|| single_png(&base_dir))
-        .ok_or_else(|| {
-            "no encuentro la hoja: pasa un .png, un .conf con custom_sprite_sheet_filename, \
-             o una carpeta con un solo PNG"
-                .to_string()
-        })?;
-
-    // 2. Validar y decodificar la hoja (rechaza dimensiones bomba antes de
-    //    reservar; T-0014-seguridad).
-    let smeta =
-        std::fs::symlink_metadata(&sheet).map_err(|e| format!("{}: {e}", sheet.display()))?;
-    if !smeta.is_file() {
-        return Err(format!("{}: no es un fichero regular", sheet.display()));
-    }
-    if smeta.len() > MAX_SHEET_BYTES {
-        return Err(format!(
-            "{}: {} bytes, máximo {MAX_SHEET_BYTES}",
-            sheet.display(),
-            smeta.len()
-        ));
-    }
-    let bytes = std::fs::read(&sheet).map_err(|e| format!("{}: {e}", sheet.display()))?;
-    let frames =
-        png_decode::decode_frames(&bytes).map_err(|e| format!("{}: {e}", sheet.display()))?;
-    let (sheet_w, sheet_h) = (frames[0].w, frames[0].h);
-
-    // 3. Resolver frame_w/frame_h: flags → .conf → derivado de la hoja.
-    let (fw, fh) = args
-        .frame_w
-        .zip(args.frame_h)
-        .or_else(|| conf.frame_w.zip(conf.frame_h))
-        .or_else(|| derive_frame_size(sheet_w, sheet_h, &conf.states))
-        .ok_or_else(|| {
-            format!(
-                "no puedo determinar el tamaño de frame de una hoja {sheet_w}×{sheet_h}; \
-                 pasa --frame-w y --frame-h"
-            )
-        })?;
-
-    // 4. Nombre y directorio de salida.
-    let name = derive_name(args, &conf, src);
+    let name = derive_out_name(args, src);
     if name.is_empty() || name.contains(['/', '\\', '\0']) || name.contains("..") {
         return Err(format!("nombre de tema inválido: '{name}'"));
     }
@@ -436,36 +405,30 @@ pub fn run(args: &ImportArgs) -> Result<PathBuf, String> {
         .out_dir
         .clone()
         .unwrap_or_else(|| crate::theme::user_themes_dir().join(&name));
-
-    let sheet_basename = sheet
-        .file_name()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.contains(['/', '\\', '\0']))
-        .unwrap_or("sheet.png");
-
-    let (ini, report) = translate(&conf, &name, license_for(&conf), sheet_basename, fw, fh);
+    // `translate` / `build_anim_state` no emiten `name`: se antepone aquí con el
+    // nombre de salida ya validado.
+    let ini = format!("name = {name}\n{}", built.ini);
 
     println!("origen:  {}", args.source);
-    println!(
-        "hoja:    {} ({sheet_w}×{sheet_h}), frame {fw}×{fh}",
-        sheet.display()
-    );
+    println!("{}", built.info);
     println!("destino: {}", out.display());
-    print!("{}", report.render());
+    print!("{}", built.report.render());
 
     if args.dry_run {
         println!("--dry-run: no se ha escrito nada.");
         return Ok(out);
     }
-    if report.mapped.is_empty() {
+    if built.report.mapped.is_empty() {
         return Err("ningún estado utilizable en el origen; no creo el tema".to_string());
     }
     if out.exists() {
         return Err(format!("{} ya existe", out.display()));
     }
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    std::fs::write(out.join(sheet_basename), &bytes)
-        .map_err(|e| format!("{}: {e}", out.join(sheet_basename).display()))?;
+    for (fname, data) in &built.files {
+        std::fs::write(out.join(fname), data)
+            .map_err(|e| format!("{}: {e}", out.join(fname).display()))?;
+    }
     std::fs::write(out.join("theme.ini"), &ini)
         .map_err(|e| format!("{}: {e}", out.join("theme.ini").display()))?;
 
@@ -473,6 +436,363 @@ pub fn run(args: &ImportArgs) -> Result<PathBuf, String> {
     if !crate::theme::check(&out.to_string_lossy()) {
         return Err("el tema recién escrito no pasa `theme check`".to_string());
     }
+    Ok(out)
+}
+
+/// Nombre del tema de salida: `--name`, o el nombre del fichero/carpeta de
+/// origen (sin extensión).
+fn derive_out_name(args: &ImportArgs, src: &Path) -> String {
+    args.name.map(str::to_string).unwrap_or_else(|| {
+        src.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("vpets-import")
+            .to_string()
+    })
+}
+
+/// Lee un fichero de imagen con los topes de tamaño y lo decodifica. Devuelve
+/// los bytes crudos (para copiarlos tal cual) y los fotogramas decodificados.
+fn read_image(path: &Path) -> Result<(Vec<u8>, Vec<png_decode::DecodedPng>), String> {
+    let smeta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !smeta.is_file() {
+        return Err(format!("{}: no es un fichero regular", path.display()));
+    }
+    if smeta.len() > MAX_SHEET_BYTES {
+        return Err(format!(
+            "{}: {} bytes, máximo {MAX_SHEET_BYTES}",
+            path.display(),
+            smeta.len()
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // `decode_frames` valida las dimensiones **antes** de reservar (dims bomba).
+    let frames =
+        png_decode::decode_frames(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((bytes, frames))
+}
+
+/// Copia el `theme.ini` traducido de una mascota con `.conf` + hoja PNG.
+fn build_from_mascot_dir(args: &ImportArgs, dir: &Path) -> Result<Built, String> {
+    let conf_text = find_conf(dir)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let conf = parse_vpets_conf(&conf_text);
+    let sheet = conf
+        .sheet_path
+        .as_ref()
+        .map(|s| resolve_rel(dir, s))
+        .filter(|p| p.is_file())
+        .or_else(|| single_png(dir))
+        .ok_or_else(|| {
+            "no encuentro la hoja: la carpeta necesita un .conf con \
+             custom_sprite_sheet_filename o un único PNG"
+                .to_string()
+        })?;
+    grid_built(args, &conf, &sheet)
+}
+
+/// `theme.ini` de un `.conf` suelto (la hoja se resuelve relativa a su carpeta).
+fn build_from_conf_file(args: &ImportArgs, conf_path: &Path) -> Result<Built, String> {
+    let conf_text =
+        std::fs::read_to_string(conf_path).map_err(|e| format!("{}: {e}", conf_path.display()))?;
+    let conf = parse_vpets_conf(&conf_text);
+    let base = conf_path.parent().unwrap_or(Path::new("."));
+    let sheet = conf
+        .sheet_path
+        .as_ref()
+        .map(|s| resolve_rel(base, s))
+        .or_else(|| single_png(base))
+        .ok_or_else(|| "el .conf no declara custom_sprite_sheet_filename".to_string())?;
+    grid_built(args, &conf, &sheet)
+}
+
+/// `.png` / `.apng` suelto: 1 fotograma → hoja de rejilla (necesita
+/// `--frame-w/--frame-h`); varios → animación de un estado (`--state`).
+fn build_from_single_file(args: &ImportArgs, file: &Path) -> Result<Built, String> {
+    let (bytes, frames) = read_image(file)?;
+    if frames.len() > 1 {
+        return build_anim_state(args, file, bytes, &frames);
+    }
+    let conf = VpetsConf::default();
+    let sheet_dims = (frames[0].w, frames[0].h);
+    let (fw, fh) = args.frame_w.zip(args.frame_h).ok_or_else(|| {
+        format!(
+            "una hoja suelta de {}×{} necesita --frame-w y --frame-h (o pásala \
+                 con su .conf)",
+            sheet_dims.0, sheet_dims.1
+        )
+    })?;
+    let base = file
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("sheet.png")
+        .to_string();
+    let (ini, report) = translate(&conf, license_for(&conf), &base, fw, fh);
+    Ok(Built {
+        ini,
+        files: vec![(base, bytes)],
+        report,
+        info: format!(
+            "hoja:    {} ({}×{}), frame {fw}×{fh}",
+            file.display(),
+            sheet_dims.0,
+            sheet_dims.1
+        ),
+    })
+}
+
+/// Núcleo común de los caminos "hoja de rejilla": decodifica, resuelve
+/// `frame_w/h` (flags → `.conf` → derivado) y traduce.
+fn grid_built(args: &ImportArgs, conf: &VpetsConf, sheet: &Path) -> Result<Built, String> {
+    let (bytes, frames) = read_image(sheet)?;
+    let (sw, sh) = (frames[0].w, frames[0].h);
+    if frames.len() > 1 {
+        eprintln!(
+            "bongocat: aviso: {} es un APNG; se usará solo el primer fotograma como hoja",
+            sheet.display()
+        );
+    }
+    let (fw, fh) = args
+        .frame_w
+        .zip(args.frame_h)
+        .or_else(|| conf.frame_w.zip(conf.frame_h))
+        .or_else(|| derive_frame_size(sw, sh, &conf.states))
+        .ok_or_else(|| {
+            format!("no puedo determinar el tamaño de frame de una hoja {sw}×{sh}; pasa --frame-w y --frame-h")
+        })?;
+    let base = sheet
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.contains(['/', '\\', '\0']))
+        .unwrap_or("sheet.png")
+        .to_string();
+    let (ini, report) = translate(conf, license_for(conf), &base, fw, fh);
+    Ok(Built {
+        ini,
+        files: vec![(base, bytes)],
+        report,
+        info: format!("hoja:    {} ({sw}×{sh}), frame {fw}×{fh}", sheet.display()),
+    })
+}
+
+/// Ficheros `<estado>_<n>.png` / `<estado>.png` de un directorio, agrupados por
+/// estado y ordenados por índice. `None` si ninguna clave nombra un estado
+/// conducible (así una carpeta con `gato.png` a secas cae al camino "hoja
+/// única", no a "PNGs sueltos").
+fn loose_png_groups(dir: &Path) -> Option<BTreeMap<String, Vec<PathBuf>>> {
+    let mut groups: BTreeMap<String, Vec<(u32, PathBuf)>> = BTreeMap::new();
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if !p.is_file() || !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")) {
+            continue;
+        }
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // `<estado>_<idx>` o `<estado>` a secas.
+        let (state, idx) = match stem.rsplit_once('_') {
+            Some((s, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => {
+                (s.to_string(), n.parse().unwrap_or(0))
+            }
+            _ => (stem.to_string(), 0u32),
+        };
+        groups.entry(state).or_default().push((idx, p));
+    }
+    if !groups.keys().any(|k| StateId::from_theme_name(k).is_some()) {
+        return None;
+    }
+    Some(
+        groups
+            .into_iter()
+            .map(|(k, mut v)| {
+                v.sort_by_key(|(i, _)| *i);
+                (k, v.into_iter().map(|(_, p)| p).collect())
+            })
+            .collect(),
+    )
+}
+
+/// Ensambla una carpeta de PNGs sueltos por estado en una hoja de rejilla única
+/// (una fila por estado) y traduce.
+fn build_from_loose_pngs(
+    args: &ImportArgs,
+    _dir: &Path,
+    groups: &BTreeMap<String, Vec<PathBuf>>,
+) -> Result<Built, String> {
+    // Orden canónico de filas: los estados conocidos primero.
+    let mut states: Vec<&String> = groups.keys().collect();
+    states.sort_by_key(|s| canon_index(s));
+
+    // Decodifica todo y fija `frame_w/h` con el primer PNG; exige uniformidad.
+    let mut decoded: Vec<(&String, Vec<png_decode::DecodedPng>)> = Vec::new();
+    let (mut fw, mut fh) = (0u32, 0u32);
+    for st in &states {
+        let mut fr = Vec::new();
+        for path in &groups[*st] {
+            let (_, mut d) = read_image(path)?;
+            let img = d.remove(0);
+            if fw == 0 {
+                (fw, fh) = (img.w, img.h);
+            } else if (img.w, img.h) != (fw, fh) {
+                return Err(format!(
+                    "{}: {}×{} no coincide con el primer PNG ({fw}×{fh}); \
+                     los PNGs sueltos deben medir todos igual",
+                    path.display(),
+                    img.w,
+                    img.h
+                ));
+            }
+            fr.push(img);
+        }
+        decoded.push((st, fr));
+    }
+    if let (Some(w), Some(h)) = (args.frame_w, args.frame_h) {
+        if (w, h) != (fw, fh) {
+            eprintln!("bongocat: aviso: --frame-w/-h {w}×{h} ignorados; los PNGs miden {fw}×{fh}");
+        }
+    }
+
+    let max_cols = decoded.iter().map(|(_, f)| f.len()).max().unwrap_or(0) as u32;
+    let rows = decoded.len() as u32;
+    if max_cols == 0 || rows == 0 {
+        return Err("no hay PNGs utilizables".to_string());
+    }
+    let (sheet_w, sheet_h) = (max_cols * fw, rows * fh);
+    let mut canvas = vec![0u8; (sheet_w * sheet_h * 4) as usize];
+    let mut conf = VpetsConf::default();
+    for (r, (name, fr)) in decoded.iter().enumerate() {
+        for (c, img) in fr.iter().enumerate() {
+            blit(&mut canvas, sheet_w, (c as u32 * fw, r as u32 * fh), img);
+        }
+        conf.states.push(VpetsState {
+            name: (*name).clone(),
+            row: r as u32 + 1,
+            frames: fr.len() as u32,
+            col_start: 1,
+            fps: None,
+        });
+    }
+    let sheet_png = encode_rgba_png(sheet_w, sheet_h, &canvas)?;
+    let (ini, report) = translate(&conf, license_for(&conf), "sheet.png", fw, fh);
+    Ok(Built {
+        ini,
+        files: vec![("sheet.png".to_string(), sheet_png)],
+        report,
+        info: format!(
+            "hoja ensamblada de {} PNGs sueltos → {sheet_w}×{sheet_h}, frame {fw}×{fh}",
+            decoded.iter().map(|(_, f)| f.len()).sum::<usize>()
+        ),
+    })
+}
+
+/// Un fichero animado (APNG) → tema de un solo estado (`sheet_<estado> =`).
+fn build_anim_state(
+    args: &ImportArgs,
+    file: &Path,
+    bytes: Vec<u8>,
+    frames: &[png_decode::DecodedPng],
+) -> Result<Built, String> {
+    let state = args.state.unwrap_or("writing");
+    if StateId::from_theme_name(state).is_none() {
+        return Err(format!(
+            "--state '{state}' no es un estado conducible (usa idle/writing/sleep/…)"
+        ));
+    }
+    let (fw, fh) = args
+        .frame_w
+        .zip(args.frame_h)
+        .unwrap_or((frames[0].w, frames[0].h));
+    let fname = format!("{state}.apng");
+    let default_fps = 12;
+
+    let mut ini = String::new();
+    let _ = write!(
+        ini,
+        "# Importado de wayland-vpets (animación de un estado) por \
+         `bongocat theme import-vpets`.\n\
+         # No redistribuir arte de terceros; ver themes/COMUNIDAD.md.\n\
+         license = {lic}\n\
+         theme_format = 3\n\
+         theme_version = 1\n\
+         \n\
+         sheet_{state} = {fname}\n\
+         frame_w = {fw}\n\
+         frame_h = {fh}\n\
+         default_fps = {default_fps}\n\
+         scale_filter = nearest\n\
+         input_model = activity\n\
+         row_base = 1\n",
+        lic = license_for(&VpetsConf::default()),
+    );
+
+    let mut report = ImportReport {
+        input_model: InputModel::Activity,
+        ..Default::default()
+    };
+    report.mapped.push((state.to_string(), frames.len() as u32));
+    for (canon, fb) in CANONICAL_FALLBACK {
+        if *canon != state {
+            report
+                .missing
+                .push(((*canon).to_string(), (*fb).to_string()));
+        }
+    }
+
+    Ok(Built {
+        ini,
+        files: vec![(fname, bytes)],
+        report,
+        info: format!(
+            "animación: {} ({} fotogramas {}×{}) → estado '{state}'",
+            file.display(),
+            frames.len(),
+            frames[0].w,
+            frames[0].h
+        ),
+    })
+}
+
+/// Índice del estado en el orden canónico de emisión (los desconocidos, al final).
+fn canon_index(name: &str) -> usize {
+    const ORDER: &[&str] = &[
+        "idle",
+        "boring",
+        "start_writing",
+        "writing",
+        "end_writing",
+        "happy",
+        "sleep",
+        "wake_up",
+        "active_left",
+        "active_right",
+        "active_both",
+    ];
+    ORDER.iter().position(|c| *c == name).unwrap_or(ORDER.len())
+}
+
+/// Copia `img` (RGBA8, `img.w`×`img.h`) en `canvas` (`cw` de ancho) en `(x, y)`.
+fn blit(canvas: &mut [u8], cw: u32, (x, y): (u32, u32), img: &png_decode::DecodedPng) {
+    for row in 0..img.h {
+        let si = ((row * img.w) * 4) as usize;
+        let di = (((y + row) * cw + x) * 4) as usize;
+        let n = (img.w * 4) as usize;
+        canvas[di..di + n].copy_from_slice(&img.rgba[si..si + n]);
+    }
+}
+
+/// Codifica un búfer RGBA8 recto a PNG con la crate `png`.
+fn encode_rgba_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wr = enc
+        .write_header()
+        .map_err(|e| format!("no puedo codificar la hoja: {e}"))?;
+    wr.write_image_data(rgba)
+        .map_err(|e| format!("no puedo codificar la hoja: {e}"))?;
+    wr.finish()
+        .map_err(|e| format!("no puedo cerrar el PNG: {e}"))?;
     Ok(out)
 }
 
@@ -515,23 +835,6 @@ fn resolve_rel(base: &Path, s: &str) -> PathBuf {
     } else {
         base.join(p)
     }
-}
-
-/// Nombre del tema: `--name`, o `animation_name` si no es `custom`, o el nombre
-/// del fichero/carpeta de origen.
-fn derive_name(args: &ImportArgs, conf: &VpetsConf, src: &Path) -> String {
-    if let Some(n) = args.name {
-        return n.to_string();
-    }
-    if let Some(a) = &conf.animation_name {
-        if !a.is_empty() && a != "custom" {
-            return a.clone();
-        }
-    }
-    src.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("vpets-import")
-        .to_string()
 }
 
 /// Licencia para el `theme.ini`: aviso genérico de que el arte importado puede
@@ -594,7 +897,7 @@ custom_working_frames = 3
     #[test]
     fn traduce_a_theme_ini_e_informa() {
         let c = parse_vpets_conf(CONF);
-        let (ini, rep) = translate(&c, "Charizard", "IP de Nintendo", "charizard.png", 64, 48);
+        let (ini, rep) = translate(&c, "IP de Nintendo", "charizard.png", 64, 48);
         assert!(ini.contains("theme_format = 3"));
         assert!(ini.contains("sheet = charizard.png"));
         assert!(ini.contains("frame_w = 64"));
@@ -621,7 +924,7 @@ custom_working_frames = 3
              custom_left_down_row = 2\ncustom_left_down_frames = 1\n\
              custom_right_down_row = 3\ncustom_right_down_frames = 1\n",
         );
-        let (ini, rep) = translate(&c, "Bongo", "MIT", "s.png", 8, 8);
+        let (ini, rep) = translate(&c, "MIT", "s.png", 8, 8);
         assert_eq!(rep.input_model, InputModel::Hands);
         assert!(ini.contains("input_model = hands"));
         assert!(ini.contains("state_left_down_row = 2") || ini.contains("state_left-down_row"));
@@ -630,7 +933,7 @@ custom_working_frames = 3
     #[test]
     fn conf_vacio_no_panica() {
         let c = parse_vpets_conf("");
-        let (_, rep) = translate(&c, "x", "y", "s.png", 8, 8);
+        let (_, rep) = translate(&c, "y", "s.png", 8, 8);
         assert!(rep.mapped.is_empty());
         assert!(rep.render().contains("ningún estado utilizable"));
     }
@@ -685,6 +988,7 @@ custom_working_frames = 3
             dry_run: false,
             frame_w: None,
             frame_h: None,
+            state: None,
         };
         let created = run(&args).expect("import OK");
         assert_eq!(created, out);
@@ -714,9 +1018,100 @@ custom_working_frames = 3
             dry_run: true,
             frame_w: Some(32),
             frame_h: Some(32),
+            state: None,
         };
         run(&args).expect("dry-run OK");
         assert!(!out.exists(), "--dry-run no crea el directorio");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// APNG RGBA de `n` marcos completos, todos del mismo color, con `png`.
+    fn toy_apng(w: u32, h: u32, n: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_animated(n, 0).unwrap();
+        let mut wr = enc.write_header().unwrap();
+        for _ in 0..n {
+            wr.write_image_data(&[10u8, 200, 30, 255].repeat((w * h) as usize))
+                .unwrap();
+        }
+        wr.finish().unwrap();
+        out
+    }
+
+    #[test]
+    fn import_carpeta_de_pngs_sueltos() {
+        let dir = scratch("loose");
+        let pet = dir.join("pet");
+        std::fs::create_dir_all(&pet).unwrap();
+        for f in ["idle_0.png", "idle_1.png", "writing_0.png"] {
+            std::fs::write(pet.join(f), toy_png(40, 40)).unwrap();
+        }
+        let out = dir.join("out");
+        let args = ImportArgs {
+            source: pet.to_str().unwrap(),
+            name: Some("loosepet"),
+            out_dir: Some(out.clone()),
+            dry_run: false,
+            frame_w: None,
+            frame_h: None,
+            state: None,
+        };
+        run(&args).expect("import de PNGs sueltos OK");
+        // Se ensambló una hoja 80×80 (2 columnas × 2 filas).
+        let (bytes, frames) = read_image(&out.join("sheet.png")).unwrap();
+        assert_eq!((frames[0].w, frames[0].h), (80, 80));
+        let _ = bytes;
+        let ini = std::fs::read_to_string(out.join("theme.ini")).unwrap();
+        assert!(ini.contains("frame_w = 40"));
+        assert!(ini.contains("state_idle_frames = 2"));
+        assert!(ini.contains("state_writing_frames = 1"));
+        assert!(crate::theme::check(&out.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_apng_como_un_estado() {
+        let dir = scratch("apng");
+        let file = dir.join("fly.apng");
+        std::fs::write(&file, toy_apng(48, 48, 4)).unwrap();
+        let out = dir.join("out");
+        let args = ImportArgs {
+            source: file.to_str().unwrap(),
+            name: Some("flyer"),
+            out_dir: Some(out.clone()),
+            dry_run: false,
+            frame_w: None,
+            frame_h: None,
+            state: Some("writing"),
+        };
+        run(&args).expect("import de APNG OK");
+        assert!(out.join("writing.apng").is_file());
+        let ini = std::fs::read_to_string(out.join("theme.ini")).unwrap();
+        assert!(ini.contains("sheet_writing = writing.apng"));
+        assert!(ini.contains("frame_w = 48"));
+        assert!(crate::theme::check(&out.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gif_da_error_claro() {
+        let dir = scratch("gif");
+        let file = dir.join("x.gif");
+        std::fs::write(&file, b"GIF89a...").unwrap();
+        let args = ImportArgs {
+            source: file.to_str().unwrap(),
+            name: Some("g"),
+            out_dir: Some(dir.join("out")),
+            dry_run: true,
+            frame_w: Some(8),
+            frame_h: Some(8),
+            state: None,
+        };
+        let err = run(&args).unwrap_err();
+        assert!(err.contains("GIF"), "el error menciona GIF: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

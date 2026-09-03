@@ -147,7 +147,7 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
             eprintln!(
                 "bongocat: uso: bongocat theme new NOMBRE | theme check NOMBRE|RUTA | theme list\n\
                  \x20                  | theme import-vpets ORIGEN [--name N] [--out DIR] [--dry-run]\n\
-                 \x20                    [--frame-w W] [--frame-h H]"
+                 \x20                    [--frame-w W] [--frame-h H] [--state NOMBRE]"
             );
             ExitCode::from(2)
         }
@@ -160,6 +160,7 @@ fn theme_subcommand(argv: &[String]) -> Option<ExitCode> {
 fn import_vpets_cmd(rest: &[String]) -> ExitCode {
     let mut source: Option<&str> = None;
     let mut name: Option<&str> = None;
+    let mut state: Option<&str> = None;
     let mut out_dir: Option<std::path::PathBuf> = None;
     let mut dry_run = false;
     let (mut frame_w, mut frame_h) = (None, None);
@@ -168,6 +169,7 @@ fn import_vpets_cmd(rest: &[String]) -> ExitCode {
         match a.as_str() {
             "--dry-run" => dry_run = true,
             "--name" => name = it.next().map(String::as_str),
+            "--state" => state = it.next().map(String::as_str),
             "--out" => out_dir = it.next().map(std::path::PathBuf::from),
             "--frame-w" => frame_w = it.next().and_then(|s| s.parse().ok()),
             "--frame-h" => frame_h = it.next().and_then(|s| s.parse().ok()),
@@ -189,6 +191,7 @@ fn import_vpets_cmd(rest: &[String]) -> ExitCode {
         dry_run,
         frame_w,
         frame_h,
+        state,
     };
     match import_vpets::run(&args) {
         Ok(dir) => {
