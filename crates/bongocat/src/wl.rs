@@ -395,6 +395,8 @@ pub fn run_overlay(
         last_activity: now,
         kpm: crate::kpm::Kpm::new(),
         last_reload: now,
+        tray: None,
+        last_tray_hidden: None,
         _ftl_mgr: ftl_mgr,
         _ext_list: ext_list,
         cosmic_info,
@@ -479,19 +481,18 @@ pub fn run_overlay(
 
     // Icono de bandeja (spec 0011): hilo `ksni` → cada clic de menú llega como un
     // `TrayCommand` que se ejecuta con la misma lógica que los verbos IPC. El
-    // handle se mantiene vivo mientras dure el overlay; al soltarse, el servicio
-    // SNI se apaga.
-    let _tray = if tray_enabled {
+    // handle vive en `State` (para poder empujarle cambios de estado) y se
+    // suelta al salir del overlay, apagando el servicio SNI.
+    if tray_enabled {
         let (trtx, trrx) = calloop::channel::channel::<tray::TrayCommand>();
         lh.insert_source(trrx, |ev, _, state| {
             if let calloop::channel::Event::Msg(cmd) = ev {
                 state.apply_tray_command(cmd);
             }
         })?;
-        tray::spawn(trtx, theme::list(), config.theme.clone())
-    } else {
-        None
-    };
+        state.tray = tray::spawn(trtx, theme::list(), config.theme.clone());
+        state.sync_tray_status();
+    }
 
     // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
     let _ipc_guard = if config.enable_ipc {
@@ -582,6 +583,12 @@ struct State {
     kpm: crate::kpm::Kpm,
     /// Última recarga de config (para el debounce de 300 ms).
     last_reload: Instant,
+    /// Icono de bandeja (spec 0011); `None` si `--no-tray`/`enable_tray=0` o si
+    /// no se pudo lanzar el hilo. Al soltarse (fin del overlay) apaga el SNI.
+    tray: Option<tray::TrayHandle>,
+    /// Último `effective_hidden()` empujado al tray, para no repetir en cada
+    /// tick (`sync_tray_status` solo manda al cambiar).
+    last_tray_hidden: Option<bool>,
     /// El manager de foreign-toplevel wlr, si el compositor lo soporta (se
     /// guarda solo para mantenerlo vivo).
     _ftl_mgr: Option<ZwlrForeignToplevelManagerV1>,
@@ -894,6 +901,24 @@ impl State {
         eprintln!("bongocat: tema recargado desde disco");
     }
 
+    /// Empuja al icono del tray el estado `Normal`/`Hidden` si cambió desde la
+    /// última vez (spec 0011 §"Estado del icono", M2 parcial — `Error` queda
+    /// para cuando exista supervisión real de la surface). No hace nada sin
+    /// tray activo ni si `effective_hidden()` no cambió.
+    fn sync_tray_status(&mut self) {
+        let Some(handle) = &self.tray else { return };
+        let hidden = self.effective_hidden();
+        if self.last_tray_hidden == Some(hidden) {
+            return;
+        }
+        self.last_tray_hidden = Some(hidden);
+        handle.set_status(if hidden {
+            tray::TrayStatus::Hidden
+        } else {
+            tray::TrayStatus::Normal
+        });
+    }
+
     /// Ejecuta un [`tray::TrayCommand`] (clic en el menú del icono, spec 0011).
     /// Cada rama reutiliza la misma lógica que el verbo IPC equivalente.
     fn apply_tray_command(&mut self, cmd: tray::TrayCommand) {
@@ -902,6 +927,7 @@ impl State {
             C::ToggleVisibility => {
                 self.manual_hidden = Some(!self.effective_hidden());
                 self.draw();
+                self.sync_tray_status();
             }
             // M1: re-rasteriza y redibuja. El teardown+rebuild completo de las
             // surfaces con reintentos es M2.
@@ -963,6 +989,7 @@ impl State {
             }
         );
         self.draw();
+        self.sync_tray_status();
     }
 
     /// ¿Está el gato oculto ahora mismo? Anulación manual sobre la lógica de
@@ -1179,6 +1206,7 @@ impl State {
                     _ => None, // AUTO: vuelve a seguir la pantalla completa
                 };
                 self.draw();
+                self.sync_tray_status();
                 format!(
                     "OK {}",
                     if self.effective_hidden() {

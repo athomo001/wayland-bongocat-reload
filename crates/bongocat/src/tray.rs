@@ -13,9 +13,10 @@
 //! Sin host SNI en el escritorio, `spawn` avisa por stderr y no molesta; el
 //! usuario sigue teniendo `bongocatctl` (`show`/`hide`/`reload`/`restart`/`stop`).
 
-// Algunos ganchos de la máquina de estado (`on_overlay_down`, …) los consume la
-// rebanada M2 (icono Normal/Hidden/Error en vivo); hoy el frontend solo usa
-// `TrayCommand` / `wanted`.
+// `on_overlay_down`/`on_overlay_recovered`/`on_manual_restart` (la máquina
+// `Tray`) esperan a que exista supervisión real de la surface (teardown +
+// rebuild, spec 0011 M2 pleno) para tener quien las llame; `Normal`/`Hidden`
+// ya viven en vivo vía `TrayHandle::set_status` sin pasar por `Tray`.
 #![allow(dead_code)]
 
 use std::sync::mpsc;
@@ -156,9 +157,10 @@ impl Tray {
 
 // --- Frontend StatusNotifierItem (ksni) -----------------------------------
 
-/// Instrucción del hilo del overlay al hilo del tray (por ahora solo apagarlo
-/// al salir; los cambios de icono Normal/Hidden/Error son de M2).
+/// Instrucción del hilo del overlay al hilo del tray.
 enum ToTray {
+    /// Cambia el estado visual del icono (spec 0011 §"Estado del icono", M2).
+    SetStatus(TrayStatus),
     Shutdown,
 }
 
@@ -169,7 +171,12 @@ struct SniTray {
     /// Temas instalados para el submenú "Tema"; el activo va marcado.
     themes: Vec<String>,
     active_theme: String,
-    icon: Vec<Icon>,
+    /// Icono base (RGBA **recto**, sin premultiplicar) a `icon_size²`; los tres
+    /// variantes (Normal/Hidden/Error) se derivan de él en cada consulta —
+    /// barato para un icono de bandeja, y evita guardar 3 copias.
+    icon_base: Vec<u8>,
+    icon_size: u32,
+    status: TrayStatus,
 }
 
 impl SniTray {
@@ -192,12 +199,17 @@ impl ksni::Tray for SniTray {
         "bongocat".into()
     }
     fn icon_pixmap(&self) -> Vec<Icon> {
-        self.icon.clone()
+        vec![tint_icon(&self.icon_base, self.icon_size, self.status)]
     }
     fn tool_tip(&self) -> ksni::ToolTip {
+        let description = match self.status {
+            TrayStatus::Normal => "Overlay activo — clic derecho para el menú".to_string(),
+            TrayStatus::Hidden => "Oculto — clic derecho para el menú".to_string(),
+            TrayStatus::Error => "Overlay caído — usa «Reiniciar overlay»".to_string(),
+        };
         ksni::ToolTip {
             title: "Bongo Cat".into(),
-            description: "Overlay activo — clic derecho para el menú".into(),
+            description,
             icon_name: String::new(),
             icon_pixmap: Vec::new(),
         }
@@ -259,6 +271,12 @@ impl TrayHandle {
     pub fn stop(&self) {
         let _ = self.to_tray.send(ToTray::Shutdown);
     }
+
+    /// Cambia el icono a `status` (Normal/Hidden/Error). No bloqueante: si el
+    /// hilo del tray ya no está, no hace nada.
+    pub fn set_status(&self, status: TrayStatus) {
+        let _ = self.to_tray.send(ToTray::SetStatus(status));
+    }
 }
 
 /// Arranca el servicio del tray en un hilo dedicado. `cmd_tx` recibe un
@@ -271,10 +289,19 @@ pub fn spawn(
     active_theme: String,
 ) -> Option<TrayHandle> {
     let (to_tray, from_main) = mpsc::channel::<ToTray>();
-    let icon = embedded_icon();
+    let (icon_base, icon_size) = embedded_icon_base();
     thread::Builder::new()
         .name("tray:sni".into())
-        .spawn(move || run(cmd_tx, themes, active_theme, icon, &from_main))
+        .spawn(move || {
+            run(
+                cmd_tx,
+                themes,
+                active_theme,
+                icon_base,
+                icon_size,
+                &from_main,
+            )
+        })
         .ok()?;
     Some(TrayHandle { to_tray })
 }
@@ -283,17 +310,21 @@ fn run(
     cmd_tx: Sender<TrayCommand>,
     themes: Vec<String>,
     active_theme: String,
-    icon: Vec<Icon>,
+    icon_base: Vec<u8>,
+    icon_size: u32,
     from_main: &mpsc::Receiver<ToTray>,
 ) {
     let tray = SniTray {
         cmd_tx,
         themes,
         active_theme,
-        icon,
+        icon_base,
+        icon_size,
+        status: TrayStatus::Normal,
     };
     // `ksni` con `async-io` gestiona su propio hilo ejecutor; aquí solo hay que
-    // llevar el futuro de `spawn()` a término y mantener vivo el `Handle`.
+    // llevar el futuro de `spawn()` a término, mantener vivo el `Handle` y
+    // reenviarle los cambios de estado que llegan del bucle del overlay.
     futures_lite::future::block_on(async move {
         let handle = match tray.spawn().await {
             Ok(h) => h,
@@ -306,8 +337,9 @@ fn run(
             }
         };
         eprintln!("bongocat: icono de bandeja activo");
-        // Bloquea hasta que el overlay pida apagar (o cierre el canal al salir).
-        let _ = from_main.recv();
+        while let Ok(ToTray::SetStatus(status)) = from_main.recv() {
+            handle.update(|t| t.status = status).await;
+        }
         handle.shutdown();
     });
 }
@@ -343,41 +375,105 @@ pub fn launch_config() {
     );
 }
 
-/// Icono ARGB32 embebido (24×24): el fotograma `both-up` del `classic`, para
-/// escritorios sin un icono de tema llamado "bongocat".
-fn embedded_icon() -> Vec<Icon> {
+/// Icono base embebido (24×24, RGBA **recto**): el fotograma `both-up` del
+/// `classic`, para escritorios sin un icono de tema llamado "bongocat". Recto
+/// (no premultiplicado) para que [`tint_icon`] pueda tocar el alfa sin
+/// arrastrar color. `(bytes, lado)`; `bytes` vacío si `resvg` fallara.
+fn embedded_icon_base() -> (Vec<u8>, u32) {
     use resvg::tiny_skia::{Pixmap, Transform};
     use resvg::usvg::{Options, Tree};
 
     const SIZE: u32 = 24;
     let svg = crate::anim::classic_frame_svgs();
     let Ok(tree) = Tree::from_data(svg[0].as_bytes(), &Options::default()) else {
-        return Vec::new();
+        return (Vec::new(), SIZE);
     };
     let Some(mut pm) = Pixmap::new(SIZE, SIZE) else {
-        return Vec::new();
+        return (Vec::new(), SIZE);
     };
     let sz = tree.size();
     let t = Transform::from_scale(SIZE as f32 / sz.width(), SIZE as f32 / sz.height());
     resvg::render(&tree, t, &mut pm.as_mut());
 
-    // tiny-skia entrega RGBA premultiplicado (bytes R,G,B,A); ksni quiere ARGB32
-    // en orden de red (bytes A,R,G,B).
+    // tiny-skia entrega RGBA premultiplicado; se revierte a recto para poder
+    // escalar el alfa (estado `Hidden`) sin manchar los bordes de color.
     let mut data = pm.data().to_vec();
     for px in data.chunks_exact_mut(4) {
+        let a = u16::from(px[3]);
+        if a > 0 {
+            let unmul = |c: u8| ((u16::from(c) * 255 + a / 2) / a).min(255) as u8;
+            px[0] = unmul(px[0]);
+            px[1] = unmul(px[1]);
+            px[2] = unmul(px[2]);
+        }
+    }
+    (data, SIZE)
+}
+
+/// Deriva de `base` (RGBA recto, `size²`) el icono ARGB32 (orden de red:
+/// bytes A,R,G,B) para `status`: `Normal` tal cual; `Hidden` a mitad de alfa;
+/// `Error` con un tinte rojo. `Error` no lo dispara nada todavía (M2 pleno
+/// necesita supervisión real de la surface) pero el camino ya está listo.
+fn tint_icon(base: &[u8], size: u32, status: TrayStatus) -> Icon {
+    let mut data = base.to_vec();
+    for px in data.chunks_exact_mut(4) {
+        match status {
+            TrayStatus::Normal => {}
+            TrayStatus::Hidden => px[3] = (u16::from(px[3]) * 128 / 255) as u8,
+            TrayStatus::Error => {
+                px[0] = px[0].saturating_add(140);
+                px[1] /= 2;
+                px[2] /= 2;
+            }
+        }
         let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
         px.copy_from_slice(&[a, r, g, b]);
     }
-    vec![Icon {
-        width: SIZE as i32,
-        height: SIZE as i32,
+    Icon {
+        width: size as i32,
+        height: size as i32,
         data,
-    }]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tint_icon_por_estado() {
+        // Un píxel opaco rojo puro, recto (sin premultiplicar).
+        let base = [200u8, 20, 20, 255];
+        let normal = tint_icon(&base, 1, TrayStatus::Normal);
+        assert_eq!(
+            normal.data,
+            [255, 200, 20, 20],
+            "Normal: solo reordena a ARGB"
+        );
+
+        let hidden = tint_icon(&base, 1, TrayStatus::Hidden);
+        assert_eq!(hidden.data[0], 128, "Hidden: alfa a la mitad");
+        assert_eq!(&hidden.data[1..4], &[200, 20, 20], "Hidden: color intacto");
+
+        let error = tint_icon(&base, 1, TrayStatus::Error);
+        assert_eq!(error.data[0], 255, "Error: alfa intacto");
+        assert!(error.data[1] > 200, "Error: más rojo");
+        assert!(
+            error.data[2] < 20 || error.data[2] == 10,
+            "Error: menos verde"
+        );
+    }
+
+    #[test]
+    fn embedded_icon_base_produce_un_cuadrado_no_vacio() {
+        let (data, size) = embedded_icon_base();
+        assert_eq!(size, 24);
+        assert_eq!(data.len(), (24 * 24 * 4) as usize, "RGBA recto de 24×24");
+        assert!(
+            data.iter().any(|&b| b != 0),
+            "el gato pinta algo, no es todo cero"
+        );
+    }
 
     #[test]
     fn wanted_respeta_config_y_flag() {
