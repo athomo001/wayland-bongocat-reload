@@ -26,6 +26,27 @@ pub fn scale_offset_120(logical: i32, scale_120: u32) -> i32 {
     }
 }
 
+/// Inversa aproximada de [`scale_offset_120`]: de un desplazamiento **físico**
+/// (px del búfer) al lógico que lo genera, redondeando al entero más cercano.
+/// El modo edición la usa para traducir la posición del puntero (lógica en el
+/// protocolo, pero comparada en físicas contra el gato dibujado) de vuelta a los
+/// `cat_*_offset` de la config. Con `scale_120 == 0` (sin HiDPI) es la identidad.
+#[must_use]
+pub fn unscale_offset_120(phys: i32, scale_120: u32) -> i32 {
+    if scale_120 == 0 {
+        return phys;
+    }
+    let n = i64::from(phys) * 120;
+    let d = i64::from(scale_120);
+    // División con redondeo al más cercano, preservando el signo.
+    let q = if n >= 0 {
+        (n + d / 2) / d
+    } else {
+        (n - d / 2) / d
+    };
+    q as i32
+}
+
 /// Calcula el tamaño lógico de una salida.
 ///
 /// - Si el compositor ya nos dio el tamaño lógico vía xdg-output
@@ -74,6 +95,19 @@ mod tests {
     #[test]
     fn offset_negativo_conserva_signo() {
         assert_eq!(scale_offset_120(-10, 180), -15);
+    }
+
+    #[test]
+    fn unscale_es_inversa_aproximada() {
+        // Identidad sin HiDPI (o escala nula).
+        assert_eq!(unscale_offset_120(42, 120), 42);
+        assert_eq!(unscale_offset_120(42, 0), 42);
+        // 1.5×: 150 físicos → 100 lógicos; signo preservado.
+        assert_eq!(unscale_offset_120(150, 180), 100);
+        assert_eq!(unscale_offset_120(-150, 180), -100);
+        // Redondeo al más cercano en ambos sentidos.
+        assert_eq!(unscale_offset_120(151, 180), 101);
+        assert_eq!(unscale_offset_120(-151, 180), -101);
     }
 
     #[test]

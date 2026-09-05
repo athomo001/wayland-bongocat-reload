@@ -68,7 +68,7 @@ use wayland_protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
 
-use bongocat_common::scale::{scale_offset_120, scale_size_120};
+use bongocat_common::scale::{scale_offset_120, scale_size_120, unscale_offset_120};
 
 use crate::anim::{self, Frames};
 use crate::cosmic::{
@@ -679,14 +679,19 @@ impl State {
         }
     }
 
-    /// Altura del gato en píxeles **físicos** (la config está en lógicos).
+    /// Altura del gato en píxeles **físicos** (la config está en lógicos). En
+    /// modo edición manda `cat_height` de la config (ver `cat_origin`): así la
+    /// rueda redimensiona de verdad aunque el tema traiga su propia altura.
     fn phys_cat_height(&self) -> u32 {
-        let h = self
-            .theme
-            .as_ref()
-            .and_then(|t| t.cat_height())
-            .map(|h| h as i32)
-            .unwrap_or(self.config.cat_height);
+        let h = if self.edit.active {
+            self.config.cat_height
+        } else {
+            self.theme
+                .as_ref()
+                .and_then(|t| t.cat_height())
+                .map(|h| h as i32)
+                .unwrap_or(self.config.cat_height)
+        };
         scale_size_120(h.max(1), self.eff_scale_120()).max(1) as u32
     }
 
@@ -696,25 +701,43 @@ impl State {
     fn cat_origin(&self, phys_w: i32, phys_h: i32) -> (i32, i32) {
         let s = self.eff_scale_120();
         let (cw, ch) = (self.frames.w as i32, self.frames.h as i32);
-        let x_off = self
-            .theme
-            .as_ref()
-            .and_then(|t| t.cat_x_offset())
-            .unwrap_or(self.config.cat_x_offset);
-        let y_off = self
-            .theme
-            .as_ref()
-            .and_then(|t| t.cat_y_offset())
-            .unwrap_or(self.config.cat_y_offset);
-        let align = self
-            .theme
-            .as_ref()
-            .and_then(|t| t.cat_align())
-            .unwrap_or(self.config.cat_align);
+        // En modo edición **manda la config**: los `vpet.ini` del tema son solo
+        // valores de partida (se copian a la config al entrar), y el paseo se
+        // congela. Así el arrastre tiene un único valor que mover y lo que se ve
+        // coincide con `cat_x_offset` / `cat_y_offset`.
+        let editing = self.edit.active;
+        let x_off = if editing {
+            self.config.cat_x_offset
+        } else {
+            self.theme
+                .as_ref()
+                .and_then(|t| t.cat_x_offset())
+                .unwrap_or(self.config.cat_x_offset)
+        };
+        let y_off = if editing {
+            self.config.cat_y_offset
+        } else {
+            self.theme
+                .as_ref()
+                .and_then(|t| t.cat_y_offset())
+                .unwrap_or(self.config.cat_y_offset)
+        };
+        let align = if editing {
+            self.config.cat_align
+        } else {
+            self.theme
+                .as_ref()
+                .and_then(|t| t.cat_align())
+                .unwrap_or(self.config.cat_align)
+        };
 
         let xoff = scale_offset_120(x_off, s);
         let yoff = scale_offset_120(y_off, s);
-        let roam_phys = scale_offset_120(self.roam_x.round() as i32, s);
+        let roam_phys = if editing {
+            0
+        } else {
+            scale_offset_120(self.roam_x.round() as i32, s)
+        };
         // Punto de partida vertical: `Center` (clásico) a media pantalla;
         // `Baseline` (sprite sheets) apoyado en el borde inferior. `cat_y_offset`
         // lo mueve a cualquier altura; se acota para que **siempre** queden al
@@ -733,14 +756,36 @@ impl State {
         (x, y)
     }
 
-    /// Relación de aspecto del tema activo, en `i32` (para `edit::cat_rect`).
-    fn cat_aspect(&self) -> (i32, i32) {
-        (self.frames.aspect.0 as i32, self.frames.aspect.1 as i32)
-    }
-
-    /// Anclaje vertical del tema activo (para `edit::cat_rect` / `origin_to_y_offset`).
+    /// Anclaje vertical del tema activo (`Center` / `Baseline`); lo usa
+    /// `edit_drag` para invertir la base de `cat_origin`.
     fn cat_anchor(&self) -> bongocat_common::sheet::Anchor {
         self.frames.anchor
+    }
+
+    /// Tamaño **físico** del búfer (`phys_w`, `phys_h`), la escala en la que
+    /// trabaja `cat_origin`.
+    fn phys_size(&self) -> (i32, i32) {
+        let s = self.eff_scale_120();
+        let pw = scale_size_120(self.width.max(1) as i32, s).max(1);
+        let ph = scale_size_120(self.height.max(1) as i32, s).max(1);
+        (pw, ph)
+    }
+
+    /// Rect **físico** `(x, y, w, h)` del gato en el búfer, tomado de la MISMA
+    /// `cat_origin` que dibuja. El hit-test y el arrastre del modo edición lo
+    /// usan para no depender de un cálculo paralelo que se desalinea con el
+    /// HiDPI o con los `vpet.ini` del tema.
+    fn cat_phys_rect(&self) -> (i32, i32, i32, i32) {
+        let (pw, ph) = self.phys_size();
+        let (ox, oy) = self.cat_origin(pw, ph);
+        (ox, oy, self.frames.w as i32, self.frames.h as i32)
+    }
+
+    /// Posición del puntero (coordenadas lógicas del protocolo) → píxel físico
+    /// del búfer.
+    fn ptr_phys(&self, px: f64, py: f64) -> (f64, f64) {
+        let s = f64::from(self.eff_scale_120()) / 120.0;
+        (px * s, py * s)
     }
 
     /// Cambia el tema en caliente (IPC `THEME`). `spec` vacío / `embedded` /
@@ -978,7 +1023,9 @@ impl State {
 
                 let mut moved = false;
                 let is_walking = idle_special == Some(crate::sheet_anim::StateId::Walk);
-                if can_roam && is_walking {
+                // El paseo se congela en modo edición: si no, el gato se movería
+                // solo bajo el cursor y el arrastre no cuajaría.
+                if can_roam && is_walking && !self.edit.active {
                     if self.roam_dir == 0.0 {
                         self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
                     }
@@ -1006,6 +1053,9 @@ impl State {
                     moved = true;
                 } else {
                     self.roam_dir = 0.0;
+                    if self.edit.active {
+                        self.roam_x = 0.0;
+                    }
                 }
 
                 let anim_changed = sa.tick(
@@ -1237,6 +1287,34 @@ impl State {
             self.edit.active = active;
             self.edit.dragging = false;
             if active {
+                // El modo edición manda sobre los `vpet.ini`: copia a la config
+                // lo que ahora se ve (offset / altura / alineación sugeridos por
+                // el tema) para que el gato no salte al entrar y el arrastre
+                // tenga un único valor que mover. También congela el paseo.
+                let seed = self.theme.as_ref().map(|t| {
+                    (
+                        t.cat_x_offset(),
+                        t.cat_y_offset(),
+                        t.cat_align(),
+                        t.cat_height(),
+                    )
+                });
+                if let Some((xo, yo, al, he)) = seed {
+                    if let Some(v) = xo {
+                        self.config.cat_x_offset = v;
+                    }
+                    if let Some(v) = yo {
+                        self.config.cat_y_offset = v;
+                    }
+                    if let Some(v) = al {
+                        self.config.cat_align = v;
+                    }
+                    if let Some(v) = he {
+                        self.config.cat_height = v as i32;
+                    }
+                }
+                self.roam_x = 0.0;
+                self.roam_dir = 0.0;
                 self.edit.snapshot = (
                     self.config.cat_x_offset,
                     self.config.cat_y_offset,
@@ -1258,59 +1336,63 @@ impl State {
                     }
                     eprintln!("bongocat: modo edición — {}", self.ipc_save());
                 }
+                // Deja de aplicar los offsets del `vpet.ini`: ahora viven en la
+                // config y deben seguir mandando tras salir del modo edición.
+                if let Some(t) = self.theme.as_mut() {
+                    t.vpet.cat_x_offset = None;
+                    t.vpet.cat_y_offset = None;
+                    t.vpet.cat_height = None;
+                }
             }
             self.layer.commit();
             self.draw(); // recoloca la región de entrada
             self.sync_tray_edit();
-            let r = bongocat_common::edit::cat_rect(
-                &self.config,
-                self.width as i32,
-                self.height as i32,
-                self.cat_aspect(),
-                self.cat_anchor(),
-            );
             eprintln!(
-                "bongocat: modo edición {} — región del gato = {:?}",
+                "bongocat: modo edición {} — rect del gato (físico) = {:?}",
                 if active { "ON" } else { "OFF" },
-                r
+                self.cat_phys_rect()
             );
         }
         format!("OK edit={}", if active { "on" } else { "off" })
     }
 
-    /// Botón izquierdo dentro del gato: empezar a arrastrar.
+    /// Botón izquierdo dentro del gato: empezar a arrastrar. Todo en píxeles
+    /// **físicos** (el puntero llega en lógicas y se convierte), contra el mismo
+    /// rect que dibuja `cat_origin`.
     fn edit_press(&mut self, px: f64, py: f64) {
-        let (bw, bh) = (self.width as i32, self.height as i32);
-        let rect = bongocat_common::edit::cat_rect(
-            &self.config,
-            bw,
-            bh,
-            self.cat_aspect(),
-            self.cat_anchor(),
-        );
-        let inside = bongocat_common::edit::hit(rect, px as i32, py as i32);
-        if inside {
-            self.roam_x = 0.0;
-            self.roam_dir = 0.0;
+        let (fx, fy) = self.ptr_phys(px, py);
+        let rect = self.cat_phys_rect();
+        if bongocat_common::edit::hit(rect, fx.round() as i32, fy.round() as i32) {
             self.edit.dragging = true;
-            self.edit.grab_dx = px - f64::from(rect.0);
-            self.edit.grab_dy = py - f64::from(rect.1);
+            self.edit.grab_dx = fx - f64::from(rect.0);
+            self.edit.grab_dy = fy - f64::from(rect.1);
         }
-        self.edit.ptr = (px, py);
+        self.edit.ptr = (fx, fy); // en físicas, como grab_dx/dy
     }
 
-    /// Movimiento con el gato agarrado: recalcula `cat_x_offset` / `cat_y_offset`.
+    /// Movimiento con el gato agarrado: recalcula `cat_x_offset` / `cat_y_offset`
+    /// invirtiendo `cat_origin` (base de alineación/anclaje en físicas → lógicas).
     fn edit_drag(&mut self, px: f64, py: f64) {
-        use bongocat_common::edit;
-        self.edit.ptr = (px, py);
-        let (bw, bh) = (self.width as i32, self.height as i32);
-        let (_, _, cw, ch) =
-            edit::cat_rect(&self.config, bw, bh, self.cat_aspect(), self.cat_anchor());
-        let ox = (px - self.edit.grab_dx).round() as i32;
-        let oy = (py - self.edit.grab_dy).round() as i32;
-        let (ox, oy) = edit::clamp_origin(ox, oy, bw, bh, cw, ch);
-        self.config.cat_x_offset = edit::origin_to_x_offset(self.config.cat_align, ox, bw, cw);
-        self.config.cat_y_offset = edit::origin_to_y_offset(oy, bh, ch, self.cat_anchor());
+        let (fx, fy) = self.ptr_phys(px, py);
+        self.edit.ptr = (fx, fy);
+        let (pw, ph) = self.phys_size();
+        let (_, _, cw, ch) = self.cat_phys_rect();
+        // Origen físico deseado = puntero menos el punto de agarre, acotado igual
+        // que `cat_origin` para que lo que se ve no se despegue de la config.
+        let ox = ((fx - self.edit.grab_dx).round() as i32).clamp(10, (pw - cw - 10).max(10));
+        let oy = ((fy - self.edit.grab_dy).round() as i32).clamp(24 - ch, (ph - 24).max(0));
+        let s = self.eff_scale_120();
+        let xoff_phys = match self.config.cat_align {
+            Align::Left => ox,
+            Align::Center => ox - (pw - cw) / 2,
+            Align::Right => (pw - cw) - ox,
+        };
+        let y_base = match self.cat_anchor() {
+            bongocat_common::sheet::Anchor::Center => (ph - ch) / 2,
+            bongocat_common::sheet::Anchor::Baseline => ph - ch,
+        };
+        self.config.cat_x_offset = unscale_offset_120(xoff_phys, s);
+        self.config.cat_y_offset = unscale_offset_120(oy - y_base, s);
         self.draw();
     }
 
@@ -1324,14 +1406,7 @@ impl State {
         self.config.cat_height = new_h;
         self.rerasterize();
         if self.edit.dragging {
-            let (bw, bh) = (self.width as i32, self.height as i32);
-            let (rx, ry, ..) = bongocat_common::edit::cat_rect(
-                &self.config,
-                bw,
-                bh,
-                self.cat_aspect(),
-                self.cat_anchor(),
-            );
+            let (rx, ry, ..) = self.cat_phys_rect();
             self.edit.grab_dx = self.edit.ptr.0 - f64::from(rx);
             self.edit.grab_dy = self.edit.ptr.1 - f64::from(ry);
         }
@@ -1575,13 +1650,26 @@ impl State {
             vp.set_destination(lw as i32, lh as i32);
         }
 
-        // Región de entrada: vacía (click-through) normalmente; la **barra
-        // entera** mientras dure el modo edición, para que el arrastre no se
-        // corte cuando el gato (y su rect) se mueven bajo el cursor. El
-        // hit-test del gato lo hace `edit_press`.
+        // Región de entrada: vacía (click-through) normalmente. En modo edición,
+        // **solo el gato + un margen** para poder arrastrarlo sin que el cursor
+        // se escape — NUNCA toda la superficie: como ahora ocupa la pantalla
+        // entera, eso se tragaría el ratón de todo el escritorio. Va en
+        // coordenadas lógicas de la superficie, así que el rect físico del gato
+        // se convierte con `unscale_offset_120`.
         let region = self.wl_compositor.create_region(&self.qh, ());
         if self.edit.active {
-            region.add(0, 0, lw as i32, lh as i32);
+            let lx = unscale_offset_120(ox, s);
+            let ly = unscale_offset_120(oy, s);
+            let lrw = unscale_offset_120(fw as i32, s).max(1);
+            let lrh = unscale_offset_120(fh as i32, s).max(1);
+            let m = 48; // margen lógico para no perder el arrastre
+            let x0 = (lx - m).max(0);
+            let y0 = (ly - m).max(0);
+            let x1 = (lx + lrw + m).min(lw as i32);
+            let y1 = (ly + lrh + m).min(lh as i32);
+            if x1 > x0 && y1 > y0 {
+                region.add(x0, y0, x1 - x0, y1 - y0);
+            }
         }
         self.layer.wl_surface().set_input_region(Some(&region));
         region.destroy();
