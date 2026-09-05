@@ -395,46 +395,6 @@ pub fn blit_over(
     blit_over_flip(dst, dst_wh, src, src_wh, origin, opacity, false);
 }
 
-/// Dibuja un contorno **sólido** de `thickness` px alrededor de `rect =
-/// (x, y, w, h)` (coordenadas del gato) sobre `dst` (BGRA premultiplicado,
-/// `dst_wh`) — el "chrome" del modo edición (spec 0005 M5): marca los límites
-/// de lo que se puede arrastrar/redimensionar mientras `EDIT` está activo.
-/// Sobrescribe (no mezcla) para que se vea igual sobre cualquier fondo.
-/// Recorta lo que se salga del lienzo; no falla con un rect vacío/negativo.
-pub fn draw_outline(
-    dst: &mut [u8],
-    dst_wh: (u32, u32),
-    rect: (i32, i32, i32, i32),
-    thickness: u32,
-    color_bgra: [u8; 4],
-) {
-    let (dst_w, dst_h) = dst_wh;
-    let (rx, ry, rw, rh) = rect;
-    if rw <= 0 || rh <= 0 || dst_w == 0 || dst_h == 0 {
-        return;
-    }
-    let t = thickness.max(1) as i32;
-    let mut put = |x: i32, y: i32| {
-        if x < 0 || y < 0 || x >= dst_w as i32 || y >= dst_h as i32 {
-            return;
-        }
-        let i = ((y as u32 * dst_w + x as u32) * 4) as usize;
-        dst[i..i + 4].copy_from_slice(&color_bgra);
-    };
-    for x in rx..rx + rw {
-        for dy in 0..t.min(rh) {
-            put(x, ry + dy);
-            put(x, ry + rh - 1 - dy);
-        }
-    }
-    for y in ry..ry + rh {
-        for dx in 0..t.min(rw) {
-            put(rx + dx, y);
-            put(rx + rw - 1 - dx, y);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,64 +670,5 @@ state_writing_frames = 1
         let mut d0 = vec![9u8; 4];
         blit_over(&mut d0, (1, 1), &src, (1, 1), (0, 0), 0);
         assert_eq!(&d0[..], &[9, 9, 9, 9], "opacidad 0 no dibuja");
-    }
-
-    #[test]
-    fn draw_outline_pinta_el_borde_y_deja_el_interior() {
-        // Lienzo 6x6, rect (1,1,4,4), grosor 1: borde en el perímetro del
-        // rect, el interior (2,2)-(3,3) intacto, y fuera del rect intacto.
-        const COLOR: [u8; 4] = [255, 255, 0, 255]; // BGRA: cian opaco
-        let (w, h) = (6u32, 6u32);
-        let mut canvas = vec![0u8; (w * h * 4) as usize];
-        draw_outline(&mut canvas, (w, h), (1, 1, 4, 4), 1, COLOR);
-        let px = |x: u32, y: u32| -> [u8; 4] {
-            let i = ((y * w + x) * 4) as usize;
-            canvas[i..i + 4].try_into().unwrap()
-        };
-        // Esquinas y bordes del rect (1,1)-(4,4) inclusive.
-        for (x, y) in [(1, 1), (4, 1), (1, 4), (4, 4), (2, 1), (1, 2)] {
-            assert_eq!(px(x, y), COLOR, "borde ({x},{y})");
-        }
-        // Interior (2,2) y (3,3): sin tocar.
-        assert_eq!(px(2, 2), [0, 0, 0, 0], "interior intacto");
-        assert_eq!(px(3, 3), [0, 0, 0, 0], "interior intacto");
-        // Fuera del rect (0,0): sin tocar.
-        assert_eq!(px(0, 0), [0, 0, 0, 0], "fuera del rect intacto");
-    }
-
-    #[test]
-    fn draw_outline_no_panica_si_el_rect_no_toca_el_lienzo() {
-        // Rect por completo fuera (a la derecha): ningún borde cae dentro,
-        // pero no debe entrar en pánico ni tocar el búfer.
-        let (w, h) = (4u32, 4u32);
-        let mut canvas = vec![0u8; (w * h * 4) as usize];
-        draw_outline(&mut canvas, (w, h), (10, 10, 3, 3), 1, [1, 2, 3, 255]);
-        assert!(
-            canvas.iter().all(|&b| b == 0),
-            "nada que dibujar, lienzo intacto"
-        );
-    }
-
-    #[test]
-    fn draw_outline_dibuja_solo_la_parte_visible_si_se_sale() {
-        // El rect empieza dentro del lienzo y se sale por la derecha/abajo:
-        // la esquina superior izquierda del borde sí debe pintarse.
-        const COLOR: [u8; 4] = [1, 2, 3, 255];
-        let (w, h) = (4u32, 4u32);
-        let mut canvas = vec![0u8; (w * h * 4) as usize];
-        draw_outline(&mut canvas, (w, h), (1, 1, 10, 10), 1, COLOR);
-        let px = |x: u32, y: u32| -> [u8; 4] {
-            let i = ((y * w + x) * 4) as usize;
-            canvas[i..i + 4].try_into().unwrap()
-        };
-        assert_eq!(px(1, 1), COLOR, "esquina superior del borde, visible");
-        assert_eq!(px(0, 0), [0, 0, 0, 0], "fuera del rect, intacto");
-    }
-
-    #[test]
-    fn draw_outline_rect_vacio_no_hace_nada() {
-        let mut canvas = vec![7u8; 16];
-        draw_outline(&mut canvas, (2, 2), (0, 0, 0, 5), 1, [1, 1, 1, 1]);
-        assert!(canvas.iter().all(|&b| b == 7), "w<=0 no toca el lienzo");
     }
 }

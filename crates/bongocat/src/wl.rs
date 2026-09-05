@@ -177,10 +177,6 @@ fn rasterize_theme(
     )
 }
 
-/// Color (BGRA premultiplicado, opaco) del contorno del modo edición (spec
-/// 0005 M5): cian, para destacar sobre el fondo oscuro típico de la barra.
-const EDIT_OUTLINE_COLOR: [u8; 4] = [255, 255, 0, 255];
-
 /// Tope de sondeo cuando no hay nada pendiente (sin patas sueltas, sin
 /// antirrebote de pantalla completa en curso, sin sprite sheet animando): red
 /// de seguridad para el sueño programado/por inactividad, `boring` y el
@@ -1629,20 +1625,6 @@ impl State {
                 self.config.mirror_x
             };
             anim::blit_over_flip(canvas, (pw, ph), frame, (fw, fh), (ox, oy), cat_op, flip_h);
-
-            // "Chrome" del modo edición (spec 0005 M5): contorno cian sobre el
-            // rect del gato — sin esto, nada distingue a la vista si `EDIT`
-            // está activo ni qué se puede arrastrar.
-            if self.edit.active {
-                let thickness = scale_size_120(2, s).max(1) as u32;
-                anim::draw_outline(
-                    canvas,
-                    (pw, ph),
-                    (ox, oy, fw as i32, fh as i32),
-                    thickness,
-                    EDIT_OUTLINE_COLOR,
-                );
-            }
         }
 
         // El viewport traduce el búfer físico al tamaño lógico de la superficie.
