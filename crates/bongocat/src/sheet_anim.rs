@@ -48,6 +48,8 @@ pub enum StateId {
     WalkRight,
     /// Animación especial de comerse una memoria RAM.
     EatRam,
+    /// Animación especial de enojo / bufido (arched back / hiss en felinos).
+    Angry,
 }
 
 impl StateId {
@@ -79,6 +81,7 @@ impl StateId {
             "walk_left" | "walk-left" => Self::WalkLeft,
             "walk_right" | "walk-right" => Self::WalkRight,
             "eat_ram" | "eat-ram" | "eatram" | "ram" | "snack" => Self::EatRam,
+            "angry" | "enojado" | "hiss" => Self::Angry,
             _ => return None,
         })
     }
@@ -110,6 +113,7 @@ impl StateId {
             Self::WalkLeft => "walk_left",
             Self::WalkRight => "walk_right",
             Self::EatRam => "eat_ram",
+            Self::Angry => "angry",
         }
     }
 
@@ -167,6 +171,7 @@ impl StateId {
             WalkLeft => &[WalkLeft, Walk, Idle],
             WalkRight => &[WalkRight, Walk, Idle],
             EatRam => &[EatRam, Happy, Idle],
+            Angry => &[Angry, Boring, Idle],
         }
     }
 }
