@@ -418,9 +418,16 @@ pub fn config_gui_available() -> bool {
 /// "Configurar…": lanza la ventana gráfica `bongocat-config`. Lista fija, sin
 /// shell, sin interpolar nada (spec 0011 §Seguridad). No hay reserva por
 /// terminal: si falla, se registra y ya.
+///
+/// Un hilo aparte espera al hijo (`wait`) para que al cerrar la ventana **no
+/// quede un zombi** — `bongocat` no tiene un `SIGCHLD` que lo recoja.
 pub fn launch_config() {
     match std::process::Command::new(CONFIG_GUI_BIN).spawn() {
-        Ok(_) => {}
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
         Err(e) => eprintln!("bongocat: no se pudo abrir {CONFIG_GUI_BIN}: {e}"),
     }
 }
