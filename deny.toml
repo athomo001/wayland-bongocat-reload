@@ -5,7 +5,13 @@
 version = 2
 yanked = "deny"
 # Avisos de seguridad de RUSTSEC: fallan el build.
-# ignore = []  # añadir aquí un RUSTSEC-XXXX con justificación si hiciera falta
+ignore = [
+    # `paste` sin mantenimiento (no es vulnerabilidad). Entra solo como
+    # dependencia transitiva de `image`, que a su vez es **dev-dependency**
+    # (ejemplos `gen_*_sheet.rs` que generan las hojas de sprites); no viaja en
+    # el binario publicado. Revisar si `image` gana una ruta sin `paste`.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2
