@@ -1,5 +1,5 @@
 //! Generador del sprite sheet HD de Umbreon (Gato Negro / Pokémon) a partir del set de stickers
-//! con 9 poses genuinas felinas (idle, walk1, walk2, run, angry, sleep, groom, eat, pounce).
+//! con 9 poses felinas genuinas y ciclo de caminata lateral de 4 patas realista.
 //! Produce `themes/umbreon/sheet.png` (2048x2432 px, 16x19) y `themes/umbreon/writing.apng`.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
@@ -105,7 +105,6 @@ fn extract_sticker_from_rect(
                 dx * dx + dy * dy <= 784
             })
         });
-        // Descartar rayas diminutas aisladas de cómic (< 40 px)
         if is_near && comp.len() >= 40 {
             for &(x, y) in comp {
                 char_mask[(y * rw + x) as usize] = true;
@@ -396,36 +395,47 @@ fn draw_sparkle(img: &mut RgbaImage, cx: i32, cy: i32, rad: i32, color: Rgba<u8>
 
 fn main() {
     let sheet_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_cat_sheet_1788633569390.jpg";
-    println!("Cargando set de stickers de Umbreon desde: {sheet_src}");
-    let raw_img = image::open(sheet_src).expect("no se pudo abrir umbreon_cat_sheet.jpg");
+    let walk_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_walk_cycle_1788636213890.jpg";
 
-    // Extracción de las 9 poses
-    println!("Extrayendo poses felinas genuinas de Umbreon...");
+    println!("Cargando sets de sprites de Umbreon...");
+    let raw_img = image::open(sheet_src).expect("no se pudo abrir umbreon_cat_sheet.jpg");
+    let raw_walk = image::open(walk_src).expect("no se pudo abrir umbreon_walk_cycle.jpg");
+
+    // Extracción de poses principales
+    println!("Extrayendo poses felinas...");
     let s_idle = extract_sticker_from_rect(&raw_img, 45, 20, 278, 325);
-    let s_walk1 = extract_sticker_from_rect(&raw_img, 360, 20, 300, 325);
-    let s_walk2 = extract_sticker_from_rect(&raw_img, 685, 20, 305, 325);
-    let s_run = extract_sticker_from_rect(&raw_img, 25, 335, 320, 350);
     let s_angry = extract_sticker_from_rect(&raw_img, 335, 335, 330, 345);
     let s_sleep = extract_sticker_from_rect(&raw_img, 680, 335, 315, 320);
     let s_groom = extract_sticker_from_rect(&raw_img, 70, 675, 275, 330);
     let s_eat = extract_sticker_from_rect(&raw_img, 375, 680, 300, 325);
     let s_pounce = extract_sticker_from_rect(&raw_img, 675, 685, 325, 320);
 
+    // Extracción de los 6 fotogramas de la caminata lateral de 4 patas
+    println!("Extrayendo fotogramas de caminata lateral de 4 patas...");
+    let w0 = extract_sticker_from_rect(&raw_walk, 25, 160, 310, 285);
+    let w1 = extract_sticker_from_rect(&raw_walk, 380, 145, 305, 250);
+    let w2 = extract_sticker_from_rect(&raw_walk, 710, 150, 300, 245);
+    let w3 = extract_sticker_from_rect(&raw_walk, 1040, 160, 305, 250);
+    let w4 = extract_sticker_from_rect(&raw_walk, 125, 410, 325, 255);
+    let w5 = extract_sticker_from_rect(&raw_walk, 525, 405, 325, 255);
+
+    let walk_frames = [&w0, &w1, &w2, &w3, &w4, &w5];
+
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
     let mut sheet: RgbaImage = ImageBuffer::new(sheet_w, sheet_h);
     let tau = std::f32::consts::TAU;
 
-    // 1. IDLE (Fila 1, 16 frames): Gato sentado erguido con respiración felina, vaivén de cola y parpadeo
-    println!("Generando Fila 1: Idle (16 frames)...");
+    // 1. IDLE (Fila 1, 16 frames): Gato erguido firme, sin balanceo de cabeza, respiración suave y parpadeo
+    println!("Generando Fila 1: Idle (16 frames, cabeza fija y serena)...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        let breath_scale = 1.0 + angle.sin() * 0.022;
-        let breath_dy = angle.sin() * 1.2;
-        let tail_dx = (angle * 0.5).cos() * 1.5;
+        let breath_scale = 1.0 + angle.sin() * 0.016;
+        let breath_dy = angle.sin() * 0.8;
 
-        let mut spr = transform_sprite(&s_idle, tail_dx, breath_dy, 1.0, breath_scale);
+        // Cabeza y cuerpo fijos (dx = 0), solo suave respiración vertical
+        let mut spr = transform_sprite(&s_idle, 0.0, breath_dy, 1.0, breath_scale);
 
         // Parpadeo sutil con ojos cerrados de satisfacción en frames 9 y 10
         if i == 9 || i == 10 {
@@ -453,15 +463,13 @@ fn main() {
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        let bob = -(angle * 2.0).sin().abs() * 3.0;
-        let sway = angle.sin() * 2.0;
+        let bob = -(angle * 2.0).sin().abs() * 2.5;
 
-        // Alterna entre s_pounce y s_idle con ritmo vivaz
+        // Alterna entre s_pounce y s_idle
         let base_w = if i % 4 < 2 { &s_pounce } else { &s_idle };
-        let mut spr = transform_sprite(base_w, sway, bob, 1.02, 0.98);
+        let mut spr = transform_sprite(base_w, 0.0, bob, 1.01, 0.99);
 
-        // Anillos amarillos y destellos mágicos de tipo siniestro
-        let spark_x = 64 + (angle.cos() * 26.0) as i32;
+        let spark_x = 64 + (angle.cos() * 24.0) as i32;
         let spark_y = 96 + (angle.sin().abs() * 8.0) as i32;
         draw_sparkle(&mut spr, spark_x, spark_y, 4, Rgba([255, 225, 0, 230]));
 
@@ -520,8 +528,8 @@ fn main() {
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        let jump_y = -(angle.sin().max(0.0)) * 9.0;
-        let squash = 1.0 + (angle * 2.0).cos() * 0.06;
+        let jump_y = -(angle.sin().max(0.0)) * 8.0;
+        let squash = 1.0 + (angle * 2.0).cos() * 0.05;
 
         let base_h = if angle.sin() > 0.3 {
             &s_pounce
@@ -547,9 +555,8 @@ fn main() {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
         let groom_dy = (angle * 2.0).sin() * 1.5;
-        let groom_dx = angle.cos() * 1.0;
 
-        let spr = transform_sprite(&s_groom, groom_dx, groom_dy, 1.0, 1.0);
+        let spr = transform_sprite(&s_groom, 0.0, groom_dy, 1.0, 1.0);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (6 * FH) as i64);
     }
 
@@ -591,41 +598,37 @@ fn main() {
         image::imageops::overlay(&mut sheet, &intermediate, (i * FW) as i64, (15 * FH) as i64);
     }
 
-    // 17. WALK (Fila 17, 16 frames): Caminata y trote felino de 4 patas articulado y fluido
-    println!("Generando Fila 17: Walk (16 frames, 4 patas felinas articuladas)...");
+    // 17. WALK (Fila 17, 16 frames): CAMINATA LATERAL REAL DE 4 PATAS FELINAS
+    // Cabeza siempre firme al frente, sin giros ni vaivén de derecha a izquierda.
+    // Movimiento rítmico y coordinado de las 4 patas pisando el suelo.
+    println!("Generando Fila 17: Walk (16 frames, 4 patas felinas articuladas en perfil)...");
+    let n_wf = walk_frames.len();
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let cycle_phase = (phase * 2.0) % 1.0;
+        // Mapeo continuo suave a través de los 6 fotogramas de la marcha
+        let progress = (i as f32 / 16.0) * n_wf as f32;
+        let idx0 = (progress.floor() as usize) % n_wf;
+        let idx1 = (idx0 + 1) % n_wf;
+        let t = progress - progress.floor();
 
-        let base_step = if cycle_phase < 0.5 {
-            let t = cycle_phase * 2.0;
-            blend_sprites(&s_walk1, &s_walk2, t)
-        } else {
-            let t = (cycle_phase - 0.5) * 2.0;
-            blend_sprites(&s_walk2, &s_walk1, t)
-        };
+        let base_step = blend_sprites(walk_frames[idx0], walk_frames[idx1], t);
 
-        // Rebote elástico del lomo y oscilación natural de la cadera al trotar
-        let trot_angle = phase * tau * 2.0;
-        let trot_bob = -(trot_angle.sin().abs()) * 2.2;
-        let trot_sway = trot_angle.sin() * 1.5;
+        // Ondulación vertical muy sutil del paso (dx = 0.0 absoluto: NO balanceo lateral de cabeza)
+        let step_bob = -((i as f32 / 16.0) * tau * 2.0).sin().abs() * 0.8;
+        let spr = transform_sprite(&base_step, 0.0, step_bob, 1.0, 1.0);
 
-        let spr = transform_sprite(&base_step, trot_sway, trot_bob, 1.0, 1.0);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (16 * FH) as i64);
     }
 
-    // 18. EAT_RAM / SNACK (Fila 18, 16 frames): Comiendo felizmente de su plato con crujidos
+    // 18. EAT_RAM / SNACK (Fila 18, 16 frames): Comiendo felizmente de su plato con croquetas
     println!("Generando Fila 18: Eat (16 frames, plato de comida)...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        // Cabeza sube y baja al masticar
-        let chew_dy = (angle * 2.0).sin() * 2.0;
-        let chew_scale_x = 1.0 + (angle * 2.0).cos() * 0.02;
+        let chew_dy = (angle * 2.0).sin() * 1.8;
+        let chew_scale_x = 1.0 + (angle * 2.0).cos() * 0.015;
 
         let mut spr = transform_sprite(&s_eat, 0.0, chew_dy, chew_scale_x, 1.0);
 
-        // Chispitas o crujidos dorados alrededor del plato
         let crunch_angle = angle * 3.0;
         let cx = 40 + (crunch_angle.cos() * 8.0) as i32;
         let cy = 88 + (crunch_angle.sin() * 6.0) as i32;
@@ -639,13 +642,10 @@ fn main() {
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        // Vaivén rápido de cola y respiración agitada
-        let hiss_sway = (angle * 2.0).sin() * 2.2;
-        let hiss_arch = 1.0 + angle.sin() * 0.03;
+        let hiss_arch = 1.0 + angle.sin() * 0.025;
 
-        let mut spr = transform_sprite(&s_angry, hiss_sway, 0.0, 1.0, hiss_arch);
+        let mut spr = transform_sprite(&s_angry, 0.0, 0.0, 1.0, hiss_arch);
 
-        // Resplandor rojizo de ojos enojados
         draw_sparkle(&mut spr, 38, 64, 2, Rgba([255, 30, 30, 230]));
         draw_sparkle(&mut spr, 54, 64, 2, Rgba([255, 30, 30, 230]));
 
