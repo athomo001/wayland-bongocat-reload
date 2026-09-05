@@ -1,12 +1,14 @@
-//! `bongocatctl` — cliente de configuración y control de bongocat.
+//! `bongocatctl` — cliente de configuración y control de bongocat por línea de
+//! órdenes: lee/escribe el `bongocat.conf` conservando el formato (spec 0004) y
+//! habla con la instancia en marcha por el socket IPC (spec 0003).
 //!
-//! Fase 1: lectura/escritura del `bongocat.conf` preservando el formato
-//! (spec 0004). El cliente IPC en vivo y la TUI (`ratatui`) llegan después.
+//! Es la **plomería** para scripts y para la ventana gráfica `bongocat-config`
+//! (spec 0007); la interfaz para personas es esa ventana, no esto.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use bongocat_common::config::{self, ConfDoc, Config};
+use bongocat_common::config::{ConfDoc, Config};
 use bongocat_common::io;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -43,7 +45,8 @@ Opciones:
   -m, --monitor NOMBRE   Instancia de esa salida (para las órdenes IPC)
   -v, --version          Versión
 
-Pendiente (fases posteriores): TUI de configuración, presets, perfiles.";
+La configuración visual (deslizadores, vista previa) es la ventana
+`bongocat-config` (spec 0007). Pendiente: presets y perfiles.";
 
 struct Args {
     config: Option<PathBuf>,
@@ -208,8 +211,9 @@ fn cmd_get(explicit: Option<PathBuf>, key: &str) -> ExitCode {
 }
 
 fn cmd_set(explicit: Option<PathBuf>, key: &str, value: &str) -> ExitCode {
-    // 1. validar el tipo antes de tocar el disco.
-    if let Err(msg) = config::check_kv(key, value) {
+    // 1. validar tipo **y rango** antes de tocar el disco (misma tabla
+    //    `field_meta` que usa la ventana `bongocat-config`, spec 0007).
+    if let Err(msg) = bongocat_common::field_meta::validate_value(key, value) {
         eprintln!("bongocatctl: {msg}");
         return ExitCode::from(2);
     }

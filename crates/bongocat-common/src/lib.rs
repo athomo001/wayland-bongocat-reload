@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod edit;
+pub mod field_meta;
 pub mod fullscreen;
 pub mod io;
 pub mod ipc;

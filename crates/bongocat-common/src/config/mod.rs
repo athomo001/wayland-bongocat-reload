@@ -26,6 +26,63 @@ const MAX_INTERVAL: i32 = 3600;
 const NUM_FRAMES: i32 = 5;
 const DEFAULT_SCREEN_WIDTH: i32 = 1920;
 
+/// Claves canónicas del `bongocat.conf` — **una por ajuste**, en la grafía que
+/// emite [`Config::to_ini`] (los alias como `keyboard_devices` colapsan a
+/// `keyboard_device`). Fuente única para la tabla `field_meta` (spec 0007) y
+/// para `--help`; un test comprueba que `check_kv` acepta cada una y que
+/// `field_meta::FIELDS` las cubre exactamente (biyección).
+pub const KEYS: &[&str] = &[
+    // Posición y tamaño
+    "cat_align",
+    "cat_height",
+    "cat_x_offset",
+    "cat_y_offset",
+    "monitor",
+    // Apariencia
+    "cat_opacity",
+    "mirror_x",
+    "mirror_y",
+    "enable_antialiasing",
+    "theme",
+    "overlay_height",
+    "overlay_opacity",
+    "overlay_position",
+    "layer",
+    // Entrada
+    "enable_mouse",
+    "mouse_paw",
+    "mouse_move_interval",
+    "enable_hand_mapping",
+    "keypress_duration",
+    "keyboard_device",
+    "keyboard_name",
+    "mouse_device",
+    "mouse_name",
+    "hotplug_scan_interval",
+    // Reposo
+    "idle_sleep_timeout",
+    "enable_scheduled_sleep",
+    "sleep_begin",
+    "sleep_end",
+    "happy_kpm",
+    // Animación / avanzado
+    "fps",
+    "idle_frame",
+    "test_animation_duration",
+    "test_animation_interval",
+    "disable_fullscreen_hide",
+    "enable_debug",
+    "enable_ipc",
+    "enable_tray",
+];
+
+/// Opciones válidas de cada enum del `.conf`, en la grafía del fichero. Las usa
+/// `field_meta` para pintar el desplegable y un test las cruza con `apply_kv`.
+pub const LAYER_VALUES: &[&str] = &["background", "bottom", "top", "overlay"];
+pub const POSITION_VALUES: &[&str] = &["top", "bottom"];
+pub const ALIGN_VALUES: &[&str] = &["left", "center", "right"];
+pub const MOUSE_PAW_VALUES: &[&str] = &["left", "right", "random"];
+
 /// Borde de la pantalla al que se ancla el overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Position {
