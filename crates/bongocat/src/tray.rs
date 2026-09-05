@@ -197,9 +197,13 @@ impl ksni::Tray for SniTray {
         "Bongo Cat".into()
     }
     fn icon_name(&self) -> String {
-        // Si el tema del panel tiene un icono llamado "bongocat", lo usa; si no,
-        // cae al pixmap embebido de abajo.
-        "bongocat".into()
+        // Vacío a propósito: no hay ningún icono llamado "bongocat" instalado
+        // en el tema de iconos del sistema (no lo empaquetamos en
+        // `hicolor`/`pixmaps`). Muchos hosts SNI, si `IconName` no está vacío
+        // pero no lo pueden resolver, muestran el icono **en blanco** en vez
+        // de caer a `icon_pixmap` — por eso se deja vacío: fuerza a todo host
+        // a usar el pixmap embebido de abajo, que siempre está disponible.
+        String::new()
     }
     fn icon_pixmap(&self) -> Vec<Icon> {
         vec![tint_icon(&self.icon_base, self.icon_size, self.status)]
@@ -392,39 +396,30 @@ pub fn launch_config() {
     );
 }
 
-/// Icono base embebido (24×24, RGBA **recto**): el fotograma `both-up` del
-/// `classic`, para escritorios sin un icono de tema llamado "bongocat". Recto
-/// (no premultiplicado) para que [`tint_icon`] pueda tocar el alfa sin
-/// arrastrar color. `(bytes, lado)`; `bytes` vacío si `resvg` fallara.
+/// PNG del icono del tray: el gato con gafas (arte propio del usuario, fondo
+/// verde ya quitado — croma + recorte + encuadre cuadrado hechos a mano,
+/// pipeline documentado en el commit). 64×64, RGBA recto.
+const ICON_PNG: &[u8] = include_bytes!("../../../assets/tray/bongocat-icon.png");
+
+/// Icono base embebido (RGBA **recto**, cuadrado). Recto (no premultiplicado)
+/// para que [`tint_icon`] pueda tocar el alfa sin arrastrar color. `(bytes,
+/// lado)`; `bytes` vacío si el PNG embebido no decodificara (no debería pasar:
+/// es un asset del repo, cubierto por un test).
 fn embedded_icon_base() -> (Vec<u8>, u32) {
-    use resvg::tiny_skia::{Pixmap, Transform};
-    use resvg::usvg::{Options, Tree};
-
-    const SIZE: u32 = 24;
-    let svg = crate::anim::classic_frame_svgs();
-    let Ok(tree) = Tree::from_data(svg[0].as_bytes(), &Options::default()) else {
-        return (Vec::new(), SIZE);
-    };
-    let Some(mut pm) = Pixmap::new(SIZE, SIZE) else {
-        return (Vec::new(), SIZE);
-    };
-    let sz = tree.size();
-    let t = Transform::from_scale(SIZE as f32 / sz.width(), SIZE as f32 / sz.height());
-    resvg::render(&tree, t, &mut pm.as_mut());
-
-    // tiny-skia entrega RGBA premultiplicado; se revierte a recto para poder
-    // escalar el alfa (estado `Hidden`) sin manchar los bordes de color.
-    let mut data = pm.data().to_vec();
-    for px in data.chunks_exact_mut(4) {
-        let a = u16::from(px[3]);
-        if a > 0 {
-            let unmul = |c: u8| ((u16::from(c) * 255 + a / 2) / a).min(255) as u8;
-            px[0] = unmul(px[0]);
-            px[1] = unmul(px[1]);
-            px[2] = unmul(px[2]);
+    match crate::png_decode::decode_frames(ICON_PNG) {
+        Ok(mut frames) if frames.first().is_some_and(|f| f.w > 0 && f.w == f.h) => {
+            let f = frames.remove(0);
+            (f.rgba, f.w)
+        }
+        Ok(_) => {
+            eprintln!("bongocat: icono del tray: el PNG embebido no es cuadrado; sin icono");
+            (Vec::new(), 0)
+        }
+        Err(e) => {
+            eprintln!("bongocat: icono del tray: {e}; sin icono");
+            (Vec::new(), 0)
         }
     }
-    (data, SIZE)
 }
 
 /// Deriva de `base` (RGBA recto, `size²`) el icono ARGB32 (orden de red:
@@ -484,11 +479,23 @@ mod tests {
     #[test]
     fn embedded_icon_base_produce_un_cuadrado_no_vacio() {
         let (data, size) = embedded_icon_base();
-        assert_eq!(size, 24);
-        assert_eq!(data.len(), (24 * 24 * 4) as usize, "RGBA recto de 24×24");
+        assert!(size > 0, "el PNG embebido decodificó");
+        assert_eq!(
+            data.len(),
+            (size * size * 4) as usize,
+            "RGBA recto cuadrado"
+        );
+        // Algún píxel opaco (alfa=255): el fondo verde se quitó, pero el gato
+        // en sí sigue siendo opaco.
         assert!(
-            data.iter().any(|&b| b != 0),
-            "el gato pinta algo, no es todo cero"
+            data.chunks_exact(4).any(|p| p[3] == 255),
+            "el gato pinta algo opaco, no quedó todo transparente"
+        );
+        // Y algún píxel transparente (el chroma key funcionó: no es un
+        // cuadrado sólido).
+        assert!(
+            data.chunks_exact(4).any(|p| p[3] == 0),
+            "las esquinas deberían ser transparentes"
         );
     }
 
