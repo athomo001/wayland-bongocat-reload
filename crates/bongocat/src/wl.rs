@@ -567,7 +567,7 @@ pub fn run_overlay(
         TimeoutAction::ToInstant(state.next_wake(Instant::now()))
     })?;
 
-    eprintln!("bongocat: barra {width}x{height} anclada; Ctrl+C para salir");
+    eprintln!("bongocat: overlay a pantalla completa; Ctrl+C para salir");
     while !state.exit {
         event_loop.dispatch(Some(Duration::from_millis(500)), &mut state)?;
     }
