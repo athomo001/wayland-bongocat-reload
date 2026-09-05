@@ -132,6 +132,18 @@ impl eframe::App for App {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // Un vpet que se pasea solo no se "coloca" con estos campos:
+                    // se recoloca arrastrándolo, y sigue con su conducta.
+                    if self.section == Section::Position && self.model.roaming {
+                        ui.label(
+                            "Este vpet se mueve solo por la pantalla.\n\n\
+                             Para recolocarlo o cambiar su tamaño, abre la bandeja \
+                             del sistema → «Modo edición» y arrástralo con el ratón \
+                             (la rueda cambia el tamaño). Al soltarlo sigue haciendo \
+                             lo suyo: caminar, dormir, etc.",
+                        );
+                        return;
+                    }
                     for f in FIELDS.iter().filter(|f| f.section == self.section) {
                         field_row(ui, &mut self.model, &mut self.edits, f);
                     }

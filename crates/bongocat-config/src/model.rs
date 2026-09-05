@@ -45,6 +45,10 @@ pub struct Model {
     pub instance: Option<String>,
     /// Ruta del `.conf` (para "Guardar" sin instancia). `None` si no se resolvió.
     pub path: Option<PathBuf>,
+    /// El vpet activo se pasea solo por la pantalla (`can_roam` del `vpet.ini`).
+    /// La ventana esconde los campos de posición: se recoloca arrastrando
+    /// (bandeja → "Modo edición"). Solo se sabe con instancia viva.
+    pub roaming: bool,
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -61,6 +65,7 @@ impl Model {
                 cfg,
                 dirty: BTreeSet::new(),
                 source: Source::Instance,
+                roaming: instance_roaming(instance.as_deref()),
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -75,6 +80,7 @@ impl Model {
                 } else {
                     Source::Defaults
                 },
+                roaming: false,
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -83,6 +89,7 @@ impl Model {
                 cfg: Config::default(),
                 dirty: BTreeSet::new(),
                 source: Source::Defaults,
+                roaming: false,
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -160,6 +167,7 @@ impl Model {
         let fresh = Model::load(self.instance.as_deref());
         self.cfg = fresh.cfg;
         self.source = fresh.source;
+        self.roaming = fresh.roaming;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
@@ -209,6 +217,15 @@ impl Model {
     }
 }
 
+/// Lee `STATE` de la instancia y saca `roaming=1`. `false` si no responde.
+fn instance_roaming(instance: Option<&str>) -> bool {
+    ipc::send_request(instance, "STATE")
+        .ok()
+        .into_iter()
+        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .any(|kv| kv == "roaming=1")
+}
+
 /// Pide `DUMP` a la instancia y parsea la respuesta. `None` si no hay instancia
 /// o la respuesta no es una config.
 fn load_from_instance(instance: Option<&str>) -> Option<(Config, String)> {
@@ -230,6 +247,7 @@ mod tests {
             cfg: Config::default(),
             dirty: BTreeSet::new(),
             source: Source::Defaults,
+            roaming: false,
             instance: None,
             path: None,
             status: String::new(),

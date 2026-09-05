@@ -1456,7 +1456,7 @@ impl State {
             "PING" => "PONG".to_string(),
             "STATE" => format!(
                 "pid={} frame={} sheet={} hidden={} manual_hidden={} edit={} theme={} scale_120={} \
-                 fps={} width={} height={} cat_height={} cat_opacity={}",
+                 fps={} width={} height={} cat_height={} cat_opacity={} roaming={}",
                 std::process::id(),
                 self.frame,
                 match &self.frames.kind {
@@ -1484,6 +1484,9 @@ impl State {
                 self.height,
                 self.config.cat_height,
                 self.config.cat_opacity,
+                // ¿el vpet activo se pasea solo? La ventana de config oculta los
+                // campos de posición cuando es así (se recoloca arrastrando).
+                u8::from(self.theme.as_ref().is_some_and(|t| t.can_roam())),
             ),
             "SNAPSHOT" | "SCREENSHOT" => {
                 let path_str = if arg1.is_empty() {
@@ -1515,19 +1518,13 @@ impl State {
                         // (`cat_origin` prefiere el override del tema). Igual que
                         // al salir del modo edición (ver `edit_set`).
                         if let Some(t) = self.theme.as_mut() {
+                            // Un `SET` explícito gana al valor sugerido por el
+                            // `vpet.ini`, pero **no** cambia su conducta: un vpet
+                            // que se pasea sigue paseándose (el usuario lo
+                            // recoloca arrastrando, no con estos campos).
                             match arg1 {
-                                // Colocar el vpet a mano implica "quédate ahí":
-                                // se limpia el override y se detiene el paseo del
-                                // `vpet.ini` de esta sesión (un `RELOAD` lo
-                                // recupera).
-                                "cat_x_offset" => {
-                                    t.vpet.cat_x_offset = None;
-                                    t.vpet.can_roam = false;
-                                }
-                                "cat_y_offset" => {
-                                    t.vpet.cat_y_offset = None;
-                                    t.vpet.can_roam = false;
-                                }
+                                "cat_x_offset" => t.vpet.cat_x_offset = None,
+                                "cat_y_offset" => t.vpet.cat_y_offset = None,
                                 "cat_height" => t.vpet.cat_height = None,
                                 "cat_align" => t.vpet.cat_align = None,
                                 _ => {}
