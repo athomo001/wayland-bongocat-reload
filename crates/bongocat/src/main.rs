@@ -35,6 +35,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Args {
     config: Option<PathBuf>,
     monitor: Option<String>,
+    theme: Option<String>,
     watch_config: bool,
     toggle: bool,
     supervise: bool,
@@ -61,6 +62,7 @@ fn print_help(prog: &str) {
          \x20 -h, --help                 Muestra esta ayuda\n\
          \x20 -v, --version              Muestra la versión\n\
          \x20 -c, --config FICHERO       Ruta del bongocat.conf (auto-detecta si se omite)\n\
+         \x20 -T, --theme NOMBRE         Fuerza el tema a cargar (ej: gabumon, miku)\n\
          \x20 -w, --watch-config         Recarga al cambiar la configuración\n\
          \x20 -t, --toggle               Arranca / para\n\
          \x20 -S, --supervise            Relanza el overlay si sale con error\n\
@@ -93,6 +95,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 a.config = Some(PathBuf::from(
                     it.next().ok_or("--config necesita una ruta")?,
                 ));
+            }
+            "-T" | "--theme" => {
+                a.theme = Some(it.next().ok_or("--theme necesita un nombre")?.clone());
             }
             "-m" | "--monitor" => {
                 a.monitor = Some(it.next().ok_or("--monitor necesita un nombre")?.clone());
@@ -246,13 +251,16 @@ fn main() -> ExitCode {
     }
 
     // Carga de configuración (portada; sin escaneo de /dev/input por nombre).
-    let loaded = match io::load(args.config.as_deref()) {
+    let mut loaded = match io::load(args.config.as_deref()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("bongocat: no se pudo leer la configuración: {e}");
             return ExitCode::from(1);
         }
     };
+    if let Some(ref t) = args.theme {
+        loaded.config.theme = t.clone();
+    }
     for w in &loaded.warnings {
         eprintln!("bongocat: aviso: {w}");
     }
