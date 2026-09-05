@@ -975,6 +975,16 @@ impl State {
         }
     }
 
+    /// Empuja al tray si el modo edición está activo, para el `✓` del ítem
+    /// "Modo edición" — llamado desde el único sitio que cambia `edit.active`
+    /// ([`State::edit_set`]), así que cubre tanto el clic en el propio tray
+    /// como `EDIT on|off|toggle` por IPC/`bongocatctl`.
+    fn sync_tray_edit(&self) {
+        if let Some(handle) = &self.tray {
+            handle.set_edit_active(self.edit.active);
+        }
+    }
+
     /// Ejecuta un [`tray::TrayCommand`] (clic en el menú del icono, spec 0011).
     /// Cada rama reutiliza la misma lógica que el verbo IPC equivalente.
     fn apply_tray_command(&mut self, cmd: tray::TrayCommand) {
@@ -984,6 +994,13 @@ impl State {
                 self.manual_hidden = Some(!self.effective_hidden());
                 self.draw();
                 self.sync_tray_status();
+            }
+            // Igual que IPC `EDIT toggle`: al salir (persist=true) guarda la
+            // posición/tamaño si cambiaron. `edit_set` ya empuja el `✓` del
+            // menú (`sync_tray_edit`), así que no hace falta repetirlo aquí.
+            C::ToggleEdit => {
+                let on = !self.edit.active;
+                self.edit_set(on, !on);
             }
             // M1: re-rasteriza y redibuja. El teardown+rebuild completo de las
             // surfaces con reintentos es M2.
@@ -1086,6 +1103,7 @@ impl State {
             }
             self.layer.commit();
             self.draw(); // recoloca la región de entrada
+            self.sync_tray_edit();
             let r = bongocat_common::edit::cat_rect(
                 &self.config,
                 self.width as i32,

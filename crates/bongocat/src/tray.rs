@@ -23,7 +23,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use calloop::channel::Sender;
-use ksni::menu::{StandardItem, SubMenu};
+use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, TrayMethods};
 
 /// ¿Hay que arrancar el tray? `enable_tray` de la config, salvo `--no-tray`.
@@ -39,6 +39,9 @@ pub fn wanted(enable_tray: bool, no_tray_flag: bool) -> bool {
 pub enum TrayCommand {
     /// Mostrar / Ocultar (alterna visibilidad, sin cerrar).
     ToggleVisibility,
+    /// Entra / sale del modo edición (arrastra el gato con el ratón; la rueda
+    /// cambia el tamaño). Al salir persiste la posición/tamaño en el `.conf`.
+    ToggleEdit,
     /// Reconstruir las surfaces de overlay sin salir del proceso.
     RestartOverlays,
     /// Lanzar `bongocatctl` / la GUI.
@@ -61,6 +64,7 @@ impl TrayCommand {
     pub fn from_menu_id(id: &str) -> Option<Self> {
         Some(match id {
             "toggle" => Self::ToggleVisibility,
+            "edit" => Self::ToggleEdit,
             "restart" => Self::RestartOverlays,
             "configure" => Self::LaunchConfig,
             "reload" => Self::Reload,
@@ -164,6 +168,9 @@ enum ToTray {
     /// El tema activo cambió (clic en el propio tray, IPC `THEME`/`SET theme`,
     /// o recarga de config): re-marca el submenú "Tema" con el nuevo activo.
     SetActiveTheme(String),
+    /// El modo edición entró o salió (clic en el tray, o IPC `EDIT`): re-marca
+    /// el ítem "Modo edición".
+    SetEditActive(bool),
     Shutdown,
 }
 
@@ -180,6 +187,9 @@ struct SniTray {
     icon_base: Vec<u8>,
     icon_size: u32,
     status: TrayStatus,
+    /// Si el modo edición (spec 0005) está activo ahora mismo; marca el ítem
+    /// del menú con un `✓`.
+    edit_active: bool,
 }
 
 impl SniTray {
@@ -250,8 +260,16 @@ impl ksni::Tray for SniTray {
             })
             .collect();
 
+        let edit = MenuItem::Checkmark(CheckmarkItem {
+            label: "Modo edición (arrastra con el ratón)".into(),
+            checked: self.edit_active,
+            activate: Box::new(|t: &mut Self| t.send(TrayCommand::ToggleEdit)),
+            ..Default::default()
+        });
+
         vec![
             item("Mostrar / Ocultar", TrayCommand::ToggleVisibility),
+            edit,
             item("Reiniciar overlay", TrayCommand::RestartOverlays),
             item("Recargar configuración", TrayCommand::Reload),
             item("Configurar…", TrayCommand::LaunchConfig),
@@ -289,6 +307,11 @@ impl TrayHandle {
     /// ninguno marcado). No bloqueante.
     pub fn set_active_theme(&self, name: String) {
         let _ = self.to_tray.send(ToTray::SetActiveTheme(name));
+    }
+
+    /// Re-marca el ítem "Modo edición" (`✓` si `active`). No bloqueante.
+    pub fn set_edit_active(&self, active: bool) {
+        let _ = self.to_tray.send(ToTray::SetEditActive(active));
     }
 }
 
@@ -334,6 +357,7 @@ fn run(
         icon_base,
         icon_size,
         status: TrayStatus::Normal,
+        edit_active: false,
     };
     // `ksni` con `async-io` gestiona su propio hilo ejecutor; aquí solo hay que
     // llevar el futuro de `spawn()` a término, mantener vivo el `Handle` y
@@ -358,6 +382,9 @@ fn run(
                 Ok(ToTray::SetActiveTheme(name)) => {
                     handle.update(|t| t.active_theme = name).await;
                 }
+                Ok(ToTray::SetEditActive(active)) => {
+                    handle.update(|t| t.edit_active = active).await;
+                }
                 Ok(ToTray::Shutdown) | Err(_) => break,
             }
         }
@@ -373,21 +400,29 @@ pub fn launch_config() {
     if Command::new("bongocat-config").spawn().is_ok() {
         return;
     }
-    for term in [
-        "x-terminal-emulator",
-        "foot",
-        "kitty",
-        "alacritty",
-        "wezterm",
-        "konsole",
-        "gnome-terminal",
-    ] {
-        if Command::new(term)
-            .arg("-e")
-            .arg("bongocatctl")
-            .spawn()
-            .is_ok()
-        {
+    // `-e` no es universal (p. ej. `cosmic-term` no lo soporta en absoluto:
+    // `spawn()` igualmente tendría éxito y abriría un terminal vacío sin
+    // avisar de nada). Cada terminal conocido, con la forma que de verdad
+    // entiende para arrancar ya con `bongocatctl`.
+    let with_cmd: &[(&str, &[&str])] = &[
+        ("alacritty", &["-e", "bongocatctl"]),
+        ("kitty", &["bongocatctl"]),
+        ("foot", &["bongocatctl"]),
+        ("konsole", &["-e", "bongocatctl"]),
+        ("xterm", &["-e", "bongocatctl"]),
+        ("gnome-terminal", &["--", "bongocatctl"]),
+        ("wezterm", &["start", "--", "bongocatctl"]),
+    ];
+    for (term, args) in with_cmd {
+        if Command::new(term).args(*args).spawn().is_ok() {
+            return;
+        }
+    }
+    // `cosmic-term` (y el alias `x-terminal-emulator`, que en muchos sistemas
+    // COSMIC apunta ahí) no acepta un comando por línea de órdenes: se abre a
+    // secas y el usuario teclea `bongocatctl` él mismo.
+    for term in ["cosmic-term", "x-terminal-emulator"] {
+        if Command::new(term).spawn().is_ok() {
             return;
         }
     }
@@ -512,6 +547,10 @@ mod tests {
         assert_eq!(
             TrayCommand::from_menu_id("toggle"),
             Some(TrayCommand::ToggleVisibility)
+        );
+        assert_eq!(
+            TrayCommand::from_menu_id("edit"),
+            Some(TrayCommand::ToggleEdit)
         );
         assert_eq!(TrayCommand::from_menu_id("quit"), Some(TrayCommand::Quit));
         assert_eq!(
