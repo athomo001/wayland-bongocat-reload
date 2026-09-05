@@ -140,6 +140,31 @@ impl Model {
         Ok(())
     }
 
+    /// Descarta los cambios sin guardar: con instancia → le pide `RELOAD`
+    /// (relee su `.conf`, deshaciendo los `SET`) y vuelve a cargar; sin
+    /// instancia → recarga del fichero.
+    pub fn reset(&mut self) {
+        if self.source.connected() {
+            match ipc::send_request(self.instance.as_deref(), "RELOAD") {
+                Ok(r) if r.starts_with("ERR") => {
+                    self.status = "no hay un bongocat.conf que releer".to_owned();
+                    return;
+                }
+                Err(e) => {
+                    self.status = format!("no respondió la instancia: {e}");
+                    return;
+                }
+                Ok(_) => {}
+            }
+        }
+        let fresh = Model::load(self.instance.as_deref());
+        self.cfg = fresh.cfg;
+        self.source = fresh.source;
+        self.path = fresh.path;
+        self.dirty.clear();
+        self.status = "restablecido".to_owned();
+    }
+
     /// Persiste los cambios: con instancia → `SAVE`; sin instancia → reescribe el
     /// `.conf` **conservando comentarios** (`ConfDoc`), o lo crea si no existía.
     ///

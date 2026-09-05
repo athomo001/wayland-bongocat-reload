@@ -173,22 +173,26 @@ pub const FIELDS: &[FieldMeta] = &[
         2,
         "Alto del personaje en píxeles; el ancho sale de la relación de aspecto del tema.",
     ),
+    // Rango del deslizador (no lo acota `config::validate`): pensado para
+    // pantallas de hasta ~2560 px. El vpet **siempre** queda ≥24 px dentro
+    // (`cat_origin`), así que un extremo solo lo pega a un borde. El "mapa de
+    // pantalla" (0007 M4) será la forma cómoda de colocarlo.
     int(
         "cat_x_offset",
         "Desfase horizontal",
         Section::Position,
-        -4000,
-        4000,
-        1,
+        -2560,
+        2560,
+        5,
         "Corrimiento X respecto a la alineación. Se arrastra también con el modo edición.",
     ),
     int(
         "cat_y_offset",
         "Desfase vertical",
         Section::Position,
-        -4000,
-        4000,
-        1,
+        -1600,
+        1600,
+        5,
         "Corrimiento Y. El overlay ocupa toda la pantalla, así que llega a cualquier altura.",
     ),
     FieldMeta {

@@ -1509,6 +1509,30 @@ impl State {
                 let old = self.config.clone();
                 match bongocat_common::config::set_live(&mut self.config, arg1, arg2) {
                     Ok(warnings) => {
+                        // Un `SET` explícito de posición/tamaño/alineación gana
+                        // sobre el `vpet.ini` del tema: si no, los deslizadores de
+                        // la ventana no harían nada con un tema de sprite sheet
+                        // (`cat_origin` prefiere el override del tema). Igual que
+                        // al salir del modo edición (ver `edit_set`).
+                        if let Some(t) = self.theme.as_mut() {
+                            match arg1 {
+                                // Colocar el vpet a mano implica "quédate ahí":
+                                // se limpia el override y se detiene el paseo del
+                                // `vpet.ini` de esta sesión (un `RELOAD` lo
+                                // recupera).
+                                "cat_x_offset" => {
+                                    t.vpet.cat_x_offset = None;
+                                    t.vpet.can_roam = false;
+                                }
+                                "cat_y_offset" => {
+                                    t.vpet.cat_y_offset = None;
+                                    t.vpet.can_roam = false;
+                                }
+                                "cat_height" => t.vpet.cat_height = None,
+                                "cat_align" => t.vpet.cat_align = None,
+                                _ => {}
+                            }
+                        }
                         self.apply_config_diff(&old);
                         self.ipc_dirty.insert(arg1.to_string());
                         if warnings.is_empty() {

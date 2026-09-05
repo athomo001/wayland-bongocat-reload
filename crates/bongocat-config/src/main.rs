@@ -6,14 +6,16 @@
 //!
 //! **M3 (esta versión):** cada campo de `field_meta` se renderiza según su
 //! `FieldKind` y se aplica **en vivo** por IPC `SET`; botones Guardar /
-//! Restablecer; aviso cuando no hay instancia. El mapa de pantalla y la galería
-//! de temas llegan en M4.
+//! Restablecer; se cierra sola si la instancia que la abrió desaparece. El mapa
+//! de pantalla y la galería de temas llegan en M4.
 
 mod model;
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use bongocat_common::field_meta::{FieldKind, FieldMeta, Section, FIELDS};
+use bongocat_common::ipc;
 use model::{Model, Source};
 
 /// Secciones en el orden en que se muestran en la navegación lateral.
@@ -26,6 +28,10 @@ const SECTIONS: [Section; 6] = [
     Section::Advanced,
 ];
 
+/// Cada cuánto se comprueba que la instancia sigue viva. Si desaparece, el
+/// socket se borra y `connect` falla al instante, así que el cierre es rápido.
+const PING_EVERY: Duration = Duration::from_millis(1000);
+
 fn main() -> eframe::Result {
     // `--instance <NOMBRE>` preselecciona la instancia de esa salida.
     let instance = std::env::args()
@@ -36,8 +42,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("bongocat · Configurar")
-            .with_inner_size([780.0, 560.0])
-            .with_min_inner_size([560.0, 400.0]),
+            .with_inner_size([880.0, 620.0])
+            .with_min_inner_size([640.0, 440.0]),
         ..Default::default()
     };
 
@@ -56,22 +62,55 @@ struct App {
     /// Búferes de los campos de texto/hora/lista: se aplican al perder el foco,
     /// no en cada tecla. Se vacían al recargar.
     edits: HashMap<&'static str, String>,
+    /// La ventana la abrió una instancia viva: si esa instancia desaparece
+    /// (p. ej. "Cerrar" del tray), la ventana se cierra también.
+    tied_to_instance: bool,
+    last_ping: Instant,
+    ping_fails: u8,
 }
 
 impl App {
     fn new(instance: String) -> Self {
         let model = Model::load(opt(&instance));
+        let tied_to_instance = model.source == Source::Instance;
         Self {
             model,
             section: Section::Position,
             instance,
             edits: HashMap::new(),
+            tied_to_instance,
+            last_ping: Instant::now(),
+            ping_fails: 0,
         }
     }
 
     fn reload(&mut self) {
         self.model = Model::load(opt(&self.instance));
+        self.tied_to_instance = self.model.source == Source::Instance;
+        self.ping_fails = 0;
         self.edits.clear();
+    }
+
+    /// Si la ventana está atada a una instancia, comprueba que sigue respondiendo;
+    /// tras 2 fallos seguidos, cierra la ventana.
+    fn watch_instance(&mut self, ctx: &egui::Context) {
+        if !self.tied_to_instance {
+            return;
+        }
+        ctx.request_repaint_after(PING_EVERY);
+        if self.last_ping.elapsed() < PING_EVERY {
+            return;
+        }
+        self.last_ping = Instant::now();
+        match ipc::send_request(opt(&self.instance), "PING") {
+            Ok(r) if r.trim() == "PONG" => self.ping_fails = 0,
+            _ => {
+                self.ping_fails = self.ping_fails.saturating_add(1);
+                if self.ping_fails >= 2 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
     }
 }
 
@@ -82,25 +121,21 @@ fn opt(s: &str) -> Option<&str> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.watch_instance(ctx);
         self.top_bar(ctx);
         self.side_nav(ctx);
         self.bottom_bar(ctx);
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.heading(self.section.label_es());
-            ui.add_space(8.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("campos")
-                    .num_columns(2)
-                    .spacing([18.0, 12.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for f in FIELDS.iter().filter(|f| f.section == self.section) {
-                            label_cell(ui, f);
-                            field_widget(ui, &mut self.model, &mut self.edits, f);
-                            ui.end_row();
-                        }
-                    });
-            });
+            ui.add_space(10.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for f in FIELDS.iter().filter(|f| f.section == self.section) {
+                        field_row(ui, &mut self.model, &mut self.edits, f);
+                    }
+                });
         });
     }
 }
@@ -108,7 +143,7 @@ impl eframe::App for App {
 impl App {
     fn top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("cabecera").show(ctx, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.heading("Configurar bongocat");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -135,36 +170,37 @@ impl App {
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.instance)
                         .hint_text("(por defecto)")
-                        .desired_width(140.0),
+                        .desired_width(160.0),
                 );
                 if ui.button("Conectar").clicked() || (resp.lost_focus() && enter(ui)) {
                     self.reload();
                 }
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
         });
     }
 
     fn side_nav(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("navegacion")
             .resizable(false)
-            .exact_width(160.0)
+            .exact_width(190.0)
             .show(ctx, |ui| {
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 for s in SECTIONS {
                     ui.selectable_value(&mut self.section, s, s.label_es());
+                    ui.add_space(2.0);
                 }
             });
     }
 
     fn bottom_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("acciones").show(ctx, |ui| {
-            ui.add_space(3.0);
+            ui.add_space(5.0);
             ui.horizontal(|ui| {
                 if !self.model.status.is_empty() {
-                    ui.small(&self.model.status);
+                    ui.label(&self.model.status);
                 } else if self.model.is_dirty() {
-                    ui.small("cambios sin guardar");
+                    ui.label("cambios sin guardar");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dirty = self.model.is_dirty();
@@ -172,32 +208,23 @@ impl App {
                         .add_enabled(dirty, egui::Button::new("Guardar"))
                         .clicked()
                     {
-                        match self.model.save() {
-                            Ok(()) => {}
-                            Err(e) => self.model.status = e,
+                        if let Err(e) = self.model.save() {
+                            self.model.status = e;
                         }
                     }
                     if ui
                         .add_enabled(dirty, egui::Button::new("Restablecer"))
+                        .on_hover_text("Deshace los cambios sin guardar (relee el bongocat.conf)")
                         .clicked()
                     {
-                        self.reload();
+                        self.model.reset();
+                        self.edits.clear();
                     }
                 });
             });
-            ui.add_space(3.0);
+            ui.add_space(5.0);
         });
     }
-}
-
-/// Celda de la izquierda: etiqueta + clave + tooltip de ayuda.
-fn label_cell(ui: &mut egui::Ui, f: &FieldMeta) {
-    ui.vertical(|ui| {
-        ui.strong(f.label_es);
-        ui.weak(egui::RichText::new(f.key).monospace().small());
-    })
-    .response
-    .on_hover_text(f.help_es);
 }
 
 /// ¿Se acaba de pulsar Enter en este `ui`?
@@ -212,6 +239,25 @@ fn rescale(v: i32, a0: i32, a1: i32, b0: i32, b1: i32) -> i32 {
     }
     let t = f64::from(v - a0) / f64::from(a1 - a0);
     (f64::from(b0) + t * f64::from(b1 - b0)).round() as i32
+}
+
+/// Una fila de campo: etiqueta (negrita) + clave (gris), y debajo el widget.
+fn field_row(
+    ui: &mut egui::Ui,
+    model: &mut Model,
+    edits: &mut HashMap<&'static str, String>,
+    f: &FieldMeta,
+) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.strong(f.label_es);
+        ui.weak(egui::RichText::new(f.key).monospace().small());
+    });
+    ui.label(egui::RichText::new(f.help_es).small().weak());
+    ui.add_space(2.0);
+    field_widget(ui, model, edits, f);
+    ui.add_space(6.0);
+    ui.separator();
 }
 
 /// Renderiza el widget de un campo según su `FieldKind` y aplica el cambio en
@@ -274,7 +320,7 @@ fn field_widget(
         }
         FieldKind::Bool => {
             let mut b = model.value(f.key).is_some_and(|s| s == "1");
-            if ui.checkbox(&mut b, "").changed() {
+            if ui.checkbox(&mut b, "activado").changed() {
                 if let Err(e) = model.set(f.key, if b { "1" } else { "0" }) {
                     model.status = e;
                 }
@@ -314,20 +360,22 @@ fn field_widget(
                 let resp = ui.add(
                     egui::TextEdit::singleline(buf)
                         .hint_text(hint)
-                        .desired_width(200.0),
+                        .desired_width(240.0),
                 );
                 if resp.lost_focus() {
                     let v = buf.clone();
-                    match model.set(f.key, &v) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            model.status = e;
-                            *buf = model.value(f.key).unwrap_or_default();
-                        }
+                    if let Err(e) = model.set(f.key, &v) {
+                        model.status = e;
+                        *buf = model.value(f.key).unwrap_or_default();
                     }
                 }
             } else {
-                ui.add_enabled(false, egui::TextEdit::singleline(buf).desired_width(200.0));
+                ui.add_enabled(false, egui::TextEdit::singleline(buf).desired_width(240.0));
+                ui.label(
+                    egui::RichText::new("se edita en el bongocat.conf")
+                        .small()
+                        .weak(),
+                );
             }
         }
     }
