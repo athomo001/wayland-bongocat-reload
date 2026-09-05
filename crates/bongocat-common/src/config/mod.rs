@@ -148,9 +148,9 @@ pub struct Config {
     pub enable_debug: bool,
     /// Socket de control IPC (spec 0003). Por defecto activo; `0` lo desactiva.
     pub enable_ipc: bool,
-    /// Icono de bandeja (spec 0011). Por defecto activo; `--no-tray` lo fuerza a
-    /// 0 para esa ejecución. (El frontend SNI es una rebanada pendiente; hoy
-    /// solo se parsea y se refleja en `--dry-run`.)
+    /// Icono de bandeja (spec 0011, `ksni`+`async-io`). Por defecto activo;
+    /// `--no-tray` lo fuerza a 0 para esa ejecución. Sin host SNI en el
+    /// escritorio, no molesta (aviso por stderr).
     pub enable_tray: bool,
 }
 

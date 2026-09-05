@@ -42,7 +42,9 @@ resvg = { version = "0.44", default-features = false }
 # `image`; se pospone a M3 (APNG/GIF), donde sí aportaría algo.
 png = "0.17"
 
-# Lectura de /dev/input/event*. TODO(0013): mover a proceso aislado + seccomp.
+# Lectura de /dev/input/event*. El proceso aislado + seccomp (spec 0013) ya
+# está: ver `input.rs` (descubrimiento, en el proceso de confianza) e
+# `input_child.rs` (lectura real, en el hijo con seccomp).
 evdev = "0.12"
 
 # Fichero PID (flock), señales, y SO_PEERCRED del socket IPC — sin `unsafe`.
