@@ -4,13 +4,16 @@
 //! Toolkit: `egui`/`eframe` — se dibuja a sí misma, así que se ve igual en
 //! GNOME, KDE, COSMIC, Sway/Hyprland… sin librerías de toolkit del sistema.
 //!
-//! **M2 (esta versión):** andamiaje — abre la ventana, navega las secciones de
-//! `field_meta`, y carga el modelo desde la instancia viva (IPC `DUMP`) o del
-//! fichero. La edición campo a campo llega en M3.
+//! **M3 (esta versión):** cada campo de `field_meta` se renderiza según su
+//! `FieldKind` y se aplica **en vivo** por IPC `SET`; botones Guardar /
+//! Restablecer; aviso cuando no hay instancia. El mapa de pantalla y la galería
+//! de temas llegan en M4.
 
 mod model;
 
-use bongocat_common::field_meta::{Section, FIELDS};
+use std::collections::HashMap;
+
+use bongocat_common::field_meta::{FieldKind, FieldMeta, Section, FIELDS};
 use model::{Model, Source};
 
 /// Secciones en el orden en que se muestran en la navegación lateral.
@@ -33,8 +36,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("bongocat · Configurar")
-            .with_inner_size([760.0, 540.0])
-            .with_min_inner_size([520.0, 380.0]),
+            .with_inner_size([780.0, 560.0])
+            .with_min_inner_size([560.0, 400.0]),
         ..Default::default()
     };
 
@@ -50,29 +53,60 @@ struct App {
     section: Section,
     /// Instancia elegida (vacío = la por defecto). Editable en la barra superior.
     instance: String,
+    /// Búferes de los campos de texto/hora/lista: se aplican al perder el foco,
+    /// no en cada tecla. Se vacían al recargar.
+    edits: HashMap<&'static str, String>,
 }
 
 impl App {
     fn new(instance: String) -> Self {
-        let model = Model::load(App::instance_opt(&instance));
+        let model = Model::load(opt(&instance));
         Self {
             model,
             section: Section::Position,
             instance,
+            edits: HashMap::new(),
         }
     }
 
-    fn instance_opt(instance: &str) -> Option<&str> {
-        Some(instance.trim()).filter(|s| !s.is_empty())
-    }
-
     fn reload(&mut self) {
-        self.model = Model::load(App::instance_opt(&self.instance));
+        self.model = Model::load(opt(&self.instance));
+        self.edits.clear();
     }
+}
+
+/// `""` → `None`; texto → `Some(recortado)`.
+fn opt(s: &str) -> Option<&str> {
+    Some(s.trim()).filter(|s| !s.is_empty())
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.top_bar(ctx);
+        self.side_nav(ctx);
+        self.bottom_bar(ctx);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading(self.section.label_es());
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("campos")
+                    .num_columns(2)
+                    .spacing([18.0, 12.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for f in FIELDS.iter().filter(|f| f.section == self.section) {
+                            label_cell(ui, f);
+                            field_widget(ui, &mut self.model, &mut self.edits, f);
+                            ui.end_row();
+                        }
+                    });
+            });
+        });
+    }
+}
+
+impl App {
+    fn top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("cabecera").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -81,7 +115,7 @@ impl eframe::App for App {
                     let (color, texto) = match self.model.source {
                         Source::Instance => (
                             egui::Color32::from_rgb(0x3f, 0xb9, 0x50),
-                            "conectado a la instancia",
+                            "conectado — se aplica en vivo",
                         ),
                         Source::File => (
                             egui::Color32::from_rgb(0xd6, 0x9e, 0x2e),
@@ -96,9 +130,22 @@ impl eframe::App for App {
                     ui.label(texto);
                 });
             });
+            ui.horizontal(|ui| {
+                ui.label("Instancia:");
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.instance)
+                        .hint_text("(por defecto)")
+                        .desired_width(140.0),
+                );
+                if ui.button("Conectar").clicked() || (resp.lost_focus() && enter(ui)) {
+                    self.reload();
+                }
+            });
             ui.add_space(4.0);
         });
+    }
 
+    fn side_nav(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("navegacion")
             .resizable(false)
             .exact_width(160.0)
@@ -107,57 +154,181 @@ impl eframe::App for App {
                 for s in SECTIONS {
                     ui.selectable_value(&mut self.section, s, s.label_es());
                 }
-                ui.separator();
-                if ui.button("Recargar").clicked() {
-                    self.reload();
+            });
+    }
+
+    fn bottom_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::bottom("acciones").show(ctx, |ui| {
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                if !self.model.status.is_empty() {
+                    ui.small(&self.model.status);
+                } else if self.model.is_dirty() {
+                    ui.small("cambios sin guardar");
                 }
-            });
-
-        egui::TopBottomPanel::bottom("estado").show(ctx, |ui| {
-            ui.add_space(2.0);
-            let mut line = String::new();
-            if self.model.is_dirty() {
-                line.push_str("cambios sin guardar · ");
-            }
-            if self.model.status.is_empty() {
-                line.push_str("M3 añadirá la edición campo a campo y el botón Guardar");
-            } else {
-                line.push_str(&format!("avisos: {}", self.model.status));
-            }
-            ui.small(line);
-            ui.add_space(2.0);
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(self.section.label_es());
-            ui.add_space(8.0);
-            let fuente = if self.model.source.connected() {
-                "valores en vivo de la instancia"
-            } else {
-                "valores del fichero de configuración"
-            };
-            ui.label(format!(
-                "Campos de esta sección · {fuente} · solo lectura (M2):"
-            ));
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("campos")
-                    .num_columns(2)
-                    .spacing([16.0, 10.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for f in FIELDS.iter().filter(|f| f.section == self.section) {
-                            ui.vertical(|ui| {
-                                ui.strong(f.label_es);
-                                ui.weak(egui::RichText::new(f.key).monospace().small());
-                            });
-                            let val = self.model.value(f.key).unwrap_or_else(|| "—".into());
-                            ui.label(egui::RichText::new(val).monospace())
-                                .on_hover_text(f.help_es);
-                            ui.end_row();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let dirty = self.model.is_dirty();
+                    if ui
+                        .add_enabled(dirty, egui::Button::new("Guardar"))
+                        .clicked()
+                    {
+                        match self.model.save() {
+                            Ok(()) => {}
+                            Err(e) => self.model.status = e,
                         }
-                    });
+                    }
+                    if ui
+                        .add_enabled(dirty, egui::Button::new("Restablecer"))
+                        .clicked()
+                    {
+                        self.reload();
+                    }
+                });
             });
+            ui.add_space(3.0);
         });
+    }
+}
+
+/// Celda de la izquierda: etiqueta + clave + tooltip de ayuda.
+fn label_cell(ui: &mut egui::Ui, f: &FieldMeta) {
+    ui.vertical(|ui| {
+        ui.strong(f.label_es);
+        ui.weak(egui::RichText::new(f.key).monospace().small());
+    })
+    .response
+    .on_hover_text(f.help_es);
+}
+
+/// ¿Se acaba de pulsar Enter en este `ui`?
+fn enter(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// Reescala `v` de `[a0,a1]` a `[b0,b1]` (redondeo al entero más cercano).
+fn rescale(v: i32, a0: i32, a1: i32, b0: i32, b1: i32) -> i32 {
+    if a1 == a0 {
+        return b0;
+    }
+    let t = f64::from(v - a0) / f64::from(a1 - a0);
+    (f64::from(b0) + t * f64::from(b1 - b0)).round() as i32
+}
+
+/// Renderiza el widget de un campo según su `FieldKind` y aplica el cambio en
+/// caliente (`Model::set`).
+fn field_widget(
+    ui: &mut egui::Ui,
+    model: &mut Model,
+    edits: &mut HashMap<&'static str, String>,
+    f: &FieldMeta,
+) {
+    match f.kind {
+        FieldKind::Int {
+            min,
+            max,
+            step,
+            unit,
+        } => {
+            let mut v: i32 = model
+                .value(f.key)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(min)
+                .clamp(min, max);
+            let mut slider = egui::Slider::new(&mut v, min..=max);
+            if step > 1 {
+                slider = slider.step_by(f64::from(step));
+            }
+            if !unit.is_empty() {
+                slider = slider.suffix(unit);
+            }
+            if ui.add(slider).changed() {
+                if let Err(e) = model.set(f.key, &v.to_string()) {
+                    model.status = e;
+                }
+            }
+        }
+        FieldKind::IntScaled {
+            store_min,
+            store_max,
+            ui_min,
+            ui_max,
+            step,
+            unit,
+        } => {
+            let stored: i32 = model
+                .value(f.key)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(store_min)
+                .clamp(store_min, store_max);
+            let mut shown = rescale(stored, store_min, store_max, ui_min, ui_max);
+            let mut slider = egui::Slider::new(&mut shown, ui_min..=ui_max).suffix(unit);
+            if step > 1 {
+                slider = slider.step_by(f64::from(step));
+            }
+            if ui.add(slider).changed() {
+                let store = rescale(shown, ui_min, ui_max, store_min, store_max);
+                if let Err(e) = model.set(f.key, &store.to_string()) {
+                    model.status = e;
+                }
+            }
+        }
+        FieldKind::Bool => {
+            let mut b = model.value(f.key).is_some_and(|s| s == "1");
+            if ui.checkbox(&mut b, "").changed() {
+                if let Err(e) = model.set(f.key, if b { "1" } else { "0" }) {
+                    model.status = e;
+                }
+            }
+        }
+        FieldKind::Enum(opts) => {
+            let current = model.value(f.key).unwrap_or_default();
+            let mut sel = current.clone();
+            egui::ComboBox::from_id_salt(f.key)
+                .selected_text(&sel)
+                .show_ui(ui, |ui| {
+                    for o in opts {
+                        ui.selectable_value(&mut sel, (*o).to_owned(), *o);
+                    }
+                });
+            if sel != current {
+                if let Err(e) = model.set(f.key, &sel) {
+                    model.status = e;
+                }
+            }
+        }
+        FieldKind::Time | FieldKind::Text | FieldKind::List => {
+            // `monitor` es una lista editable (coma); `*_device` / `*_name` son
+            // repetibles y de solo lectura aquí (se editan en el .conf).
+            let editable =
+                matches!(f.kind, FieldKind::Text | FieldKind::Time) || f.key == "monitor";
+            let buf = edits
+                .entry(f.key)
+                .or_insert_with(|| model.value(f.key).unwrap_or_default());
+
+            if editable {
+                let hint = match f.kind {
+                    FieldKind::Time => "HH:MM",
+                    FieldKind::List => "eDP-1, HDMI-A-1",
+                    _ => "",
+                };
+                let resp = ui.add(
+                    egui::TextEdit::singleline(buf)
+                        .hint_text(hint)
+                        .desired_width(200.0),
+                );
+                if resp.lost_focus() {
+                    let v = buf.clone();
+                    match model.set(f.key, &v) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            model.status = e;
+                            *buf = model.value(f.key).unwrap_or_default();
+                        }
+                    }
+                }
+            } else {
+                ui.add_enabled(false, egui::TextEdit::singleline(buf).desired_width(200.0));
+            }
+        }
     }
 }
