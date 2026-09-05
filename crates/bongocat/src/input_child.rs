@@ -23,12 +23,11 @@
 use std::io::Read;
 use std::os::fd::RawFd;
 use std::thread;
-use std::time::Instant;
 
 use bongocat_common::config::MousePaw;
-use bongocat_common::mouse::{mouse_motion_tick, mouse_paw_bit};
+use bongocat_common::mouse::mouse_paw_bit;
 use bongocat_common::paw::paw_for_keycode;
-use evdev::{Device, EventType, RelativeAxisType};
+use evdev::{AbsoluteAxisType, Device, EventType, Key, RelativeAxisType};
 
 /// Punto de entrada del hijo. No regresa: termina con `_exit`.
 ///
@@ -129,10 +128,10 @@ fn keyboard_thread(mut dev: Device, path: &str, write_fd: RawFd) {
     }
 }
 
-/// Bucle de ratón (spec 0012). Botón o rueda → golpecito inmediato; movimiento →
-/// **un** golpecito cada `move_interval_ms` mientras haya desplazamiento. Nunca
-/// registra los deltas: solo "hubo actividad" → 1 bit.
-fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, interval_ms: u64) {
+/// Bucle de ratón / touchpad. Botones y rueda → golpecito; movimiento relativo o
+/// absoluto del touchpad → actualiza la dirección de mirada (gaze) para que los
+/// ojos sigan el cursor.
+fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, _interval_ms: u64) {
     // PRNG diminuto para `MousePaw::Random` (no hace falta entropía real).
     let mut rng: u64 = u64::from(std::process::id()) ^ 0x9E37_79B9_7F4A_7C15;
     let mut coin = || {
@@ -142,8 +141,12 @@ fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, int
         rng & 1 == 1
     };
 
-    let mut accum: i64 = 0;
-    let mut last_tap = Instant::now();
+    let mut gaze_x: i64 = 0;
+    let mut gaze_y: i64 = 0;
+    let mut last_gaze = bongocat_common::mouse::GazeDirection::Center;
+    let mut prev_abs_x: Option<i64> = None;
+    let mut prev_abs_y: Option<i64> = None;
+
     loop {
         let batch = match dev.fetch_events() {
             Ok(b) => b,
@@ -153,17 +156,54 @@ fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, int
             }
         };
         let mut tap_now = false;
+        let mut moved = false;
+
         for ev in batch {
             match ev.event_type() {
-                EventType::KEY if ev.value() == 1 => tap_now = true, // botón del ratón
+                EventType::KEY => {
+                    if ev.value() == 1 {
+                        tap_now = true;
+                    } else if ev.code() == Key::BTN_TOUCH.0 && ev.value() == 0 {
+                        prev_abs_x = None;
+                        prev_abs_y = None;
+                    }
+                }
                 EventType::RELATIVE => match RelativeAxisType(ev.code()) {
                     RelativeAxisType::REL_WHEEL | RelativeAxisType::REL_HWHEEL
                         if ev.value() != 0 =>
                     {
                         tap_now = true;
                     }
-                    RelativeAxisType::REL_X | RelativeAxisType::REL_Y => {
-                        accum += i64::from(ev.value()).abs();
+                    RelativeAxisType::REL_X => {
+                        let v = i64::from(ev.value());
+                        gaze_x = (gaze_x * 4 / 5 + v).clamp(-120, 120);
+                        moved = true;
+                    }
+                    RelativeAxisType::REL_Y => {
+                        let v = i64::from(ev.value());
+                        gaze_y = (gaze_y * 4 / 5 + v).clamp(-120, 120);
+                        moved = true;
+                    }
+                    _ => {}
+                },
+                EventType::ABSOLUTE => match AbsoluteAxisType(ev.code()) {
+                    AbsoluteAxisType::ABS_X | AbsoluteAxisType::ABS_MT_POSITION_X => {
+                        let curr = i64::from(ev.value());
+                        if let Some(prev) = prev_abs_x {
+                            let delta = (curr - prev).clamp(-40, 40);
+                            gaze_x = (gaze_x * 4 / 5 + delta).clamp(-120, 120);
+                            moved = true;
+                        }
+                        prev_abs_x = Some(curr);
+                    }
+                    AbsoluteAxisType::ABS_Y | AbsoluteAxisType::ABS_MT_POSITION_Y => {
+                        let curr = i64::from(ev.value());
+                        if let Some(prev) = prev_abs_y {
+                            let delta = (curr - prev).clamp(-40, 40);
+                            gaze_y = (gaze_y * 4 / 5 + delta).clamp(-120, 120);
+                            moved = true;
+                        }
+                        prev_abs_y = Some(curr);
                     }
                     _ => {}
                 },
@@ -171,16 +211,16 @@ fn mouse_thread(mut dev: Device, path: &str, write_fd: RawFd, paw: MousePaw, int
             }
         }
 
-        if !tap_now && mouse_motion_tick(accum, last_tap.elapsed().as_millis() as u64, interval_ms)
-        {
-            tap_now = true;
-        }
-        if tap_now {
-            accum = 0;
-            last_tap = Instant::now();
-            if !send_bit(write_fd, mouse_paw_bit(paw, coin())) {
+        let new_gaze = bongocat_common::mouse::gaze_direction_from_delta(gaze_x, gaze_y, 10);
+        if new_gaze != last_gaze || moved {
+            last_gaze = new_gaze;
+            if !send_bit(write_fd, bongocat_common::mouse::gaze_to_byte(new_gaze)) {
                 return;
             }
+        }
+
+        if tap_now && !send_bit(write_fd, mouse_paw_bit(paw, coin())) {
+            return;
         }
     }
 }

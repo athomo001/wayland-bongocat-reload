@@ -46,6 +46,55 @@ pub struct LoadedTheme {
 }
 
 impl LoadedTheme {
+    pub fn cat_height(&self) -> Option<u32> {
+        match &self.art {
+            ThemeArt::Svg(_) => self.meta.default_cat_height,
+            ThemeArt::Sheet(s) => s.sheet.default_cat_height.or(self.meta.default_cat_height),
+        }
+    }
+
+    pub fn cat_align(&self) -> Option<bongocat_common::config::Align> {
+        match &self.art {
+            ThemeArt::Svg(_) => self.meta.default_cat_align,
+            ThemeArt::Sheet(s) => s.sheet.default_cat_align.or(self.meta.default_cat_align),
+        }
+    }
+
+    pub fn cat_x_offset(&self) -> Option<i32> {
+        match &self.art {
+            ThemeArt::Svg(_) => self.meta.default_cat_x_offset,
+            ThemeArt::Sheet(s) => s
+                .sheet
+                .default_cat_x_offset
+                .or(self.meta.default_cat_x_offset),
+        }
+    }
+
+    pub fn cat_y_offset(&self) -> Option<i32> {
+        match &self.art {
+            ThemeArt::Svg(_) => self.meta.default_cat_y_offset,
+            ThemeArt::Sheet(s) => s
+                .sheet
+                .default_cat_y_offset
+                .or(self.meta.default_cat_y_offset),
+        }
+    }
+
+    pub fn can_roam(&self) -> bool {
+        match &self.art {
+            ThemeArt::Svg(_) => self.meta.can_roam,
+            ThemeArt::Sheet(s) => s.sheet.can_roam || self.meta.can_roam,
+        }
+    }
+
+    pub fn roam_speed(&self) -> f32 {
+        let sp = match &self.art {
+            ThemeArt::Svg(_) => self.meta.roam_speed,
+            ThemeArt::Sheet(s) => s.sheet.roam_speed.or(self.meta.roam_speed),
+        };
+        sp.unwrap_or(45) as f32
+    }
+
     /// Resumen de una línea para `theme check` / `--dry-run`.
     #[must_use]
     pub fn describe(&self) -> String {

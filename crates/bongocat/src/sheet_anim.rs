@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use bongocat_common::mouse::GazeDirection;
 use bongocat_common::sheet::{InputModel, SheetTheme};
 
 /// Estados conducibles de la animación (spec 0014 §5.2). Los `working`/`moving`
@@ -32,6 +33,21 @@ pub enum StateId {
     ActiveLeft,
     ActiveRight,
     ActiveBoth,
+    /// Direcciones de mirada hacia el ratón (seguimiento con los ojos).
+    LookLeft,
+    LookRight,
+    LookUp,
+    LookDown,
+    LookUpLeft,
+    LookUpRight,
+    LookDownLeft,
+    LookDownRight,
+    /// Animación de caminata / patrulla en reposo.
+    Walk,
+    WalkLeft,
+    WalkRight,
+    /// Animación especial de comerse una memoria RAM.
+    EatRam,
 }
 
 impl StateId {
@@ -51,6 +67,18 @@ impl StateId {
             "active_left" | "left_down" | "left-down" => Self::ActiveLeft,
             "active_right" | "right_down" | "right-down" => Self::ActiveRight,
             "active_both" | "both_down" | "both-down" => Self::ActiveBoth,
+            "look_left" | "look-left" | "lookleft" => Self::LookLeft,
+            "look_right" | "look-right" | "lookright" => Self::LookRight,
+            "look_up" | "look-up" | "lookup" => Self::LookUp,
+            "look_down" | "look-down" | "lookdown" => Self::LookDown,
+            "look_up_left" | "look-up-left" | "look_upleft" => Self::LookUpLeft,
+            "look_up_right" | "look-up-right" | "look_upright" => Self::LookUpRight,
+            "look_down_left" | "look-down-left" | "look_downleft" => Self::LookDownLeft,
+            "look_down_right" | "look-down-right" | "look_downright" => Self::LookDownRight,
+            "walk" | "walking" => Self::Walk,
+            "walk_left" | "walk-left" => Self::WalkLeft,
+            "walk_right" | "walk-right" => Self::WalkRight,
+            "eat_ram" | "eat-ram" | "eatram" | "ram" | "snack" => Self::EatRam,
             _ => return None,
         })
     }
@@ -70,6 +98,18 @@ impl StateId {
             Self::ActiveLeft => "active_left",
             Self::ActiveRight => "active_right",
             Self::ActiveBoth => "active_both",
+            Self::LookLeft => "look_left",
+            Self::LookRight => "look_right",
+            Self::LookUp => "look_up",
+            Self::LookDown => "look_down",
+            Self::LookUpLeft => "look_up_left",
+            Self::LookUpRight => "look_up_right",
+            Self::LookDownLeft => "look_down_left",
+            Self::LookDownRight => "look_down_right",
+            Self::Walk => "walk",
+            Self::WalkLeft => "walk_left",
+            Self::WalkRight => "walk_right",
+            Self::EatRam => "eat_ram",
         }
     }
 
@@ -115,6 +155,18 @@ impl StateId {
             StartWriting => &[StartWriting],
             EndWriting => &[EndWriting],
             WakeUp => &[WakeUp],
+            LookLeft => &[LookLeft, Idle, Boring, Writing],
+            LookRight => &[LookRight, Idle, Boring, Writing],
+            LookUp => &[LookUp, Idle, Boring, Writing],
+            LookDown => &[LookDown, Idle, Boring, Writing],
+            LookUpLeft => &[LookUpLeft, LookLeft, LookUp, Idle],
+            LookUpRight => &[LookUpRight, LookRight, LookUp, Idle],
+            LookDownLeft => &[LookDownLeft, LookLeft, LookDown, Idle],
+            LookDownRight => &[LookDownRight, LookRight, LookDown, Idle],
+            Walk => &[Walk, Idle, Boring, Writing],
+            WalkLeft => &[WalkLeft, Walk, Idle],
+            WalkRight => &[WalkRight, Walk, Idle],
+            EatRam => &[EatRam, Happy, Idle],
         }
     }
 }
@@ -270,6 +322,7 @@ impl SheetAnim {
     }
 
     /// Estado de bucle deseado según las entradas (sin contar one-shots).
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     fn desired_loop(
         &self,
@@ -278,6 +331,8 @@ impl SheetAnim {
         right: bool,
         happy: bool,
         boring: bool,
+        gaze: GazeDirection,
+        idle_special: Option<StateId>,
     ) -> StateId {
         if sleeping {
             return StateId::Sleep;
@@ -300,6 +355,29 @@ impl SheetAnim {
         // tema lo trae, si no `idle` (la cadena de reserva lo resuelve igual).
         if boring && self.cache.contains_key(&StateId::Boring) {
             return StateId::Boring;
+        }
+        // Si el ratón apunta en una dirección y el tema tiene fotogramas de mirada,
+        // se mira hacia el ratón; si no, `idle`.
+        let gaze_state = match gaze {
+            GazeDirection::Left => Some(StateId::LookLeft),
+            GazeDirection::Right => Some(StateId::LookRight),
+            GazeDirection::Up => Some(StateId::LookUp),
+            GazeDirection::Down => Some(StateId::LookDown),
+            GazeDirection::UpLeft => Some(StateId::LookUpLeft),
+            GazeDirection::UpRight => Some(StateId::LookUpRight),
+            GazeDirection::DownLeft => Some(StateId::LookDownLeft),
+            GazeDirection::DownRight => Some(StateId::LookDownRight),
+            GazeDirection::Center => None,
+        };
+        if let Some(st) = gaze_state {
+            if self.cache.contains_key(&st) {
+                return st;
+            }
+        }
+        if let Some(spec) = idle_special {
+            if self.cache.contains_key(&spec) {
+                return spec;
+            }
         }
         StateId::Idle
     }
@@ -339,6 +417,7 @@ impl SheetAnim {
     /// Avanza la máquina de estados un tick. `now` = reloj; el resto son las
     /// entradas ya calculadas por el llamante. Devuelve `true` si hay que
     /// redibujar (cambió estado o fotograma).
+    #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
         now: Instant,
@@ -347,6 +426,8 @@ impl SheetAnim {
         right: bool,
         happy: bool,
         boring: bool,
+        gaze: GazeDirection,
+        idle_special: Option<StateId>,
     ) -> bool {
         let before = (self.state, self.frame);
 
@@ -361,7 +442,7 @@ impl SheetAnim {
             return before != (self.state, self.frame);
         }
 
-        let want = self.desired_loop(sleeping, left, right, happy, boring);
+        let want = self.desired_loop(sleeping, left, right, happy, boring, gaze, idle_special);
         if want != self.state && self.resolve(want) != self.state {
             // Cambio de estado de bucle: intenta un puente one-shot.
             let bridge = if self.state == StateId::Sleep {
@@ -435,11 +516,38 @@ state_start_writing_frames = 1
         );
         assert_eq!(a.current(), &[0]);
         // idle a 10 fps -> 100 ms/frame. Antes de 100 ms no cambia.
-        assert!(!a.tick(advance(t0, 50), false, false, false, false, false));
+        assert!(!a.tick(
+            advance(t0, 50),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None
+        ));
         assert_eq!(a.current(), &[0]);
-        assert!(a.tick(advance(t0, 120), false, false, false, false, false));
+        assert!(a.tick(
+            advance(t0, 120),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None
+        ));
         assert_eq!(a.current(), &[1]);
-        assert!(a.tick(advance(t0, 240), false, false, false, false, false));
+        assert!(a.tick(
+            advance(t0, 240),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None
+        ));
         assert_eq!(a.current(), &[0], "wrap");
     }
 
@@ -457,16 +565,43 @@ state_start_writing_frames = 1
             t0,
         );
         // Actividad: entra en el puente start_writing.
-        a.tick(advance(t0, 10), false, true, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "start_writing");
         assert_eq!(a.current(), &[5]);
         // start_writing tiene 1 frame -> al siguiente tick con tiempo, termina y
         // salta a writing.
-        a.tick(advance(t0, 200), false, true, false, false, false);
+        a.tick(
+            advance(t0, 200),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "writing");
         assert_eq!(a.current(), &[10]);
         // writing a 20 fps -> 50 ms/frame; hace bucle.
-        a.tick(advance(t0, 260), false, true, false, false, false);
+        a.tick(
+            advance(t0, 260),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.current(), &[11]);
     }
 
@@ -479,7 +614,16 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(
             a.debug_pos().0,
             "writing",
@@ -497,7 +641,16 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), true, true, true, false, false);
+        a.tick(
+            advance(t0, 10),
+            true,
+            true,
+            true,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "idle", "Sleep ausente -> idle");
     }
 
@@ -514,7 +667,16 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(
             a.debug_pos().0,
             "writing",
@@ -532,9 +694,36 @@ state_start_writing_frames = 1
             t0,
         );
         // Llévalo a writing, frame 2.
-        a.tick(advance(t0, 10), false, true, false, false, false);
-        a.tick(advance(t0, 60), false, true, false, false, false);
-        a.tick(advance(t0, 120), false, true, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
+        a.tick(
+            advance(t0, 60),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
+        a.tick(
+            advance(t0, 120),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos(), ("writing", 2));
 
         // Simula el re-rasterizado: caché nueva (writing ahora con 2 frames).
@@ -564,9 +753,27 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        a.tick(advance(t0, 10), false, true, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.current(), &[20], "hands: pata izq -> active_left");
-        a.tick(advance(t0, 20), false, true, true, false, false);
+        a.tick(
+            advance(t0, 20),
+            false,
+            true,
+            true,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.current(), &[22], "ambas -> active_both");
     }
 
@@ -580,14 +787,32 @@ state_start_writing_frames = 1
             t0,
         );
         // Tecleando (pata izq) pero con `happy` -> gana `happy`.
-        a.tick(advance(t0, 10), false, true, false, true, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            true,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(
             a.debug_pos().0,
             "happy",
             "KPM alto -> happy aunque se teclee"
         );
         // Sin `happy`, el mismo tecleo -> writing.
-        a.tick(advance(t0, 20), false, true, false, false, false);
+        a.tick(
+            advance(t0, 20),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "writing");
     }
 
@@ -597,7 +822,16 @@ state_start_writing_frames = 1
         let sheet = parse_sheet_ini(INI); // sin `happy`
         let mut a =
             SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10, 11])]), &sheet, t0);
-        a.tick(advance(t0, 10), false, false, false, true, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            false,
+            false,
+            true,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(
             a.debug_pos().0,
             "idle",
@@ -615,18 +849,180 @@ state_start_writing_frames = 1
             t0,
         );
         // Sin actividad y sin `boring` → idle.
-        a.tick(advance(t0, 10), false, false, false, false, false);
+        a.tick(
+            advance(t0, 10),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "idle");
         // `boring` activo → boring; el tecleo lo saca.
-        a.tick(advance(t0, 20), false, false, false, false, true);
+        a.tick(
+            advance(t0, 20),
+            false,
+            false,
+            false,
+            false,
+            true,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "boring");
-        a.tick(advance(t0, 30), false, true, false, false, true);
+        a.tick(
+            advance(t0, 30),
+            false,
+            true,
+            false,
+            false,
+            true,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(a.debug_pos().0, "writing", "el tecleo manda sobre boring");
 
         // Un tema sin estado `boring`: `boring=true` no cambia nada (idle).
         let mut b = SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10])]), &sheet, t0);
-        b.tick(advance(t0, 10), false, false, false, false, true);
+        b.tick(
+            advance(t0, 10),
+            false,
+            false,
+            false,
+            false,
+            true,
+            GazeDirection::Center,
+            None,
+        );
         assert_eq!(b.debug_pos().0, "idle");
+    }
+
+    #[test]
+    fn mirada_al_raton_si_el_tema_la_trae_y_fallback_a_idle() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        let mut a = SheetAnim::from_cache(
+            cache(&[
+                ("idle", &[0]),
+                ("look_left", &[15]),
+                ("look_right", &[16]),
+                ("writing", &[10]),
+            ]),
+            &sheet,
+            t0,
+        );
+        // Mirada a la izquierda -> look_left.
+        a.tick(
+            advance(t0, 10),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Left,
+            None,
+        );
+        assert_eq!(a.debug_pos().0, "look_left");
+        assert_eq!(a.current(), &[15]);
+
+        // Mirada a la derecha -> look_right.
+        a.tick(
+            advance(t0, 20),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Right,
+            None,
+        );
+        assert_eq!(a.debug_pos().0, "look_right");
+        assert_eq!(a.current(), &[16]);
+
+        // Mirada arriba (no definida en este tema) -> cae a Idle.
+        a.tick(
+            advance(t0, 30),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Up,
+            None,
+        );
+        assert_eq!(a.debug_pos().0, "idle");
+        assert_eq!(a.current(), &[0]);
+
+        // Teclear manda sobre la mirada -> writing.
+        a.tick(
+            advance(t0, 40),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Left,
+            None,
+        );
+        assert_eq!(a.debug_pos().0, "writing");
+    }
+
+    #[test]
+    fn idle_special_activa_caminar_o_comer_ram_en_reposo() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        let mut a = SheetAnim::from_cache(
+            cache(&[
+                ("idle", &[0]),
+                ("walk", &[40, 41]),
+                ("eat_ram", &[50, 51]),
+                ("writing", &[10]),
+            ]),
+            &sheet,
+            t0,
+        );
+        // En reposo con idle_special = Some(Walk) -> walk.
+        a.tick(
+            advance(t0, 10),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            Some(StateId::Walk),
+        );
+        assert_eq!(a.debug_pos().0, "walk");
+        assert_eq!(a.current(), &[40]);
+
+        // Con idle_special = Some(EatRam) -> eat_ram.
+        a.tick(
+            advance(t0, 20),
+            false,
+            false,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            Some(StateId::EatRam),
+        );
+        assert_eq!(a.debug_pos().0, "eat_ram");
+        assert_eq!(a.current(), &[50]);
+
+        // Teclear interrumpe inmediatamente el idle_special -> writing.
+        a.tick(
+            advance(t0, 30),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            Some(StateId::EatRam),
+        );
+        assert_eq!(a.debug_pos().0, "writing");
     }
 
     #[test]
@@ -647,11 +1043,8 @@ state_start_writing_frames = 1
             &sheet,
             t0,
         );
-        assert_eq!(
-            a.next_wake(),
-            Some(t0 + Duration::from_millis(100)),
-            "10 fps -> 100 ms desde el último avance (= la entrada en el estado)"
-        );
+        let exp = t0 + Duration::from_millis(100);
+        assert_eq!(a.next_wake(), Some(exp));
     }
 
     #[test]
@@ -659,23 +1052,24 @@ state_start_writing_frames = 1
         let t0 = Instant::now();
         let sheet = parse_sheet_ini(INI);
         let mut a = SheetAnim::from_cache(
-            cache(&[
-                ("idle", &[0, 1]),
-                ("start_writing", &[5]),
-                ("writing", &[10, 11, 12]),
-            ]),
+            cache(&[("idle", &[0]), ("start_writing", &[5]), ("writing", &[10])]),
             &sheet,
             t0,
         );
-        let t1 = advance(t0, 10);
-        a.tick(t1, false, true, false, false, false);
-        assert_eq!(a.debug_pos().0, "start_writing");
-        // Aunque tenga un solo fotograma, es un one-shot: hace falta una
-        // llamada más para completar la transición a `writing`.
-        assert_eq!(
-            a.next_wake(),
-            Some(t1 + Duration::from_millis(100)),
-            "start_writing sin fps propio -> default_fps = 10 -> 100 ms"
+        a.tick(
+            advance(t0, 10),
+            false,
+            true,
+            false,
+            false,
+            false,
+            GazeDirection::Center,
+            None,
         );
+        assert_eq!(a.debug_pos().0, "start_writing");
+        // start_writing tiene 1 frame a 10 fps (default): necesita tick en 100 ms
+        // para completar la transición a writing aunque tenga len=1.
+        let exp = advance(t0, 10) + Duration::from_millis(100);
+        assert_eq!(a.next_wake(), Some(exp));
     }
 }

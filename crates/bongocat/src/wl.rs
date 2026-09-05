@@ -416,6 +416,11 @@ pub fn run_overlay(
         left_hold_until: now,
         right_hold_until: now,
         last_activity: now,
+        gaze_dir: bongocat_common::mouse::GazeDirection::Center,
+        last_gaze_at: now,
+        roam_x: 0.0,
+        roam_dir: 0.0,
+        last_roam_tick: now,
         kpm: crate::kpm::Kpm::new(),
         last_reload: now,
         tray: None,
@@ -597,6 +602,16 @@ struct State {
     right_hold_until: Instant,
     /// Última pulsación (para el reposo por inactividad).
     last_activity: Instant,
+    /// Dirección actual de la mirada hacia el ratón.
+    gaze_dir: bongocat_common::mouse::GazeDirection,
+    /// Instante del último evento de mirada recibido.
+    last_gaze_at: Instant,
+    /// Desplazamiento horizontal relativo por paseo/patrulla del vPet (lógico).
+    roam_x: f32,
+    /// Dirección del paseo: 1.0 = derecha, -1.0 = izquierda, 0.0 = quieta.
+    roam_dir: f32,
+    /// Último instante en el que avanzó el paseo.
+    last_roam_tick: Instant,
     /// Teclas/minuto en ventana deslizante, para el estado `happy` (spec 0014
     /// M6). Solo cuenta eventos de **teclado**, sin identidad de tecla.
     kpm: crate::kpm::Kpm,
@@ -669,28 +684,52 @@ impl State {
 
     /// Altura del gato en píxeles **físicos** (la config está en lógicos).
     fn phys_cat_height(&self) -> u32 {
-        scale_size_120(self.config.cat_height.max(1), self.eff_scale_120()).max(1) as u32
+        let h = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_height())
+            .map(|h| h as i32)
+            .unwrap_or(self.config.cat_height);
+        scale_size_120(h.max(1), self.eff_scale_120()).max(1) as u32
     }
 
     /// Posición del gato dentro del búfer **físico** de `phys_w`×`phys_h`.
-    /// Porta el cálculo de `draw_bar`: los offsets de la config (lógicos) se
+    /// Porta el cálculo de `draw_bar`: los offsets del tema o config (lógicos) se
     /// pasan a físicos con `scale_offset_120`.
     fn cat_origin(&self, phys_w: i32, phys_h: i32) -> (i32, i32) {
         let s = self.eff_scale_120();
         let (cw, ch) = (self.frames.w as i32, self.frames.h as i32);
-        let xoff = scale_offset_120(self.config.cat_x_offset, s);
-        let yoff = scale_offset_120(self.config.cat_y_offset, s);
+        let x_off = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_x_offset())
+            .unwrap_or(self.config.cat_x_offset);
+        let y_off = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_y_offset())
+            .unwrap_or(self.config.cat_y_offset);
+        let align = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_align())
+            .unwrap_or(self.config.cat_align);
+
+        let xoff = scale_offset_120(x_off, s);
+        let yoff = scale_offset_120(y_off, s);
+        let roam_phys = scale_offset_120(self.roam_x.round() as i32, s);
         // Anclaje vertical: `Center` (clásico) centra; `Baseline` (sprite sheets)
         // apoya el frame en el borde inferior de la barra.
         let y = match self.frames.anchor {
             bongocat_common::sheet::Anchor::Center => (phys_h - ch) / 2,
             bongocat_common::sheet::Anchor::Baseline => phys_h - ch,
         } + yoff;
-        let x = match self.config.cat_align {
+        let base_x = match align {
             Align::Center => (phys_w - cw) / 2 + xoff,
             Align::Left => xoff,
             Align::Right => phys_w - cw - xoff,
         };
+        let x = (base_x + roam_phys).clamp(10, (phys_w - cw - 10).max(10));
         (x, y)
     }
 
@@ -718,6 +757,8 @@ impl State {
         self.theme = loaded;
         self.config.theme = spec.to_string();
         self.ipc_dirty.insert("theme".to_string());
+        self.roam_x = 0.0;
+        self.roam_dir = 0.0;
         self.rerasterize();
         self.draw();
         self.sync_tray_theme();
@@ -798,9 +839,24 @@ impl State {
     /// Llega un bit de pata del lector de teclado: extiende la ventana de esa
     /// pata y marca actividad. Porta `anim_press_paw` / `anim_take_pending_paws`.
     fn on_paw(&mut self, raw: u8) {
+        if let Some(gaze) = bongocat_common::mouse::gaze_from_byte(raw) {
+            let changed = self.gaze_dir != gaze;
+            self.gaze_dir = gaze;
+            self.last_gaze_at = Instant::now();
+            self.last_activity = Instant::now();
+            self.roam_dir = 0.0;
+            if changed {
+                self.tick();
+            }
+            return;
+        }
+
         // `PAW_KEY` marca los eventos de teclado; se separa antes de `apply_mirror`
         // (que solo mira los bits de pata).
         let from_key = raw & paw::PAW_KEY != 0;
+        if from_key {
+            self.roam_dir = 0.0;
+        }
         let bit = apply_mirror(raw & paw::PAW_BOTH, self.config.mirror_x);
         let dur = Duration::from_millis(self.config.keypress_duration.max(0) as u64);
         let now = Instant::now();
@@ -823,6 +879,16 @@ impl State {
     fn tick(&mut self) {
         self.apply_pending_hidden();
         let now = Instant::now();
+        let dt = now.duration_since(self.last_roam_tick).as_secs_f32();
+        self.last_roam_tick = now;
+
+        // Si el ratón dejó de moverse hace más de 600ms, los ojos vuelven suavemente al centro
+        if self.gaze_dir != bongocat_common::mouse::GazeDirection::Center
+            && now.duration_since(self.last_gaze_at) > Duration::from_millis(600)
+        {
+            self.gaze_dir = bongocat_common::mouse::GazeDirection::Center;
+        }
+
         let idle_secs = now.duration_since(self.last_activity).as_secs();
         let idle_sleep = self.config.idle_sleep_timeout_sec > 0
             && idle_secs >= self.config.idle_sleep_timeout_sec as u64;
@@ -846,9 +912,27 @@ impl State {
         let left = now < self.left_hold_until;
         let right = now < self.right_hold_until;
         let idle_f = self.config.idle_frame.clamp(0, 4) as u8;
+        let s = self.eff_scale_120();
+        let pw = scale_size_120(self.width.max(1) as i32, s).max(1);
+        let cw = self.frames.w as i32;
+        let x_off = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_x_offset())
+            .unwrap_or(self.config.cat_x_offset);
+        let xoff = scale_offset_120(x_off, s);
+        let cat_align = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_align())
+            .unwrap_or(self.config.cat_align);
+        let can_roam = self.theme.as_ref().is_some_and(|t| t.can_roam());
+        let roam_speed = self.theme.as_ref().map(|t| t.roam_speed()).unwrap_or(45.0);
 
         let changed = match &mut self.frames.kind {
             anim::FramesKind::Classic(_) => {
+                self.roam_dir = 0.0;
+                self.roam_x = 0.0;
                 let next = if sleeping {
                     FRAME_SLEEPING
                 } else {
@@ -864,7 +948,64 @@ impl State {
                 // si no, `SheetAnim` cae a su reserva.
                 let happy = self.config.happy_kpm > 0
                     && self.kpm.per_minute(now) >= self.config.happy_kpm as usize;
-                sa.tick(now, sleeping, left, right, happy, boring && !sleeping)
+
+                // Acciones especiales de ocio en reposo (caminar, comer RAM):
+                let idle_special = if can_roam
+                    && !sleeping
+                    && !left
+                    && !right
+                    && self.gaze_dir == bongocat_common::mouse::GazeDirection::Center
+                {
+                    let phase = idle_secs % 24;
+                    if (4..8).contains(&phase) {
+                        Some(crate::sheet_anim::StateId::Walk)
+                    } else if (14..18).contains(&phase) {
+                        Some(crate::sheet_anim::StateId::EatRam)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let mut moved = false;
+                if can_roam && idle_special == Some(crate::sheet_anim::StateId::Walk) {
+                    if self.roam_dir == 0.0 {
+                        self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
+                    }
+                    let base_x = match cat_align {
+                        Align::Center => (pw - cw) / 2 + xoff,
+                        Align::Left => xoff,
+                        Align::Right => pw - cw - xoff,
+                    };
+                    let cur_phys = base_x + scale_offset_120(self.roam_x.round() as i32, s);
+                    let margin = 32;
+
+                    if cur_phys <= margin && self.roam_dir < 0.0 {
+                        self.roam_dir = 1.0;
+                    } else if cur_phys >= (pw - cw - margin) && self.roam_dir > 0.0 {
+                        self.roam_dir = -1.0;
+                    }
+
+                    // Velocidad de caminata fluida configurada por el vPet:
+                    let step = self.roam_dir * roam_speed * dt.min(0.2);
+                    self.roam_x += step;
+                    moved = true;
+                } else {
+                    self.roam_dir = 0.0;
+                }
+
+                let anim_changed = sa.tick(
+                    now,
+                    sleeping,
+                    left,
+                    right,
+                    happy,
+                    boring && !sleeping,
+                    self.gaze_dir,
+                    idle_special,
+                );
+                anim_changed || moved
             }
         };
 
@@ -881,6 +1022,9 @@ impl State {
     fn next_wake(&self, now: Instant) -> Instant {
         let fullscreen_deadline = (self.want_hidden != self.hidden)
             .then(|| self.want_hidden_since + Duration::from_millis(350));
+        let gaze_deadline = (self.gaze_dir != bongocat_common::mouse::GazeDirection::Center)
+            .then(|| self.last_gaze_at + Duration::from_millis(600));
+        let roam_deadline = (self.roam_dir != 0.0).then(|| now + Duration::from_millis(33));
         let sheet_deadline = match &self.frames.kind {
             anim::FramesKind::Sheet(sa) => sa.next_wake(),
             anim::FramesKind::Classic(_) => None,
@@ -891,6 +1035,8 @@ impl State {
                 (self.left_hold_until > now).then_some(self.left_hold_until),
                 (self.right_hold_until > now).then_some(self.right_hold_until),
                 fullscreen_deadline,
+                gaze_deadline,
+                roam_deadline,
                 sheet_deadline,
             ],
             IDLE_TICK_CAP,
@@ -1132,6 +1278,8 @@ impl State {
         );
         let inside = bongocat_common::edit::hit(rect, px as i32, py as i32);
         if inside {
+            self.roam_x = 0.0;
+            self.roam_dir = 0.0;
             self.edit.dragging = true;
             self.edit.grab_dx = px - f64::from(rect.0);
             self.edit.grab_dy = py - f64::from(rect.1);
@@ -1394,7 +1542,12 @@ impl State {
             }
             // Opacidad del gato: % (0–100) → factor 0–255 para el blit.
             let cat_op = (self.config.cat_opacity.clamp(0, 100) * 255 / 100) as u8;
-            anim::blit_over(canvas, (pw, ph), frame, (fw, fh), (ox, oy), cat_op);
+            let flip_h = if self.roam_dir < 0.0 {
+                !self.config.mirror_x
+            } else {
+                self.config.mirror_x
+            };
+            anim::blit_over_flip(canvas, (pw, ph), frame, (fw, fh), (ox, oy), cat_op, flip_h);
 
             // "Chrome" del modo edición (spec 0005 M5): contorno cian sobre el
             // rect del gato — sin esto, nada distingue a la vista si `EDIT`

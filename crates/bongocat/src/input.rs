@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::thread;
 
 use bongocat_common::config::Config;
-use evdev::{Device, Key, RelativeAxisType};
+use evdev::{AbsoluteAxisType, Device, Key, RelativeAxisType};
 
 /// ¿Este dispositivo parece un teclado? (tiene las letras y Enter).
 fn looks_like_keyboard(dev: &Device) -> bool {
@@ -27,13 +27,16 @@ fn looks_like_keyboard(dev: &Device) -> bool {
     })
 }
 
-/// ¿Este dispositivo parece un ratón? (eje relativo X/Y o botón izquierdo).
+/// ¿Este dispositivo parece un ratón o touchpad? (eje relativo/absoluto X/Y o botón).
 fn looks_like_mouse(dev: &Device) -> bool {
     dev.supported_relative_axes()
         .is_some_and(|a| a.contains(RelativeAxisType::REL_X) || a.contains(RelativeAxisType::REL_Y))
+        || dev.supported_absolute_axes().is_some_and(|a| {
+            a.contains(AbsoluteAxisType::ABS_X) || a.contains(AbsoluteAxisType::ABS_MT_POSITION_X)
+        })
         || dev
             .supported_keys()
-            .is_some_and(|k| k.contains(Key::BTN_LEFT))
+            .is_some_and(|k| k.contains(Key::BTN_LEFT) || k.contains(Key::BTN_TOUCH))
 }
 
 fn detect(pred: fn(&Device) -> bool) -> Vec<(PathBuf, String)> {

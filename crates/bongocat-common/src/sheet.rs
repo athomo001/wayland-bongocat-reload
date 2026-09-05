@@ -62,6 +62,12 @@ pub struct SheetTheme {
     pub default_fps: u32,
     pub input_model: InputModel,
     pub anchor: Anchor,
+    pub default_cat_height: Option<u32>,
+    pub default_cat_align: Option<crate::config::Align>,
+    pub default_cat_x_offset: Option<i32>,
+    pub default_cat_y_offset: Option<i32>,
+    pub can_roam: bool,
+    pub roam_speed: Option<u32>,
     /// Nombre de la hoja única (`sheet =` / `custom_sprite_sheet_filename =`).
     /// Es el respaldo para cualquier estado sin hoja propia.
     pub sheet: Option<String>,
@@ -80,6 +86,12 @@ impl Default for SheetTheme {
             default_fps: 12,
             input_model: InputModel::Activity, // los packs de vpets suelen no tener manos
             anchor: Anchor::Baseline,
+            default_cat_height: None,
+            default_cat_align: None,
+            default_cat_x_offset: None,
+            default_cat_y_offset: None,
+            can_roam: false,
+            roam_speed: None,
             sheet: None,
             sheets_per_state: BTreeMap::new(),
             states: Vec::new(),
@@ -173,6 +185,21 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
                     _ => InputModel::Activity,
                 }
             }
+            "cat_height" | "default_cat_height" => t.default_cat_height = v.parse().ok(),
+            "cat_align" => {
+                t.default_cat_align = match v.to_ascii_lowercase().as_str() {
+                    "left" => Some(crate::config::Align::Left),
+                    "right" => Some(crate::config::Align::Right),
+                    "center" => Some(crate::config::Align::Center),
+                    _ => None,
+                }
+            }
+            "cat_x_offset" => t.default_cat_x_offset = v.parse().ok(),
+            "cat_y_offset" => t.default_cat_y_offset = v.parse().ok(),
+            "can_roam" | "enable_roam" => {
+                t.can_roam = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+            }
+            "roam_speed" => t.roam_speed = v.parse().ok(),
             "anchor" => {
                 t.anchor = match v.as_str() {
                     "center" => Anchor::Center,
@@ -258,6 +285,17 @@ pub fn parse_sheet_ini(text: &str) -> SheetTheme {
             InputModel::Activity
         };
     }
+
+    if !t.can_roam
+        && t.states.iter().any(|s| s.name == "walk")
+        && !text.lines().any(|l| {
+            let tr = l.trim();
+            tr.starts_with("can_roam") || tr.starts_with("enable_roam")
+        })
+    {
+        t.can_roam = true;
+    }
+
     t
 }
 

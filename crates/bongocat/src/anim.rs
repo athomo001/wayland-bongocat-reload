@@ -327,18 +327,17 @@ fn flip_v(buf: &mut [u8], w: u32, h: u32) {
 }
 
 /// Compone `src` (BGRA premultiplicado, tamaño `src_wh`) sobre `dst`
+/// Dibuja el fotograma rasterizado `src` (BGRA premultiplicado, tamaño `src_wh`) sobre `dst`
 /// (BGRA premultiplicado, tamaño `dst_wh`) en el `origin` dado, con compositing
-/// "over". `opacity` (0–255, 255 = sin cambio) escala uniformemente los 4
-/// canales de cada píxel del gato — como es premultiplicado, eso baja también su
-/// alfa efectivo (`cat_opacity`). Recorta lo que se salga. Porta
-/// `blit_cached_frame`.
-pub fn blit_over(
+/// "over" y opción de volteo horizontal en caliente (`flip_h`).
+pub fn blit_over_flip(
     dst: &mut [u8],
     dst_wh: (u32, u32),
     src: &[u8],
     src_wh: (u32, u32),
     origin: (i32, i32),
     opacity: u8,
+    flip_h: bool,
 ) {
     let (dst_w, dst_h) = dst_wh;
     let (src_w, src_h) = src_wh;
@@ -354,7 +353,12 @@ pub fn blit_over(
             if dx < 0 || dx >= dst_w as i32 {
                 continue;
             }
-            let si = ((sy as u32 * src_w + sx as u32) * 4) as usize;
+            let sample_x = if flip_h {
+                src_w - 1 - sx as u32
+            } else {
+                sx as u32
+            };
+            let si = ((sy as u32 * src_w + sample_x) * 4) as usize;
             let di = ((dy as u32 * dst_w + dx as u32) * 4) as usize;
             // Píxel del gato ya escalado por la opacidad (exacto a 255).
             let s: [u8; 4] = std::array::from_fn(|c| (u16::from(src[si + c]) * op / 255) as u8);
@@ -372,6 +376,23 @@ pub fn blit_over(
             }
         }
     }
+}
+
+/// (BGRA premultiplicado, tamaño `dst_wh`) en el `origin` dado, con compositing
+/// "over". `opacity` (0–255, 255 = sin cambio) escala uniformemente los 4
+/// canales de cada píxel del gato — como es premultiplicado, eso baja también su
+/// alfa efectivo (`cat_opacity`). Recorta lo que se salga. Porta
+/// `blit_cached_frame`.
+#[allow(dead_code)]
+pub fn blit_over(
+    dst: &mut [u8],
+    dst_wh: (u32, u32),
+    src: &[u8],
+    src_wh: (u32, u32),
+    origin: (i32, i32),
+    opacity: u8,
+) {
+    blit_over_flip(dst, dst_wh, src, src_wh, origin, opacity, false);
 }
 
 /// Dibuja un contorno **sólido** de `thickness` px alrededor de `rect =

@@ -37,6 +37,11 @@ pub struct ThemeMeta {
     /// `(ancho, alto)` de referencia; `cat_width = cat_height * w / h`.
     pub aspect: (u32, u32),
     pub default_cat_height: Option<u32>,
+    pub default_cat_align: Option<crate::config::Align>,
+    pub default_cat_x_offset: Option<i32>,
+    pub default_cat_y_offset: Option<i32>,
+    pub can_roam: bool,
+    pub roam_speed: Option<u32>,
     /// Nombre de fichero de cada frame (override con `frame_* =` en el INI).
     pub frame_files: [String; 5],
 }
@@ -51,6 +56,11 @@ impl Default for ThemeMeta {
             theme_version: 1,
             aspect: DEFAULT_ASPECT,
             default_cat_height: None,
+            default_cat_align: None,
+            default_cat_x_offset: None,
+            default_cat_y_offset: None,
+            can_roam: false,
+            roam_speed: None,
             frame_files: DEFAULT_FRAME_FILES.map(String::from),
         }
     }
@@ -102,7 +112,21 @@ pub fn parse_theme_ini(text: &str) -> ThemeMeta {
                     m.aspect = a;
                 }
             }
-            "default_cat_height" => m.default_cat_height = v.parse().ok(),
+            "cat_height" | "default_cat_height" => m.default_cat_height = v.parse().ok(),
+            "cat_align" => {
+                m.default_cat_align = match v.to_ascii_lowercase().as_str() {
+                    "left" => Some(crate::config::Align::Left),
+                    "right" => Some(crate::config::Align::Right),
+                    "center" => Some(crate::config::Align::Center),
+                    _ => None,
+                }
+            }
+            "cat_x_offset" => m.default_cat_x_offset = v.parse().ok(),
+            "cat_y_offset" => m.default_cat_y_offset = v.parse().ok(),
+            "can_roam" | "enable_roam" => {
+                m.can_roam = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            }
+            "roam_speed" => m.roam_speed = v.parse().ok(),
             "frame_both_up" => m.frame_files[0] = v,
             "frame_left_down" => m.frame_files[1] = v,
             "frame_right_down" => m.frame_files[2] = v,
