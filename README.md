@@ -144,21 +144,23 @@ de importar mascotas de terceros).
 Con `enable_tray=1` (por defecto) aparece un icono en la bandeja del sistema
 si tu escritorio tiene un host StatusNotifierItem (paneles de KDE, COSMIC,
 waybar con el módulo de tray, xfce4-panel…; en GNOME hace falta la extensión
-AppIndicator). Menú: **Mostrar/Ocultar** · **Reiniciar overlay** · **Recargar
-configuración** · **Configurar…** · **Tema ▸** (lista los temas instalados,
-marca el activo, cambia con un clic) · **Acerca de** · **Cerrar**.
+AppIndicator). Menú: **Mostrar/Ocultar** · **Modo edición** (con marca ✓;
+arrastra el gato con el ratón — ver abajo) · **Reiniciar overlay** ·
+**Recargar configuración** · **Configurar…** · **Tema ▸** (lista los temas
+instalados, marca el activo, cambia con un clic) · **Acerca de** · **Cerrar**.
 
 `--no-tray` lo desactiva para una ejecución sin tocar la config.
 
 ## Modo edición (ratón)
 
-```bash
-bongocatctl edit on     # arrastra el gato con el botón izquierdo; rueda = tamaño
-bongocatctl edit off    # sale y guarda la posición/tamaño en el .conf
-```
+Arrastra el gato con el botón izquierdo; la rueda cambia el tamaño. Al salir
+persiste la posición/tamaño en el `.conf`. Un contorno marca los límites
+mientras está activo. Tres formas de entrar/salir, todas equivalentes:
 
-Se activa por IPC/`bongocatctl` (todavía no hay un ítem en el menú del tray
-para esto). Mientras está activo, un contorno marca los límites del gato.
+- **Tray**: clic en "Modo edición" (con marca ✓ mientras está activo) — la más
+  fácil, sin terminal.
+- `bongocatctl edit on` / `bongocatctl edit off`.
+- IPC: `EDIT on` / `EDIT off` / `EDIT toggle`.
 
 ## Control remoto — `bongocatctl`
 
