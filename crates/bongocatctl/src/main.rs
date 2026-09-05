@@ -35,6 +35,7 @@ Uso: bongocatctl [-c FICHERO] <orden> [args]
   set-live CLAVE V  Cambia un valor en caliente (no toca el fichero)
   save              Persiste al .conf lo cambiado con set-live (conserva formato)
   reload            Relee el .conf en la instancia
+  snapshot [RUTA]   Guarda el fotograma actual en un PNG (alias: screenshot)
   stop              Le pide a la instancia que se cierre
 
 Opciones:
@@ -131,6 +132,10 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
         ["reload"] => cmd_ipc(args.monitor.as_deref(), "RELOAD", "OK"),
+        ["snapshot"] | ["screenshot"] => cmd_ipc(args.monitor.as_deref(), "SNAPSHOT", "OK"),
+        ["snapshot", path] | ["screenshot", path] => {
+            cmd_ipc(args.monitor.as_deref(), &format!("SNAPSHOT {path}"), "OK")
+        }
         ["save"] => cmd_ipc(args.monitor.as_deref(), "SAVE", ""),
         ["get-live", key] => cmd_ipc(args.monitor.as_deref(), &format!("GET {key}"), ""),
         ["set-live", key, value] => {

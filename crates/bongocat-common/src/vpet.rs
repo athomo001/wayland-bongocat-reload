@@ -36,6 +36,12 @@ pub struct VpetConfig {
     pub track_mouse: bool,
     /// Tiempo propio de inactividad en segundos antes de dormir (None = hereda global).
     pub sleep_timeout: Option<u64>,
+    /// Pulsaciones mínimas consecutivas en ventana breve (1 s) para activar `writing` (por defecto 1).
+    pub typing_burst: u32,
+    /// Duración mínima de la sesión de tecleo/sintetizador una vez activada (en ms). Si es 0, usa keypress_duration global.
+    pub typing_hold_ms: u64,
+    /// Si una pulsación de tecla interrumpe de inmediato las acciones de ocio (caminar, comer RAM). Por defecto true.
+    pub busy_interrupt: bool,
 }
 
 impl Default for VpetConfig {
@@ -54,6 +60,9 @@ impl Default for VpetConfig {
             idle_action_duration: 5,
             track_mouse: true,
             sleep_timeout: None,
+            typing_burst: 1,
+            typing_hold_ms: 0,
+            busy_interrupt: true,
         }
     }
 }
@@ -85,6 +94,15 @@ impl VpetConfig {
         }
         if self.sleep_timeout.is_none() {
             self.sleep_timeout = fallback.sleep_timeout;
+        }
+        if self.typing_burst == 1 && fallback.typing_burst != 1 {
+            self.typing_burst = fallback.typing_burst;
+        }
+        if self.typing_hold_ms == 0 && fallback.typing_hold_ms != 0 {
+            self.typing_hold_ms = fallback.typing_hold_ms;
+        }
+        if self.busy_interrupt && !fallback.busy_interrupt {
+            self.busy_interrupt = false;
         }
     }
 }
@@ -168,6 +186,19 @@ pub fn parse_vpet_ini(content: &str) -> VpetConfig {
                     cfg.sleep_timeout = Some(n);
                 }
             }
+            "typing_burst" | "burst_threshold" | "min_keys" => {
+                if let Ok(n) = v.parse::<u32>() {
+                    cfg.typing_burst = n.clamp(1, 50);
+                }
+            }
+            "typing_hold_ms" | "hold_duration" | "hold_ms" => {
+                if let Ok(n) = v.parse::<u64>() {
+                    cfg.typing_hold_ms = n.clamp(0, 10_000);
+                }
+            }
+            "busy_interrupt" | "interrupt_on_key" => {
+                cfg.busy_interrupt = matches!(v_lower.as_str(), "1" | "true" | "yes" | "on");
+            }
             _ => {}
         }
     }
@@ -196,6 +227,9 @@ mod tests {
             idle_action_duration = 6
             track_mouse = 1
             sleep_timeout = 45
+            typing_burst = 3
+            typing_hold_ms = 1800
+            busy_interrupt = 0
         "#;
         let c = parse_vpet_ini(ini);
         assert_eq!(c.cat_height, Some(124));
@@ -211,6 +245,9 @@ mod tests {
         assert_eq!(c.idle_action_duration, 6);
         assert!(c.track_mouse);
         assert_eq!(c.sleep_timeout, Some(45));
+        assert_eq!(c.typing_burst, 3);
+        assert_eq!(c.typing_hold_ms, 1800);
+        assert!(!c.busy_interrupt);
     }
 
     #[test]

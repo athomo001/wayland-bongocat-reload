@@ -872,11 +872,19 @@ impl State {
     /// pata y marca actividad. Porta `anim_press_paw` / `anim_take_pending_paws`.
     fn on_paw(&mut self, raw: u8) {
         if let Some(gaze) = bongocat_common::mouse::gaze_from_byte(raw) {
+            let track_mouse = self
+                .theme
+                .as_ref()
+                .map(|t| t.vpet.track_mouse)
+                .unwrap_or(true);
+            if !track_mouse {
+                return;
+            }
             let changed = self.gaze_dir != gaze;
             self.gaze_dir = gaze;
             self.last_gaze_at = Instant::now();
-            self.last_activity = Instant::now();
-            self.roam_dir = 0.0;
+            // Nota: el movimiento del ratón NO reinicia last_activity para no
+            // impedir que la mascota duerma ni romper su paseo por pantalla.
             if changed {
                 self.tick();
             }
@@ -886,20 +894,37 @@ impl State {
         // `PAW_KEY` marca los eventos de teclado; se separa antes de `apply_mirror`
         // (que solo mira los bits de pata).
         let from_key = raw & paw::PAW_KEY != 0;
-        if from_key {
-            self.roam_dir = 0.0;
-        }
-        let bit = apply_mirror(raw & paw::PAW_BOTH, self.config.mirror_x);
-        let dur = Duration::from_millis(self.config.keypress_duration.max(0) as u64);
         let now = Instant::now();
+        if from_key {
+            self.kpm.hit(now);
+        }
+
+        let vpet = self.theme.as_ref().map(|t| &t.vpet);
+        let typing_burst = vpet.map(|v| v.typing_burst).unwrap_or(1);
+        let typing_hold_ms = vpet.map(|v| v.typing_hold_ms).unwrap_or(0);
+
+        // Si el vPet requiere una ráfaga continua de tecleo (> 1) para despertar
+        // o sacar el instrumento, una tecla suelta (atajo de captura, modifier) se ignora:
+        if from_key && typing_burst > 1 {
+            let recent = self.kpm.hits_within(Duration::from_millis(1000), now);
+            if (recent as u32) < typing_burst {
+                return;
+            }
+        }
+
+        let bit = apply_mirror(raw & paw::PAW_BOTH, self.config.mirror_x);
+        let dur_ms = if typing_hold_ms > 0 {
+            typing_hold_ms
+        } else {
+            self.config.keypress_duration.max(0) as u64
+        };
+        let dur = Duration::from_millis(dur_ms);
+
         if bit & paw::PAW_LEFT != 0 {
             self.left_hold_until = now + dur;
         }
         if bit & paw::PAW_RIGHT != 0 {
             self.right_hold_until = now + dur;
-        }
-        if from_key {
-            self.kpm.hit(now);
         }
         self.last_activity = now;
         self.tick(); // respuesta inmediata, no hasta el siguiente tick
@@ -993,11 +1018,14 @@ impl State {
 
                 // Acciones especiales de ocio en reposo configuradas en el vPet activo:
                 let vpet = self.theme.as_ref().map(|t| &t.vpet);
+                let busy_interrupt = vpet.map(|v| v.busy_interrupt).unwrap_or(true);
                 let idle_special = if let Some(vp) = vpet {
+                    let key_busy = (left || right) && vp.busy_interrupt;
+                    let mouse_busy = vp.track_mouse
+                        && self.gaze_dir != bongocat_common::mouse::GazeDirection::Center;
                     if !sleeping
-                        && !left
-                        && !right
-                        && self.gaze_dir == bongocat_common::mouse::GazeDirection::Center
+                        && !key_busy
+                        && !mouse_busy
                         && !vp.idle_actions.is_empty()
                         && vp.idle_action_interval > 0
                     {
@@ -1054,11 +1082,16 @@ impl State {
                     }
                 }
 
+                // Si la mascota está ocupada con una acción de ocio (caminar, comer RAM)
+                // y no debe interrumpirse, las teclas aisladas no la sacan de su pose:
+                let pass_left = left && (idle_special.is_none() || busy_interrupt);
+                let pass_right = right && (idle_special.is_none() || busy_interrupt);
+
                 let anim_changed = sa.tick(
                     now,
                     sleeping,
-                    left,
-                    right,
+                    pass_left,
+                    pass_right,
                     happy,
                     boring && !sleeping,
                     self.gaze_dir,
@@ -1451,6 +1484,20 @@ impl State {
                 self.config.cat_height,
                 self.config.cat_opacity,
             ),
+            "SNAPSHOT" | "SCREENSHOT" => {
+                let path_str = if arg1.is_empty() {
+                    "bongocat_snapshot.png"
+                } else {
+                    arg1
+                };
+                let path = std::path::Path::new(path_str);
+                let (fw, fh) = (self.frames.w, self.frames.h);
+                let bgra = self.frames.current(self.frame);
+                match save_frame_as_png(bgra, fw, fh, path) {
+                    Ok(()) => format!("OK {}", path.display()),
+                    Err(e) => format!("ERR {e}"),
+                }
+            }
             "GET" if !arg1.is_empty() => {
                 match bongocat_common::config::ConfDoc::parse(&self.config.to_ini()).get(arg1) {
                     Some(v) => v.to_string(),
@@ -2037,6 +2084,39 @@ impl Dispatch<ZcosmicToplevelHandleV1, ()> for State {
             state.recompute_hidden();
         }
     }
+}
+
+/// Guarda un búfer BGRA premultiplicado como un fichero PNG con transparencia recta (RGBA).
+fn save_frame_as_png(
+    bgra: &[u8],
+    w: u32,
+    h: u32,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn Error>> {
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for (src, dst) in bgra.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
+        let a = src[3];
+        if a == 0 {
+            dst[0] = 0;
+            dst[1] = 0;
+            dst[2] = 0;
+            dst[3] = 0;
+        } else {
+            let a_u32 = a as u32;
+            dst[0] = ((src[2] as u32 * 255) / a_u32).min(255) as u8; // R
+            dst[1] = ((src[1] as u32 * 255) / a_u32).min(255) as u8; // G
+            dst[2] = ((src[0] as u32 * 255) / a_u32).min(255) as u8; // B
+            dst[3] = a;
+        }
+    }
+    let file = std::fs::File::create(path)?;
+    let mut w_buf = std::io::BufWriter::new(file);
+    let mut enc = png::Encoder::new(&mut w_buf, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header()?;
+    writer.write_image_data(&rgba)?;
+    Ok(())
 }
 
 #[cfg(test)]

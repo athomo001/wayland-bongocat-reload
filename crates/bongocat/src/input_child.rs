@@ -101,6 +101,13 @@ fn send_bit(write_fd: RawFd, bit: u8) -> bool {
     unsafe { libc::write(write_fd, buf.as_ptr().cast(), 1) == 1 }
 }
 
+/// Teclas de captura de pantalla o control del sistema que no deben despertar a
+/// la mascota ni considerarse pulsaciones de tecleo (99=SysRq/PrintScreen, 210=Print).
+#[must_use]
+fn is_system_screenshot_key(code: u16) -> bool {
+    matches!(code, 99 | 210)
+}
+
 /// Bucle de teclado. Por cada key-down: reduce el keycode a un bit de pata y lo
 /// manda por la tubería. Nunca registra la tecla.
 fn keyboard_thread(mut dev: Device, path: &str, write_fd: RawFd) {
@@ -115,14 +122,16 @@ fn keyboard_thread(mut dev: Device, path: &str, write_fd: RawFd) {
         for ev in batch {
             // `| PAW_KEY`: marca el byte como "de teclado" para el contador de
             // teclas/min del padre (`happy_kpm`). El keycode sigue sin salir.
-            if ev.event_type() == EventType::KEY
-                && ev.value() == 1
-                && !send_bit(
+            if ev.event_type() == EventType::KEY && ev.value() == 1 {
+                if is_system_screenshot_key(ev.code()) {
+                    continue;
+                }
+                if !send_bit(
                     write_fd,
                     paw_for_keycode(i32::from(ev.code())) | bongocat_common::paw::PAW_KEY,
-                )
-            {
-                return; // el padre cerró la tubería
+                ) {
+                    return; // el padre cerró la tubería
+                }
             }
         }
     }

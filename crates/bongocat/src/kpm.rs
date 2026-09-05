@@ -41,6 +41,17 @@ impl Kpm {
         self.hits.len()
     }
 
+    /// Número de pulsaciones ocurridas en los últimos `window` instantes.
+    #[must_use]
+    pub fn hits_within(&mut self, window: Duration, now: Instant) -> usize {
+        self.trim(now);
+        self.hits
+            .iter()
+            .rev()
+            .take_while(|&&t| now.saturating_duration_since(t) <= window)
+            .count()
+    }
+
     fn trim(&mut self, now: Instant) {
         while self
             .hits
@@ -76,6 +87,26 @@ mod tests {
         assert_eq!(k.per_minute(now + Duration::from_secs(30)), 3);
         // A los 61 s de la última, cero.
         assert_eq!(k.per_minute(now + Duration::from_secs(61)), 0);
+    }
+
+    #[test]
+    fn cuenta_rafagas_en_ventana_corta() {
+        let mut k = Kpm::new();
+        let t0 = Instant::now();
+        k.hit(t0);
+        k.hit(t0 + Duration::from_millis(200));
+        assert_eq!(
+            k.hits_within(Duration::from_millis(500), t0 + Duration::from_millis(200)),
+            2
+        );
+        assert_eq!(
+            k.hits_within(Duration::from_millis(100), t0 + Duration::from_millis(200)),
+            1
+        );
+        assert_eq!(
+            k.hits_within(Duration::from_millis(500), t0 + Duration::from_millis(800)),
+            0
+        );
     }
 
     #[test]
