@@ -14,7 +14,7 @@ pub const DEFAULT_ASPECT: (i32, i32) = (500, 277);
 
 /// Rango de `cat_height` (igual que la validación de config).
 pub const MIN_CAT_HEIGHT: i32 = 10;
-pub const MAX_CAT_HEIGHT: i32 = 200;
+pub const MAX_CAT_HEIGHT: i32 = 512;
 
 /// Ancho del gato para una altura dada y una relación de aspecto `(w, h)`.
 #[must_use]
@@ -210,7 +210,7 @@ mod tests {
     fn rueda_respeta_el_rango() {
         assert_eq!(wheel_step(false), 4);
         assert_eq!(wheel_step(true), 1);
-        assert_eq!(resize_cat_height(198, 4), 200, "tope superior");
+        assert_eq!(resize_cat_height(510, 4), 512, "tope superior");
         assert_eq!(resize_cat_height(12, -4), 10, "tope inferior");
         assert_eq!(resize_cat_height(100, 4), 104);
     }

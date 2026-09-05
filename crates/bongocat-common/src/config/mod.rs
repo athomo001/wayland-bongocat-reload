@@ -15,7 +15,10 @@ pub use line::{split_line, Line};
 
 // ── Rangos de validación (de `src/config/config.c`) ──────────────────────────
 const MIN_CAT_HEIGHT: i32 = 10;
-const MAX_CAT_HEIGHT: i32 = 200;
+// 512 (antes 200): los sprite sheets escalan por factor **entero**
+// (`sheet::integer_scale`), así que con marcos de 128 px el rango 10–200 daba
+// siempre ×1. Subir el tope deja llegar a ×2/×3/×4.
+const MAX_CAT_HEIGHT: i32 = 512;
 const MIN_OVERLAY_HEIGHT: i32 = 20;
 const MAX_OVERLAY_HEIGHT: i32 = 300;
 const MIN_FPS: i32 = 1;

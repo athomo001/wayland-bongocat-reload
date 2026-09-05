@@ -173,6 +173,44 @@ impl Model {
         self.status = "restablecido".to_owned();
     }
 
+    /// Vuelve a los **valores de fábrica** (`Config::default()`) todos los campos
+    /// numéricos / booleanos / enum / hora — **no** toca el tema, los monitores
+    /// ni las rutas de dispositivo. Queda como cambios sin guardar (hay que
+    /// pulsar "Guardar" para que persista).
+    pub fn factory_reset(&mut self) {
+        use bongocat_common::field_meta::{FieldKind, FIELDS};
+
+        let def = Config::default();
+        let def_doc = ConfDoc::parse(&def.to_ini());
+        let cur_doc = ConfDoc::parse(&self.cfg.to_ini());
+        let mut n = 0;
+
+        for f in FIELDS {
+            if matches!(f.kind, FieldKind::Text | FieldKind::List) {
+                continue; // tema, monitores, dispositivos: se dejan como están
+            }
+            let (Some(want), have) = (def_doc.get(f.key), cur_doc.get(f.key).unwrap_or("")) else {
+                continue;
+            };
+            if want == have {
+                continue;
+            }
+            // Aplica en la config local y, si hay instancia, en vivo.
+            let _ = bongocat_common::config::set_live(&mut self.cfg, f.key, want);
+            if self.source.connected() {
+                let _ =
+                    ipc::send_request(self.instance.as_deref(), &format!("SET {} {want}", f.key));
+            }
+            self.dirty.insert(f.key.to_owned());
+            n += 1;
+        }
+        self.status = if n == 0 {
+            "ya estaban los valores de fábrica".to_owned()
+        } else {
+            format!("{n} campos a valores de fábrica — pulsa Guardar para que quede")
+        };
+    }
+
     /// Persiste los cambios: con instancia → `SAVE`; sin instancia → reescribe el
     /// `.conf` **conservando comentarios** (`ConfDoc`), o lo crea si no existía.
     ///
@@ -282,7 +320,7 @@ mod tests {
         let mut m = model_de_defaults();
         let antes = m.cfg.cat_height;
         let e = m.set("cat_height", "9999").unwrap_err();
-        assert!(e.contains("200"), "{e}");
+        assert!(e.contains("512"), "{e}");
         assert_eq!(m.cfg.cat_height, antes);
         assert!(m.dirty.is_empty());
     }

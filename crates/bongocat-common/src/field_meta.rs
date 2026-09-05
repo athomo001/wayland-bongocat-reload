@@ -173,9 +173,10 @@ pub const FIELDS: &[FieldMeta] = &[
         "Tamaño (altura)",
         Section::Appearance,
         10,
-        200,
+        512,
         2,
-        "Alto del personaje en píxeles; el ancho sale de la relación de aspecto del tema.",
+        "Alto en píxeles. Los temas SVG escalan suave; los sprite sheets van por \
+         factor entero (×1, ×2…), así que a veces hay que mover bastante para ver el salto.",
     ),
     // Rango del deslizador (no lo acota `config::validate`): pensado para
     // pantallas de hasta ~2560 px. El vpet **siempre** queda ≥24 px dentro
@@ -668,8 +669,8 @@ mod tests {
         // dentro de rango
         assert!(validate_value("cat_height", "80").is_ok());
         // fuera de rango: mensaje con la etiqueta y los límites
-        let e = validate_value("cat_height", "999").unwrap_err();
-        assert!(e.contains("Tamaño") && e.contains("200"), "{e}");
+        let e = validate_value("cat_height", "9999").unwrap_err();
+        assert!(e.contains("Tamaño") && e.contains("512"), "{e}");
         // tipo mal
         assert!(validate_value("cat_height", "alto").is_err());
         // clave inexistente → delega en el parser

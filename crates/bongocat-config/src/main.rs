@@ -234,11 +234,22 @@ impl App {
                         }
                     }
                     if ui
-                        .add_enabled(dirty, egui::Button::new("Restablecer"))
-                        .on_hover_text("Deshace los cambios sin guardar (relee el bongocat.conf)")
+                        .add_enabled(dirty, egui::Button::new("Deshacer"))
+                        .on_hover_text("Descarta los cambios sin guardar (relee el bongocat.conf)")
                         .clicked()
                     {
                         self.model.reset();
+                        self.edits.clear();
+                    }
+                    if ui
+                        .button("Valores de fábrica")
+                        .on_hover_text(
+                            "Pone todos los ajustes en su valor por defecto (no toca \
+                             el tema ni los dispositivos). Hay que Guardar para que quede.",
+                        )
+                        .clicked()
+                    {
+                        self.model.factory_reset();
                         self.edits.clear();
                     }
                 });
