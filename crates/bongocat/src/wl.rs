@@ -1247,6 +1247,7 @@ impl State {
                 self.draw();
                 eprintln!("bongocat: overlay re-rasterizado (tray)");
             }
+            C::LaunchConfig => tray::launch_config(),
             C::Reload => {
                 if self.config_path.is_some() {
                     self.reload();

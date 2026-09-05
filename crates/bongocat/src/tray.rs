@@ -44,6 +44,9 @@ pub enum TrayCommand {
     ToggleEdit,
     /// Reconstruir las surfaces de overlay sin salir del proceso.
     RestartOverlays,
+    /// Abrir la ventana gráfica `bongocat-config` (spec 0007). Nunca una
+    /// terminal: si el binario no está, el ítem ni siquiera aparece.
+    LaunchConfig,
     /// Submenú Tema ▸ *n*.
     SetTheme(String),
     /// Recargar la configuración desde disco.
@@ -64,6 +67,7 @@ impl TrayCommand {
             "toggle" => Self::ToggleVisibility,
             "edit" => Self::ToggleEdit,
             "restart" => Self::RestartOverlays,
+            "configure" => Self::LaunchConfig,
             "reload" => Self::Reload,
             "about" => Self::About,
             "quit" => Self::Quit,
@@ -264,8 +268,13 @@ impl ksni::Tray for SniTray {
             ..Default::default()
         });
 
-        vec![
-            item("Mostrar / Ocultar", TrayCommand::ToggleVisibility),
+        let mut items = vec![item("Mostrar / Ocultar", TrayCommand::ToggleVisibility)];
+        // "Configurar…" solo si la ventana gráfica está instalada (nunca se cae
+        // a una terminal, spec 0007 / [[feedback-visual-no-comandos]]).
+        if config_gui_available() {
+            items.push(item("Configurar…", TrayCommand::LaunchConfig));
+        }
+        items.extend([
             edit,
             item("Reiniciar overlay", TrayCommand::RestartOverlays),
             item("Recargar configuración", TrayCommand::Reload),
@@ -277,7 +286,8 @@ impl ksni::Tray for SniTray {
             MenuItem::Separator,
             item("Acerca de", TrayCommand::About),
             item("Cerrar", TrayCommand::Quit),
-        ]
+        ]);
+        items
     }
 }
 
@@ -386,6 +396,33 @@ fn run(
         }
         handle.shutdown();
     });
+}
+
+/// Nombre del binario de la ventana de configuración (spec 0007).
+const CONFIG_GUI_BIN: &str = "bongocat-config";
+
+/// ¿Está `bongocat-config` en el `PATH` como ejecutable? El ítem "Configurar…"
+/// solo aparece si esto es cierto: la promesa es "todo con el ratón", así que
+/// **nunca** se ofrece una alternativa por terminal.
+#[must_use]
+pub fn config_gui_available() -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let cand = dir.join(CONFIG_GUI_BIN);
+        std::fs::metadata(&cand).is_ok_and(|m| m.is_file())
+    })
+}
+
+/// "Configurar…": lanza la ventana gráfica `bongocat-config`. Lista fija, sin
+/// shell, sin interpolar nada (spec 0011 §Seguridad). No hay reserva por
+/// terminal: si falla, se registra y ya.
+pub fn launch_config() {
+    match std::process::Command::new(CONFIG_GUI_BIN).spawn() {
+        Ok(_) => {}
+        Err(e) => eprintln!("bongocat: no se pudo abrir {CONFIG_GUI_BIN}: {e}"),
+    }
 }
 
 /// PNG del icono del tray: el gato con gafas (arte propio del usuario, fondo
@@ -510,6 +547,10 @@ mod tests {
             Some(TrayCommand::ToggleEdit)
         );
         assert_eq!(TrayCommand::from_menu_id("quit"), Some(TrayCommand::Quit));
+        assert_eq!(
+            TrayCommand::from_menu_id("configure"),
+            Some(TrayCommand::LaunchConfig)
+        );
         assert_eq!(
             TrayCommand::from_menu_id("theme:pink"),
             Some(TrayCommand::SetTheme("pink".into()))
