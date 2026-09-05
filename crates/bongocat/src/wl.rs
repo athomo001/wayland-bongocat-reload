@@ -1520,6 +1520,10 @@ impl State {
                 }
             }
             "GET" | "SET" => "ERR uso: GET clave | SET clave valor".to_string(),
+            // Config viva completa como INI (una línea por clave, `\n` reales).
+            // La usa la ventana `bongocat-config` (spec 0007) para cargar su
+            // modelo de un tirón en vez de `GET` clave por clave.
+            "DUMP" => self.config.to_ini(),
             "THEME" => match arg1 {
                 "" => "ERR uso: THEME list | next | <nombre>".to_string(),
                 "list" => {

@@ -1,0 +1,27 @@
+# Ventana gráfica de configuración (spec 0007, Fase 4). Binario **aparte**: su
+# árbol de dependencias (egui/eframe/winit/glow) no toca el núcleo `bongocat`.
+[package]
+name = "bongocat-config"
+version = "3.0.0-dev"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.85"
+repository.workspace = true
+publish = false
+description = "Ventana de configuración visual de bongocat (egui)"
+
+[dependencies]
+bongocat-common = { path = "../bongocat-common" }
+# `egui` se dibuja a sí misma → misma pinta en GNOME/KDE/COSMIC/wlroots, sin
+# librerías de toolkit del sistema. `glow` = backend OpenGL; nativa Wayland con
+# respaldo X11.
+eframe = { version = "0.32", default-features = false, features = [
+    "glow",
+    "wayland",
+    "x11",
+    "default_fonts",
+] }
+egui = "0.32"
+
+[lints.rust]
+unsafe_code = "forbid"

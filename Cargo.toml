@@ -2,7 +2,12 @@
 # (`Makefile`, `src/`) hasta que el Rust alcance paridad 1:1 y pase a `main`.
 [workspace]
 resolver = "2"
-members = ["crates/bongocat-common", "crates/bongocat", "crates/bongocatctl"]
+members = [
+    "crates/bongocat-common",
+    "crates/bongocat",
+    "crates/bongocatctl",
+    "crates/bongocat-config",
+]
 
 [workspace.package]
 edition = "2021"
