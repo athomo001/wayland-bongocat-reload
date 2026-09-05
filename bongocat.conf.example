@@ -153,9 +153,8 @@ enable_tray=1
 # │ DEPURACIÓN                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
-# ⚠️ AVISO DE PRIVACIDAD: en la versión actual, enable_debug=1 registra las
-#    pulsaciones de teclado (keycodes) en stdout/stderr. Mantén 0 salvo para
-#    diagnóstico puntual. Este volcado está en camino de eliminarse: la tecla
-#    se reducirá a izquierda/derecha y bongocat no podrá saber cuál pulsaste.
-#
+# Reservado para diagnóstico futuro; hoy no tiene ningún efecto. El lector de
+# teclado (proceso aislado con seccomp, spec 0013) nunca ha registrado ni
+# expuesto qué tecla se pulsó: solo cruza un bit de "pata izquierda/derecha"
+# por pulsación, sin volcado de keycodes ni con esta clave activada.
 enable_debug=0

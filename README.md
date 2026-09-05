@@ -1,68 +1,80 @@
 # Bongo Cat — overlay para Wayland
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Versión](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-bongocat/releases)
 
 Un overlay para Wayland que muestra un gato bongo animado reaccionando a lo que
-escribes.
+escribes. Este fork (**wayland-bongocat-reload**) reescribió el núcleo en Rust
+y añadió instalación en un comando, control remoto (`bongocatctl` + icono de
+bandeja), temas/skins con animación de sprite sheet, entrada de ratón, modo de
+edición con el ratón, y endurecimiento de seguridad/privacidad.
 
-> 🇬🇧 English: [README.en.md](README.en.md)
+> 🇬🇧 English: [README.en.md](README.en.md) — desactualizado respecto a este
+> fichero; si lo necesitas, pide que se sincronice.
 
 ![Demo](assets/demo.gif)
 
 ## Qué hace
 
-- 🎯 Animación del teclado en tiempo real
-- 🔥 Recarga de configuración en caliente
+- 🎯 Animación en tiempo real al teclear (y, opcional, al mover/clicar el ratón)
+- 🎨 Temas/skins desde disco: SVG vectorial o sprite sheet PNG/APNG animado,
+  con importador de mascotas de [wayland-vpets](https://github.com/furudbat/wayland-vpets)
+- 🖱️ Modo edición: arrastra y redimensiona el gato con el ratón, sin editar
+  ficheros
+- 🔔 Icono en la bandeja del sistema: mostrar/ocultar, recargar, elegir tema,
+  configurar, cerrar — todo con el ratón
+- 🖥️ Control remoto (`bongocatctl`) y socket IPC para automatizar/scriptear
+- 🔥 Recarga de configuración en caliente (`-w`), incluidos los ficheros del
+  tema activo
 - 🎮 Se auto-oculta en aplicaciones a pantalla completa
 - 🖥️ Soporte multi-monitor
 - 😴 Modo reposo por inactividad o por horario
-- 🎨 Render basado en SVG (nítido a cualquier tamaño)
-- ⚡ Ligero (~8 MB de RAM)
+- 🔒 El lector de teclado corre en un proceso aparte con `seccomp`: nunca sabe
+  ni registra qué tecla pulsaste, solo "izquierda o derecha"
+- ⚡ Ligero: un solo binario Rust, sin runtime ni dependencias de escritorio
+  pesadas
 
-## Instalación rápida
-
-### Arch Linux
-
-```bash
-yay -S bongocat
-```
-
-### Otras distribuciones — compilar desde fuente
+## Instalación
 
 ```bash
-git clone https://github.com/saatvik333/wayland-bongocat.git
-cd wayland-bongocat && make
+git clone https://github.com/athomo001/wayland-bongocat-reload.git
+cd wayland-bongocat-reload
+./install.sh
 ```
 
-**Requisitos:** `wayland-client`, `gcc`/`clang` (C23), `make`.
+Compila con `cargo` (requiere Rust estable, MSRV 1.80) e instala en
+`~/.local/bin` por defecto — sin `sudo`. Para instalar en todo el sistema:
+
+```bash
+PREFIX=/usr/local sudo ./install.sh
+```
+
+El instalador también copia una configuración inicial en
+`~/.config/bongocat/bongocat.conf` **solo si no existe ya una tuya** — nunca
+pisa una configuración existente.
 
 ### Permisos
+
+Leer `/dev/input/` requiere pertenecer al grupo `input`:
 
 ```bash
 sudo usermod -a -G input $USER
 # Cierra sesión y vuelve a entrar
 ```
 
-### Encontrar tu teclado
-
-```bash
-bongocat-find-devices   # o ./scripts/find_input_devices.sh
-```
-
 ### Ejecutar
 
 ```bash
-bongocat --watch-config
-# Opcional: forzar un monitor concreto
-bongocat --watch-config --monitor eDP-1
+bongocat -w   # -w = recarga en caliente al editar la configuración
 ```
+
+El teclado (y el ratón, si `enable_mouse=1`) se **autodetectan**; solo hace
+falta fijar `keyboard_device=`/`mouse_device=` a mano si la autodetección no
+acierta (`./scripts/find_input_devices.sh` los lista).
 
 ## Configuración
 
-Crea `~/.config/bongocat/bongocat.conf` a partir de
-[`bongocat.conf.example`](bongocat.conf.example) (cada clave está documentada
-ahí).
+Edita `~/.config/bongocat/bongocat.conf` — cada clave está documentada con
+más detalle en [`bongocat.conf.example`](bongocat.conf.example).
 
 <details>
 <summary>Todas las opciones</summary>
@@ -70,50 +82,128 @@ ahí).
 | Opción | Valores | Por defecto | Descripción |
 | --- | --- | --- | --- |
 | `cat_height` | 10–200 | 40 | Tamaño del gato en píxeles |
+| `cat_opacity` | 0–100 | 100 | Opacidad del gato en % |
 | `cat_align` | left/center/right | center | Alineación horizontal |
 | `cat_x_offset` | entero | 100 | Desplazamiento horizontal desde la alineación |
-| `cat_y_offset` | entero | 10 | Desplazamiento vertical desde el centro |
+| `cat_y_offset` | entero | 10 | Desplazamiento vertical desde el anclaje |
+| `theme` | nombre o ruta | vacío (embebido) | Tema activo — ver [Temas](#temas) |
+| `mirror_x` / `mirror_y` | 0/1 | 0 | Voltear el gato en horizontal / vertical |
 | `overlay_height` | 20–300 | 50 | Altura de la barra del overlay en píxeles |
 | `overlay_opacity` | 0–255 | 150 | Opacidad del fondo (0 = transparente) |
 | `overlay_position` | top/bottom | top | Borde de la pantalla |
 | `layer` | background/bottom/top/overlay | top | Capa de Wayland |
-| `keyboard_device` | ruta `/dev/input/…` | auto | Dispositivo evdev a monitorear |
+| `keyboard_device` | ruta `/dev/input/…` | auto | Dispositivo evdev a monitorear (repetible) |
 | `keyboard_name` | texto | — | Casar el dispositivo por nombre (para hotplug) |
+| `enable_mouse` | 0/1 | 1 | Animar también con el ratón |
+| `mouse_paw` | left/right/random | right | Qué pata usa el ratón |
+| `mouse_move_interval` | ms | 50 | Cada cuánto un golpecito mientras mueves el ratón |
+| `mouse_device` | ruta `/dev/input/…` | auto | Dispositivo del ratón (repetible) |
 | `monitor` | lista separada por comas | auto | Monitores en los que dibujar |
-| `fps` | 1–120 | 60 | Fotogramas por segundo de la animación |
-| `mirror_x` / `mirror_y` | 0/1 | 0 | Voltear el gato en horizontal / vertical |
+| `idle_frame` | 0–4 | 0 | Fotograma en reposo (solo `classic`/temas SVG) |
+| `happy_kpm` | 0–10000 | 0 (off) | Teclas/min para el estado "feliz" (si el tema lo trae) |
+| `keypress_duration` | ms | 100 | Cuánto se mantiene la pata bajada tras una pulsación |
 | `enable_hand_mapping` | 0/1 | 1 | Mapear teclas a mano izquierda/derecha |
-| `keypress_duration` | ms | 100 | Cuánto se mantiene el fotograma de tecla pulsada |
-| `idle_frame` | 0–4 | 0 | Fotograma en reposo |
 | `idle_sleep_timeout` | segundos | 0 | Dormir tras inactividad (0 = desactivado) |
-| `hotplug_scan_interval` | segundos | 30 | Cada cuánto rescanear dispositivos (0 = una vez) |
 | `enable_scheduled_sleep` | 0/1 | 0 | Activar reposo por horario |
 | `sleep_begin` / `sleep_end` | HH:MM | 00:00 | Inicio / fin del horario de reposo |
 | `disable_fullscreen_hide` | 0/1 | 0 | Mantener el overlay visible en pantalla completa |
-| `enable_debug` | 0/1 | 0 | Registro de depuración |
+| `hotplug_scan_interval` | segundos | 30 | Cada cuánto rescanear dispositivos (0 = una vez) |
+| `enable_ipc` | 0/1 | 1 | Socket de control para `bongocatctl`/el tray |
+| `enable_tray` | 0/1 | 1 | Icono en la bandeja del sistema |
 
-Cambiar el número de monitores en marcha requiere reiniciar; el resto se recarga
-en caliente con `--watch-config`.
+`fps` sigue aceptándose por compatibilidad del fichero, pero ya no tiene
+efecto: el bucle de animación se reprograma solo cuando hace falta, en vez de
+sondear sin parar a un ritmo fijo.
+
+Cambiar el número de monitores en marcha requiere reiniciar; el resto se
+recarga en caliente con `-w` (incluidos los ficheros del tema activo).
 
 </details>
 
-## Línea de comandos
+## Temas
 
+Un tema es una carpeta con SVG (vectorial) o una hoja de sprites PNG/APNG
+(animada, con estados como `idle`/`writing`/`sleep`/`happy`/`boring`). Guía
+completa en [`themes/README.md`](themes/README.md).
+
+```bash
+bongocat theme list                  # temas instalados
+bongocat theme new mi-skin           # crea una plantilla en $XDG_DATA_HOME
+bongocat theme check mi-skin         # valida un tema sin arrancar el overlay
+bongocat theme import-vpets ORIGEN   # importa una mascota de wayland-vpets
 ```
-bongocat [OPCIONES]
 
-  -c, --config FICHERO   Ruta del fichero de configuración (auto-detecta si se omite)
-  -m, --monitor NOMBRE   Forzar una salida de monitor concreta
-  -w, --watch-config     Recargar al cambiar la configuración
-  -t, --toggle           Arrancar / parar (toggle)
-  -h, --help             Ayuda
-  -v, --version          Versión
+`import-vpets` acepta una carpeta de mascota, un `.conf` estilo wayland-vpets,
+una hoja PNG suelta, una carpeta de PNGs por estado, o un APNG — traduce las
+claves, informa de lo que no pudo mapear, y nunca falla por un estado ausente.
+Ver [`themes/COMUNIDAD.md`](themes/COMUNIDAD.md) (aviso de licencias/IP antes
+de importar mascotas de terceros).
+
+## Icono de bandeja
+
+Con `enable_tray=1` (por defecto) aparece un icono en la bandeja del sistema
+si tu escritorio tiene un host StatusNotifierItem (paneles de KDE, COSMIC,
+waybar con el módulo de tray, xfce4-panel…; en GNOME hace falta la extensión
+AppIndicator). Menú: **Mostrar/Ocultar** · **Reiniciar overlay** · **Recargar
+configuración** · **Configurar…** · **Tema ▸** (lista los temas instalados,
+marca el activo, cambia con un clic) · **Acerca de** · **Cerrar**.
+
+`--no-tray` lo desactiva para una ejecución sin tocar la config.
+
+## Modo edición (ratón)
+
+```bash
+bongocatctl edit on     # arrastra el gato con el botón izquierdo; rueda = tamaño
+bongocatctl edit off    # sale y guarda la posición/tamaño en el .conf
 ```
 
-> ⚠️ **Aviso de privacidad**: con `enable_debug=1` la versión actual registra
-> pulsaciones. Mantenlo en `0` (por defecto) para uso normal. Este volcado de
-> teclas está en camino de eliminarse: bongocat reducirá cada tecla a
-> izquierda/derecha y no podrá saber qué tecla pulsaste.
+Se activa por IPC/`bongocatctl` (todavía no hay un ítem en el menú del tray
+para esto). Mientras está activo, un contorno marca los límites del gato.
+
+## Control remoto — `bongocatctl`
+
+Para automatizar o atar a atajos de teclado del compositor:
+
+```bash
+bongocatctl show|hide|toggle      # mostrar/ocultar a mano
+bongocatctl theme next            # rotar temas
+bongocatctl theme set NOMBRE      # cambiar a un tema concreto
+bongocatctl state                 # estado actual de la instancia (JSON-like)
+bongocatctl get-live CLAVE        # leer una clave de la instancia en marcha
+bongocatctl set-live CLAVE VALOR  # cambiarla en caliente (sin tocar el fichero)
+bongocatctl save                  # persistir al .conf lo cambiado con set-live
+bongocatctl stop                  # cerrar la instancia
+```
+
+`bongocatctl -h` lista todas las órdenes, incluidas las de fichero (`get`/
+`set`/`dump`/`default`) que no necesitan una instancia en marcha.
+
+## Autoarranque (systemd)
+
+```bash
+bongocat --install-service
+systemctl --user enable --now bongocat.service
+```
+
+`bongocat --uninstall-service` quita la unidad.
+
+## Desinstalación
+
+```bash
+./install.sh --uninstall
+```
+
+Quita los binarios y la unidad de ejemplo instalados; **no toca** tu
+`~/.config/bongocat/bongocat.conf`. Si instalaste el servicio systemd, quítalo
+antes con `bongocat --uninstall-service`.
+
+## Privacidad
+
+El teclado (y el ratón) se leen en un **proceso aparte** con `seccomp`
+(lista blanca de syscalls): al padre solo le llega un bit por pulsación
+("pata izquierda" o "pata derecha"), nunca la tecla ni su código. `enable_debug`
+existe en el fichero de config por compatibilidad pero no tiene ningún efecto
+hoy — no hay ningún camino de código que registre teclas, con o sin él.
 
 ## Solución de problemas
 
@@ -129,8 +219,8 @@ sudo usermod -a -G input $USER   # y vuelve a iniciar sesión
 <details>
 <summary>El gato no responde al teclado</summary>
 
-1. `bongocat-find-devices` para encontrar el dispositivo correcto
-2. Actualiza `keyboard_device` en la configuración
+1. `./scripts/find_input_devices.sh` para encontrar el dispositivo correcto
+2. Fija `keyboard_device=` en la configuración
 3. Reinicia bongocat
 
 </details>
@@ -143,20 +233,28 @@ ven con `wlr-randr` o `hyprctl monitors`.
 
 </details>
 
+<details>
+<summary>No aparece el icono de la bandeja</summary>
+
+Revisa que tu panel tenga un applet de "área de estado"/bandeja del sistema
+(en GNOME, la extensión AppIndicator). Si `bongocat` imprime "icono de bandeja
+activo" en la terminal pero no ves nada, es el panel, no bongocat.
+
+</details>
+
 ## Compilar
 
 ```bash
-make          # Build de release
-make debug    # Build de depuración (ASan + UBSan)
-make test     # Ejecuta los tests
+cargo build --release   # binarios en target/release/
+cargo test               # toda la batería de tests
 ```
 
 ## Estado
 
-Este fork está reescribiendo el núcleo a **Rust** y añadiendo: instalación en un
-comando, icono en la barra del sistema, mover el gato con el ratón, temas/skins
-(incl. compatibilidad con [wayland-vpets](https://github.com/furudbat/wayland-vpets)),
-interfaz de configuración, y endurecimiento de seguridad y privacidad.
+El núcleo ya está reescrito en Rust con paridad funcional y endurecimiento de
+seguridad sobre el C original. En curso: interfaz de configuración a pantalla
+completa (TUI/GUI) e importación completa de packs de wayland-vpets (GIF,
+listado de una instalación local).
 
 ## Licencia
 
