@@ -1,6 +1,10 @@
-//! Generador del sprite sheet HD de Umbreon (Gato Negro / Pokémon) a partir del set de stickers
-//! con 9 poses felinas genuinas y ciclo de caminata lateral de 4 patas realista.
-//! Produce `themes/umbreon/sheet.png` (2048x2432 px, 16x19) y `themes/umbreon/writing.apng`.
+//! Generador del sprite sheet HD de Umbreon (Gato Negro) con animación genuina fotograma a fotograma:
+//! - Caminata lateral de 4 patas auténtica en perfil estricto (7 fotogramas secuenciales).
+//! - Caza completa del ratón: acecho agazapado -> salto en el aire -> zambullida -> atrapada con patas -> celebración (6 fotogramas secuenciales).
+//! - Aseo felino ("ponerse lindo"): sentarse -> levantar pata -> lamer con la lengua -> lavarse la cara/oreja -> sacudir pata -> acicalado orgulloso (6 fotogramas secuenciales).
+//! - Reposo (`idle`) con movimiento sinuoso de cola felina y respiración serena.
+//! - Sueño profundo (`sleep`) con cola articulada que se mueve y «Zzz» flotantes que ascienden en olas continuas.
+//! - Comida de cuenco (`eat_ram`), bufido enojado con lomo erizado (`angry`), etc.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
@@ -96,7 +100,7 @@ fn extract_sticker_from_rect(
         char_mask[(y * rw + x) as usize] = true;
     }
 
-    // Incluir componentes secundarios conectados o muy cercanos (< 28px) si tienen tamaño razonable (props: plato, ratón, zzz)
+    // Incluir componentes secundarios conectados o muy cercanos (< 28px) si tienen tamaño razonable (props: ratón, plato)
     for comp in &components[1..] {
         let is_near = comp.iter().any(|&(x, y)| {
             main_comp.iter().any(|&(mx, my)| {
@@ -201,8 +205,8 @@ fn extract_sticker_from_rect(
     let mut char_canvas: RgbaImage = ImageBuffer::new(FW, FH);
     image::imageops::overlay(&mut char_canvas, &resized_char, ox as i64, oy as i64);
 
-    // 5. Borde blanco puro (#FFFFFF) de sticker die-cut de 4.0px
-    let radius = 4.0f32;
+    // 5. Borde blanco puro (#FFFFFF) de sticker die-cut de 3.8px
+    let radius = 3.8f32;
     let r_i = (radius + 1.0).ceil() as i32;
     let mut out: RgbaImage = ImageBuffer::new(FW, FH);
 
@@ -322,6 +326,90 @@ fn transform_sprite(src: &RgbaImage, dx: f32, dy: f32, scale_x: f32, scale_y: f3
     out
 }
 
+/// Anima la cola de Umbreon sentado en `idle` de forma independiente a su cabeza y cuerpo.
+fn animate_idle_with_tail(
+    src: &RgbaImage,
+    tail_angle: f32,
+    breath_dy: f32,
+    breath_scale: f32,
+) -> RgbaImage {
+    let mut out = ImageBuffer::new(FW, FH);
+    let pivot_x = FW as f32 / 2.0;
+    let pivot_y = FH as f32 - 10.0;
+
+    let tail_pivot_x = 73.0f32;
+    let tail_pivot_y = 96.0f32;
+    let (sin_t, cos_t) = tail_angle.sin_cos();
+
+    for y in 0..FH {
+        for x in 0..FW {
+            // Región de la cola a la derecha
+            if x >= 70 && y >= 45 && y <= 112 {
+                let rx = x as f32 - tail_pivot_x;
+                let ry = y as f32 - tail_pivot_y;
+                let src_x = tail_pivot_x + rx * cos_t + ry * sin_t;
+                let src_y = tail_pivot_y - rx * sin_t + ry * cos_t;
+                let p = sample_bilinear(src, src_x, src_y);
+                if p[3] > 0 {
+                    out.put_pixel(x, y, p);
+                    continue;
+                }
+            }
+
+            // Cuerpo y cabeza: respiración suave, sin rotación
+            let cur_x = x as f32;
+            let cur_y = y as f32 - breath_dy;
+            let src_x = pivot_x + (cur_x - pivot_x);
+            let src_y = pivot_y + (cur_y - pivot_y) / breath_scale.max(0.01);
+
+            let p = sample_bilinear(src, src_x, src_y);
+            if p[3] > 0 {
+                out.put_pixel(x, y, p);
+            }
+        }
+    }
+    out
+}
+
+/// Anima el gato durmiendo con respiración profunda, movimiento de punta de cola y Zzz flotantes
+fn animate_sleep_with_tail(src: &RgbaImage, tail_curl: f32, breath_scale: f32) -> RgbaImage {
+    let mut out = ImageBuffer::new(FW, FH);
+    let pivot_x = FW as f32 / 2.0;
+    let pivot_y = FH as f32 - 10.0;
+
+    let tail_pivot_x = 84.0f32;
+    let tail_pivot_y = 92.0f32;
+    let (sin_t, cos_t) = tail_curl.sin_cos();
+
+    for y in 0..FH {
+        for x in 0..FW {
+            // Punta de la cola de la pose durmiendo (derecha inferior)
+            if x >= 78 && y >= 68 && y <= 108 {
+                let rx = x as f32 - tail_pivot_x;
+                let ry = y as f32 - tail_pivot_y;
+                let src_x = tail_pivot_x + rx * cos_t + ry * sin_t;
+                let src_y = tail_pivot_y - rx * sin_t + ry * cos_t;
+                let p = sample_bilinear(src, src_x, src_y);
+                if p[3] > 0 {
+                    out.put_pixel(x, y, p);
+                    continue;
+                }
+            }
+
+            let cur_x = x as f32;
+            let cur_y = y as f32;
+            let src_x = pivot_x + (cur_x - pivot_x);
+            let src_y = pivot_y + (cur_y - pivot_y) / breath_scale.max(0.01);
+
+            let p = sample_bilinear(src, src_x, src_y);
+            if p[3] > 0 {
+                out.put_pixel(x, y, p);
+            }
+        }
+    }
+    out
+}
+
 fn blend_sprites(a: &RgbaImage, b: &RgbaImage, t: f32) -> RgbaImage {
     let mut out = ImageBuffer::new(FW, FH);
     let t_clamped = t.clamp(0.0, 1.0);
@@ -355,26 +443,46 @@ fn blend_sprites(a: &RgbaImage, b: &RgbaImage, t: f32) -> RgbaImage {
     out
 }
 
-fn draw_z(img: &mut RgbaImage, cx: i32, cy: i32, size: i32, color: Rgba<u8>) {
-    let s = size.max(2);
+/// Dibuja una 'Z' bien visible, nítida y con borde oscuro para que resalte
+fn draw_bold_z(img: &mut RgbaImage, cx: i32, cy: i32, size: i32, alpha_factor: f32) {
+    let s = size.max(3);
+    let a = (245.0 * alpha_factor).clamp(0.0, 255.0) as u8;
+    let color = Rgba([255, 225, 75, a]);
+    let outline_a = (180.0 * alpha_factor).clamp(0.0, 255.0) as u8;
+    let outline = Rgba([30, 20, 20, outline_a]);
+
+    // Dibuja trazo horizontal superior
     for dx in 0..s {
         let px = cx - s / 2 + dx;
-        let py_top = cy - s / 2;
-        let py_bot = cy + s / 2;
-        if px >= 0 && px < FW as i32 {
-            if py_top >= 0 && py_top < FH as i32 {
-                img.put_pixel(px as u32, py_top as u32, color);
-            }
-            if py_bot >= 0 && py_bot < FH as i32 {
-                img.put_pixel(px as u32, py_bot as u32, color);
-            }
-        }
+        let py = cy - s / 2;
+        put_px_thick(img, px, py, color, outline);
     }
+    // Trazo diagonal
     for i in 0..s {
         let px = cx + s / 2 - i;
         let py = cy - s / 2 + i;
-        if px >= 0 && px < FW as i32 && py >= 0 && py < FH as i32 {
-            img.put_pixel(px as u32, py as u32, color);
+        put_px_thick(img, px, py, color, outline);
+    }
+    // Trazo horizontal inferior
+    for dx in 0..s {
+        let px = cx - s / 2 + dx;
+        let py = cy + s / 2;
+        put_px_thick(img, px, py, color, outline);
+    }
+}
+
+fn put_px_thick(img: &mut RgbaImage, x: i32, y: i32, col: Rgba<u8>, outline: Rgba<u8>) {
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let px = x + dx;
+            let py = y + dy;
+            if px >= 0 && px < FW as i32 && py >= 0 && py < FH as i32 {
+                if dx == 0 && dy == 0 {
+                    img.put_pixel(px as u32, py as u32, col);
+                } else if img.get_pixel(px as u32, py as u32)[3] < 120 {
+                    img.put_pixel(px as u32, py as u32, outline);
+                }
+            }
         }
     }
 }
@@ -396,48 +504,71 @@ fn draw_sparkle(img: &mut RgbaImage, cx: i32, cy: i32, rad: i32, color: Rgba<u8>
 fn main() {
     let sheet_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_cat_sheet_1788633569390.jpg";
     let walk_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_walk_cycle_1788636213890.jpg";
+    let pounce_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_pounce_seq_1788637088867.jpg";
+    let groom_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_groom_seq_1788637133036.jpg";
 
     println!("Cargando sets de sprites de Umbreon...");
     let raw_img = image::open(sheet_src).expect("no se pudo abrir umbreon_cat_sheet.jpg");
     let raw_walk = image::open(walk_src).expect("no se pudo abrir umbreon_walk_cycle.jpg");
+    let raw_pounce = image::open(pounce_src).expect("no se pudo abrir umbreon_pounce_seq.jpg");
+    let raw_groom = image::open(groom_src).expect("no se pudo abrir umbreon_groom_seq.jpg");
 
-    // Extracción de poses principales
-    println!("Extrayendo poses felinas...");
+    // 1. Poses básicas
+    println!("Extrayendo poses básicas...");
     let s_idle = extract_sticker_from_rect(&raw_img, 45, 20, 278, 325);
     let s_angry = extract_sticker_from_rect(&raw_img, 335, 335, 330, 345);
     let s_sleep = extract_sticker_from_rect(&raw_img, 680, 335, 315, 320);
-    let s_groom = extract_sticker_from_rect(&raw_img, 70, 675, 275, 330);
     let s_eat = extract_sticker_from_rect(&raw_img, 375, 680, 300, 325);
-    let s_pounce = extract_sticker_from_rect(&raw_img, 675, 685, 325, 320);
 
-    // Extracción de los 6 fotogramas de la caminata lateral de 4 patas
-    println!("Extrayendo fotogramas de caminata lateral de 4 patas...");
+    // 2. Caminata de 4 patas lateral (7 fotogramas secuenciales en perfil)
+    println!("Extrayendo los 7 fotogramas de caminata lateral...");
     let w0 = extract_sticker_from_rect(&raw_walk, 25, 160, 310, 285);
     let w1 = extract_sticker_from_rect(&raw_walk, 380, 145, 305, 250);
     let w2 = extract_sticker_from_rect(&raw_walk, 710, 150, 300, 245);
     let w3 = extract_sticker_from_rect(&raw_walk, 1040, 160, 305, 250);
     let w4 = extract_sticker_from_rect(&raw_walk, 125, 410, 325, 255);
     let w5 = extract_sticker_from_rect(&raw_walk, 525, 405, 325, 255);
+    let w6 = extract_sticker_from_rect(&raw_walk, 905, 410, 325, 255);
+    let walk_frames = [&w0, &w1, &w2, &w3, &w4, &w5, &w6];
 
-    let walk_frames = [&w0, &w1, &w2, &w3, &w4, &w5];
+    // 3. Salto y caza completa del ratón (6 fotogramas secuenciales)
+    println!("Extrayendo secuencia de salto y caza del ratón (pounce)...");
+    let p0 = extract_sticker_from_rect(&raw_pounce, 40, 295, 205, 190);
+    let p1 = extract_sticker_from_rect(&raw_pounce, 280, 275, 180, 210);
+    let p2 = extract_sticker_from_rect(&raw_pounce, 480, 250, 230, 190);
+    let p3 = extract_sticker_from_rect(&raw_pounce, 725, 240, 185, 225);
+    let p4 = extract_sticker_from_rect(&raw_pounce, 940, 275, 180, 220);
+    let p5 = extract_sticker_from_rect(&raw_pounce, 1150, 260, 175, 235);
+    let pounce_frames = [&p0, &p1, &p2, &p3, &p4, &p5];
+
+    // 4. Aseo felino auténtico ("ponerse lindo", 6 fotogramas secuenciales)
+    println!("Extrayendo secuencia de aseo / lamerse la pata (groom)...");
+    let g0 = extract_sticker_from_rect(&raw_groom, 30, 200, 215, 325);
+    let g1 = extract_sticker_from_rect(&raw_groom, 265, 200, 200, 325);
+    let g2 = extract_sticker_from_rect(&raw_groom, 475, 195, 195, 330);
+    let g3 = extract_sticker_from_rect(&raw_groom, 675, 195, 195, 330);
+    let g4 = extract_sticker_from_rect(&raw_groom, 905, 195, 185, 330);
+    let g5 = extract_sticker_from_rect(&raw_groom, 1115, 205, 235, 325);
+    let groom_frames = [&g0, &g1, &g2, &g3, &g4, &g5];
 
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
     let mut sheet: RgbaImage = ImageBuffer::new(sheet_w, sheet_h);
     let tau = std::f32::consts::TAU;
 
-    // 1. IDLE (Fila 1, 16 frames): Gato erguido firme, sin balanceo de cabeza, respiración suave y parpadeo
-    println!("Generando Fila 1: Idle (16 frames, cabeza fija y serena)...");
+    // 1. IDLE (Fila 1, 16 frames): Cola moviéndose suavemente a izquierda y derecha + respiración serena
+    println!("Generando Fila 1: Idle (16 frames, cola felina en movimiento continuo)...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        let breath_scale = 1.0 + angle.sin() * 0.016;
+        let breath_scale = 1.0 + angle.sin() * 0.015;
         let breath_dy = angle.sin() * 0.8;
+        // Oscilación sinusoidal de la cola felina (±8 grados)
+        let tail_angle = (angle).sin() * 0.15;
 
-        // Cabeza y cuerpo fijos (dx = 0), solo suave respiración vertical
-        let mut spr = transform_sprite(&s_idle, 0.0, breath_dy, 1.0, breath_scale);
+        let mut spr = animate_idle_with_tail(&s_idle, tail_angle, breath_dy, breath_scale);
 
-        // Parpadeo sutil con ojos cerrados de satisfacción en frames 9 y 10
+        // Parpadeo sereno con ojos cerrados en frames 9 y 10
         if i == 9 || i == 10 {
             for dx in -3i32..=3i32 {
                 let px_l = 48 + dx;
@@ -465,8 +596,8 @@ fn main() {
         let angle = phase * tau;
         let bob = -(angle * 2.0).sin().abs() * 2.5;
 
-        // Alterna entre s_pounce y s_idle
-        let base_w = if i % 4 < 2 { &s_pounce } else { &s_idle };
+        // Alterna entre pose de patitas alzadas (p1) y reposo (s_idle)
+        let base_w = if i % 4 < 2 { &p1 } else { &s_idle };
         let mut spr = transform_sprite(base_w, 0.0, bob, 1.01, 0.99);
 
         let spark_x = 64 + (angle.cos() * 24.0) as i32;
@@ -493,70 +624,64 @@ fn main() {
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (3 * FH) as i64);
     }
 
-    // 5. SLEEP (Fila 5, 16 frames): Ovillado en almohada durmiendo con ojos cerrados y Zzz
-    println!("Generando Fila 5: Sleep (16 frames)...");
+    // 5. SLEEP (Fila 5, 16 frames): Gato durmiendo con cola moviéndose y Zzz que ascienden en olas
+    println!("Generando Fila 5: Sleep (16 frames, cola animada y Zzz ascendentes)...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
         let angle = phase * tau;
-        let sleep_breath = 1.0 + angle.sin() * 0.02;
-        let sleep_dy = angle.sin() * 1.0;
+        let sleep_breath = 1.0 + angle.sin() * 0.018;
+        // La cola se mueve y se acurruca suavemente
+        let tail_curl = (angle).sin() * 0.12;
 
-        let mut spr = transform_sprite(&s_sleep, 0.0, sleep_dy, 1.0, sleep_breath);
+        let mut spr = animate_sleep_with_tail(&s_sleep, tail_curl, sleep_breath);
 
-        let z_offset_y = (phase * 22.0) as i32;
-        let z_offset_x = ((phase * tau * 2.0).sin() * 3.5) as i32;
-        draw_z(
-            &mut spr,
-            88 + z_offset_x,
-            34 - z_offset_y,
-            7,
-            Rgba([255, 215, 80, 230]),
-        );
-        draw_z(
-            &mut spr,
-            98 + z_offset_x,
-            46 - z_offset_y,
-            5,
-            Rgba([255, 235, 140, 190]),
-        );
+        // Tres olas de Zzz ascendentes continuas
+        for wave in 0..3 {
+            let wave_offset = wave as f32 / 3.0;
+            let p_z = (phase + wave_offset) % 1.0;
+
+            let z_x = 76 + (p_z * 22.0) as i32 + ((p_z * tau * 2.0).sin() * 4.0) as i32;
+            let z_y = 52 - (p_z * 38.0) as i32;
+            let size = 3 + (p_z * 6.0) as i32; // Comienza pequeño y crece
+            let alpha = if p_z < 0.15 {
+                p_z / 0.15
+            } else if p_z > 0.75 {
+                (1.0 - p_z) / 0.25
+            } else {
+                1.0
+            };
+
+            draw_bold_z(&mut spr, z_x, z_y, size, alpha);
+        }
 
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (4 * FH) as i64);
     }
 
-    // 6. HAPPY (Fila 6, 16 frames): Saltar y jugar a cazar el ratón
-    println!("Generando Fila 6: Happy (16 frames, salto felino)...");
+    // 6. HAPPY (Fila 6, 16 frames): SECUENCIA REAL COMPLETA DE CAZA DEL RATÓN
+    // acecho bajo -> impulso -> salto en el aire -> zambullida -> atrapada con patas -> celebración
+    println!("Generando Fila 6: Happy (16 frames, caza completa y salto del ratón)...");
+    let n_pf = pounce_frames.len();
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let jump_y = -(angle.sin().max(0.0)) * 8.0;
-        let squash = 1.0 + (angle * 2.0).cos() * 0.05;
+        let progress = (i as f32 / 16.0) * n_pf as f32;
+        let idx0 = (progress.floor() as usize) % n_pf;
+        let idx1 = (idx0 + 1) % n_pf;
+        let t = progress - progress.floor();
 
-        let base_h = if angle.sin() > 0.3 {
-            &s_pounce
-        } else {
-            &s_idle
-        };
-        let mut spr = transform_sprite(base_h, 0.0, jump_y, 2.0 - squash, squash);
-
-        draw_sparkle(
-            &mut spr,
-            64 + (angle.cos() * 24.0) as i32,
-            50 + (angle.sin() * 12.0) as i32,
-            3,
-            Rgba([255, 220, 0, 220]),
-        );
-
+        let spr = blend_sprites(pounce_frames[idx0], pounce_frames[idx1], t);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (5 * FH) as i64);
     }
 
-    // 7. BORING / GROOM (Fila 7, 16 frames): "Ponerse lindo" — lamiéndose la pata y lavándose la cara
-    println!("Generando Fila 7: Boring / Groom (16 frames)...");
+    // 7. BORING / GROOM (Fila 7, 16 frames): SECUENCIA REAL COMPLETA DE ASEO FELINO
+    // sentarse -> levantar pata -> lamer con lengua -> lavarse cara y oreja -> sacudir pata -> presumir limpio
+    println!("Generando Fila 7: Boring / Groom (16 frames, aseo y lavado de pata y cara)...");
+    let n_gf = groom_frames.len();
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let groom_dy = (angle * 2.0).sin() * 1.5;
+        let progress = (i as f32 / 16.0) * n_gf as f32;
+        let idx0 = (progress.floor() as usize) % n_gf;
+        let idx1 = (idx0 + 1) % n_gf;
+        let t = progress - progress.floor();
 
-        let spr = transform_sprite(&s_groom, 0.0, groom_dy, 1.0, 1.0);
+        let spr = blend_sprites(groom_frames[idx0], groom_frames[idx1], t);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (6 * FH) as i64);
     }
 
@@ -590,32 +715,25 @@ fn main() {
         let t = i as f32 / 7.0;
         let intermediate = if t < 0.5 {
             let sub_t = t * 2.0;
-            blend_sprites(&s_sleep, &s_groom, sub_t)
+            blend_sprites(&s_sleep, &g1, sub_t)
         } else {
             let sub_t = (t - 0.5) * 2.0;
-            blend_sprites(&s_groom, &s_idle, sub_t)
+            blend_sprites(&g1, &s_idle, sub_t)
         };
         image::imageops::overlay(&mut sheet, &intermediate, (i * FW) as i64, (15 * FH) as i64);
     }
 
-    // 17. WALK (Fila 17, 16 frames): CAMINATA LATERAL REAL DE 4 PATAS FELINAS
-    // Cabeza siempre firme al frente, sin giros ni vaivén de derecha a izquierda.
-    // Movimiento rítmico y coordinado de las 4 patas pisando el suelo.
-    println!("Generando Fila 17: Walk (16 frames, 4 patas felinas articuladas en perfil)...");
+    // 17. WALK (Fila 17, 16 frames): CAMINATA CUADRÚPEDA LATERAL EN PERFIL CON LAS 4 PATAS ARTICULADAS
+    // La cabeza mira siempre firme al frente hacia la derecha. Las patas pisan, avanzan y empujan rítmicamente.
+    println!("Generando Fila 17: Walk (16 frames, 7 fotogramas secuenciales de marcha)...");
     let n_wf = walk_frames.len();
     for i in 0..16 {
-        // Mapeo continuo suave a través de los 6 fotogramas de la marcha
         let progress = (i as f32 / 16.0) * n_wf as f32;
         let idx0 = (progress.floor() as usize) % n_wf;
         let idx1 = (idx0 + 1) % n_wf;
         let t = progress - progress.floor();
 
-        let base_step = blend_sprites(walk_frames[idx0], walk_frames[idx1], t);
-
-        // Ondulación vertical muy sutil del paso (dx = 0.0 absoluto: NO balanceo lateral de cabeza)
-        let step_bob = -((i as f32 / 16.0) * tau * 2.0).sin().abs() * 0.8;
-        let spr = transform_sprite(&base_step, 0.0, step_bob, 1.0, 1.0);
-
+        let spr = blend_sprites(walk_frames[idx0], walk_frames[idx1], t);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (16 * FH) as i64);
     }
 
