@@ -138,9 +138,9 @@ impl eframe::App for App {
                         ui.label(
                             "Este vpet se mueve solo por la pantalla.\n\n\
                              Para recolocarlo o cambiar su tamaño, abre la bandeja \
-                             del sistema → «Modo edición» y arrástralo con el ratón \
-                             (la rueda cambia el tamaño). Al soltarlo sigue haciendo \
-                             lo suyo: caminar, dormir, etc.",
+                             del sistema → «Arrastre libre» y muévelo con el ratón \
+                             (la rueda cambia el tamaño). Mientras lo arrastras sigue \
+                             haciendo lo suyo: caminar, dormir, etc.",
                         );
                         return;
                     }

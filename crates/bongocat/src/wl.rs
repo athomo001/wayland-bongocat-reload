@@ -675,19 +675,17 @@ impl State {
         }
     }
 
-    /// Altura del gato en píxeles **físicos** (la config está en lógicos). En
-    /// modo edición manda `cat_height` de la config (ver `cat_origin`): así la
-    /// rueda redimensiona de verdad aunque el tema traiga su propia altura.
+    /// Altura del gato en píxeles **físicos** (la config está en lógicos). Manda
+    /// `cat_height` del `vpet.ini` del tema si lo trae; si no, el de la config.
+    /// La rueda del modo edición limpia ese override (ver `edit_wheel`), así que
+    /// tras redimensionar manda la config.
     fn phys_cat_height(&self) -> u32 {
-        let h = if self.edit.active {
-            self.config.cat_height
-        } else {
-            self.theme
-                .as_ref()
-                .and_then(|t| t.cat_height())
-                .map(|h| h as i32)
-                .unwrap_or(self.config.cat_height)
-        };
+        let h = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_height())
+            .map(|h| h as i32)
+            .unwrap_or(self.config.cat_height);
         scale_size_120(h.max(1), self.eff_scale_120()).max(1) as u32
     }
 
@@ -697,43 +695,30 @@ impl State {
     fn cat_origin(&self, phys_w: i32, phys_h: i32) -> (i32, i32) {
         let s = self.eff_scale_120();
         let (cw, ch) = (self.frames.w as i32, self.frames.h as i32);
-        // En modo edición **manda la config**: los `vpet.ini` del tema son solo
-        // valores de partida (se copian a la config al entrar), y el paseo se
-        // congela. Así el arrastre tiene un único valor que mover y lo que se ve
-        // coincide con `cat_x_offset` / `cat_y_offset`.
-        let editing = self.edit.active;
-        let x_off = if editing {
-            self.config.cat_x_offset
-        } else {
-            self.theme
-                .as_ref()
-                .and_then(|t| t.cat_x_offset())
-                .unwrap_or(self.config.cat_x_offset)
-        };
-        let y_off = if editing {
-            self.config.cat_y_offset
-        } else {
-            self.theme
-                .as_ref()
-                .and_then(|t| t.cat_y_offset())
-                .unwrap_or(self.config.cat_y_offset)
-        };
-        let align = if editing {
-            self.config.cat_align
-        } else {
-            self.theme
-                .as_ref()
-                .and_then(|t| t.cat_align())
-                .unwrap_or(self.config.cat_align)
-        };
+        // Posición: manda el `vpet.ini` del tema si trae el valor; si no, la
+        // config. El arrastre libre (modo edición) limpia el override en cuanto
+        // agarras el vpet (ver `edit_press`), así que a partir de ahí manda la
+        // config y el paseo **no** se detiene: el vpet sigue su conducta y tú
+        // lo recolocas.
+        let x_off = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_x_offset())
+            .unwrap_or(self.config.cat_x_offset);
+        let y_off = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_y_offset())
+            .unwrap_or(self.config.cat_y_offset);
+        let align = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_align())
+            .unwrap_or(self.config.cat_align);
 
         let xoff = scale_offset_120(x_off, s);
         let yoff = scale_offset_120(y_off, s);
-        let roam_phys = if editing {
-            0
-        } else {
-            scale_offset_120(self.roam_x.round() as i32, s)
-        };
+        let roam_phys = scale_offset_120(self.roam_x.round() as i32, s);
         // Punto de partida vertical: `Center` (clásico) a media pantalla;
         // `Baseline` (sprite sheets) apoyado en el borde inferior. `cat_y_offset`
         // lo mueve a cualquier altura; se acota para que **siempre** queden al
@@ -1047,9 +1032,10 @@ impl State {
 
                 let mut moved = false;
                 let is_walking = idle_special == Some(crate::sheet_anim::StateId::Walk);
-                // El paseo se congela en modo edición: si no, el gato se movería
-                // solo bajo el cursor y el arrastre no cuajaría.
-                if can_roam && is_walking && !self.edit.active {
+                // El arrastre libre **no** detiene el paseo: `edit_drag` compensa
+                // el desplazamiento de `roam_x` para que el vpet siga bajo el
+                // cursor mientras lo tienes agarrado, y al soltarlo sigue su ruta.
+                if can_roam && is_walking {
                     if self.roam_dir == 0.0 {
                         self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
                     }
@@ -1077,9 +1063,6 @@ impl State {
                     moved = true;
                 } else {
                     self.roam_dir = 0.0;
-                    if self.edit.active {
-                        self.roam_x = 0.0;
-                    }
                 }
 
                 // Si la mascota está ocupada con una acción de ocio (caminar, comer RAM)
@@ -1317,34 +1300,10 @@ impl State {
             self.edit.active = active;
             self.edit.dragging = false;
             if active {
-                // El modo edición manda sobre los `vpet.ini`: copia a la config
-                // lo que ahora se ve (offset / altura / alineación sugeridos por
-                // el tema) para que el gato no salte al entrar y el arrastre
-                // tenga un único valor que mover. También congela el paseo.
-                let seed = self.theme.as_ref().map(|t| {
-                    (
-                        t.cat_x_offset(),
-                        t.cat_y_offset(),
-                        t.cat_align(),
-                        t.cat_height(),
-                    )
-                });
-                if let Some((xo, yo, al, he)) = seed {
-                    if let Some(v) = xo {
-                        self.config.cat_x_offset = v;
-                    }
-                    if let Some(v) = yo {
-                        self.config.cat_y_offset = v;
-                    }
-                    if let Some(v) = al {
-                        self.config.cat_align = v;
-                    }
-                    if let Some(v) = he {
-                        self.config.cat_height = v as i32;
-                    }
-                }
-                self.roam_x = 0.0;
-                self.roam_dir = 0.0;
+                // Arrastre libre: **no** se toca la posición ni el paseo al
+                // entrar; el vpet sigue haciendo lo suyo. La primera vez que lo
+                // agarras, `edit_press` pasa el valor efectivo a la config y
+                // limpia el override del `vpet.ini` para que el arrastre se vea.
                 self.edit.snapshot = (
                     self.config.cat_x_offset,
                     self.config.cat_y_offset,
@@ -1364,21 +1323,14 @@ impl State {
                     for k in ["cat_x_offset", "cat_y_offset", "cat_height"] {
                         self.ipc_dirty.insert(k.to_string());
                     }
-                    eprintln!("bongocat: modo edición — {}", self.ipc_save());
-                }
-                // Deja de aplicar los offsets del `vpet.ini`: ahora viven en la
-                // config y deben seguir mandando tras salir del modo edición.
-                if let Some(t) = self.theme.as_mut() {
-                    t.vpet.cat_x_offset = None;
-                    t.vpet.cat_y_offset = None;
-                    t.vpet.cat_height = None;
+                    eprintln!("bongocat: arrastre libre — {}", self.ipc_save());
                 }
             }
             self.layer.commit();
             self.draw(); // recoloca la región de entrada
             self.sync_tray_edit();
             eprintln!(
-                "bongocat: modo edición {} — rect del gato (físico) = {:?}",
+                "bongocat: arrastre libre {} — rect del gato (físico) = {:?}",
                 if active { "ON" } else { "OFF" },
                 self.cat_phys_rect()
             );
@@ -1396,6 +1348,26 @@ impl State {
             self.edit.dragging = true;
             self.edit.grab_dx = fx - f64::from(rect.0);
             self.edit.grab_dy = fy - f64::from(rect.1);
+            // A partir de aquí el arrastre escribe `config.cat_*_offset`: pasa el
+            // valor efectivo actual a la config y quita el override del `vpet.ini`
+            // para que el gato se mueva bajo el cursor de inmediato (si no, no se
+            // vería hasta soltar).
+            let seed = self
+                .theme
+                .as_ref()
+                .map(|t| (t.cat_x_offset(), t.cat_y_offset()));
+            if let Some((xo, yo)) = seed {
+                if let Some(v) = xo {
+                    self.config.cat_x_offset = v;
+                }
+                if let Some(v) = yo {
+                    self.config.cat_y_offset = v;
+                }
+            }
+            if let Some(t) = self.theme.as_mut() {
+                t.vpet.cat_x_offset = None;
+                t.vpet.cat_y_offset = None;
+            }
         }
         self.edit.ptr = (fx, fy); // en físicas, como grab_dx/dy
     }
@@ -1412,10 +1384,15 @@ impl State {
         let ox = ((fx - self.edit.grab_dx).round() as i32).clamp(10, (pw - cw - 10).max(10));
         let oy = ((fy - self.edit.grab_dy).round() as i32).clamp(24 - ch, (ph - 24).max(0));
         let s = self.eff_scale_120();
+        // `cat_origin` suma `roam_x` a la X, así que para dejar el vpet **bajo el
+        // cursor** hay que descontarlo: si el vpet está paseando, seguirá bajo el
+        // ratón mientras lo tengas agarrado.
+        let roam_phys = scale_offset_120(self.roam_x.round() as i32, s);
+        let ox_base = ox - roam_phys;
         let xoff_phys = match self.config.cat_align {
-            Align::Left => ox,
-            Align::Center => ox - (pw - cw) / 2,
-            Align::Right => (pw - cw) - ox,
+            Align::Left => ox_base,
+            Align::Center => ox_base - (pw - cw) / 2,
+            Align::Right => (pw - cw) - ox_base,
         };
         let y_base = match self.cat_anchor() {
             bongocat_common::sheet::Anchor::Center => (ph - ch) / 2,
@@ -1429,11 +1406,21 @@ impl State {
     /// Rueda en modo edición: cambia `cat_height` (con recache). Si se está
     /// arrastrando, re-ancla el agarre para que el gato "crezca bajo el cursor".
     fn edit_wheel(&mut self, step: i32) {
-        let new_h = bongocat_common::edit::resize_cat_height(self.config.cat_height, step);
-        if new_h == self.config.cat_height {
+        // Parte de la altura efectiva actual (la del `vpet.ini` si el tema la
+        // trae) y, al cambiarla, quita ese override para que la rueda mande.
+        let cur = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.cat_height())
+            .map_or(self.config.cat_height, |h| h as i32);
+        let new_h = bongocat_common::edit::resize_cat_height(cur, step);
+        if new_h == cur {
             return;
         }
         self.config.cat_height = new_h;
+        if let Some(t) = self.theme.as_mut() {
+            t.vpet.cat_height = None;
+        }
         self.rerasterize();
         if self.edit.dragging {
             let (rx, ry, ..) = self.cat_phys_rect();

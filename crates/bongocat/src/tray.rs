@@ -262,7 +262,7 @@ impl ksni::Tray for SniTray {
             .collect();
 
         let edit = MenuItem::Checkmark(CheckmarkItem {
-            label: "Modo edición (arrastra con el ratón)".into(),
+            label: "Arrastre libre".into(),
             checked: self.edit_active,
             activate: Box::new(|t: &mut Self| t.send(TrayCommand::ToggleEdit)),
             ..Default::default()
