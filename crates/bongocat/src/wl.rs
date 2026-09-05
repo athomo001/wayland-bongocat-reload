@@ -720,6 +720,7 @@ impl State {
         self.ipc_dirty.insert("theme".to_string());
         self.rerasterize();
         self.draw();
+        self.sync_tray_theme();
         format!(
             "OK theme={}",
             if spec.is_empty() { "embedded" } else { spec }
@@ -756,6 +757,7 @@ impl State {
         let c = self.config.clone();
         if c.theme != old.theme {
             self.theme = theme::resolve(&c.theme);
+            self.sync_tray_theme();
         }
         if c.theme != old.theme
             || c.cat_height != old.cat_height
@@ -960,6 +962,17 @@ impl State {
         } else {
             tray::TrayStatus::Normal
         });
+    }
+
+    /// Empuja al submenú "Tema" del tray cuál es el activo ahora
+    /// (`self.config.theme`) — sin esto, el marcado (●) del menú se queda
+    /// congelado en el tema con el que arrancó el proceso. Se llama tras
+    /// cualquier cambio real: clic en el propio tray, IPC `THEME`/`SET theme`,
+    /// o recarga de config.
+    fn sync_tray_theme(&self) {
+        if let Some(handle) = &self.tray {
+            handle.set_active_theme(self.config.theme.clone());
+        }
     }
 
     /// Ejecuta un [`tray::TrayCommand`] (clic en el menú del icono, spec 0011).

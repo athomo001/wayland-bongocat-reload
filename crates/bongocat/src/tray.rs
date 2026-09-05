@@ -161,6 +161,9 @@ impl Tray {
 enum ToTray {
     /// Cambia el estado visual del icono (spec 0011 §"Estado del icono", M2).
     SetStatus(TrayStatus),
+    /// El tema activo cambió (clic en el propio tray, IPC `THEME`/`SET theme`,
+    /// o recarga de config): re-marca el submenú "Tema" con el nuevo activo.
+    SetActiveTheme(String),
     Shutdown,
 }
 
@@ -277,6 +280,12 @@ impl TrayHandle {
     pub fn set_status(&self, status: TrayStatus) {
         let _ = self.to_tray.send(ToTray::SetStatus(status));
     }
+
+    /// Re-marca el submenú "Tema" con `name` como activo (vacío = embebido,
+    /// ninguno marcado). No bloqueante.
+    pub fn set_active_theme(&self, name: String) {
+        let _ = self.to_tray.send(ToTray::SetActiveTheme(name));
+    }
 }
 
 /// Arranca el servicio del tray en un hilo dedicado. `cmd_tx` recibe un
@@ -337,8 +346,16 @@ fn run(
             }
         };
         eprintln!("bongocat: icono de bandeja activo");
-        while let Ok(ToTray::SetStatus(status)) = from_main.recv() {
-            handle.update(|t| t.status = status).await;
+        loop {
+            match from_main.recv() {
+                Ok(ToTray::SetStatus(status)) => {
+                    handle.update(|t| t.status = status).await;
+                }
+                Ok(ToTray::SetActiveTheme(name)) => {
+                    handle.update(|t| t.active_theme = name).await;
+                }
+                Ok(ToTray::Shutdown) | Err(_) => break,
+            }
         }
         handle.shutdown();
     });
