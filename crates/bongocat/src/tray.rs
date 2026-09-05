@@ -44,8 +44,6 @@ pub enum TrayCommand {
     ToggleEdit,
     /// Reconstruir las surfaces de overlay sin salir del proceso.
     RestartOverlays,
-    /// Lanzar `bongocatctl` / la GUI.
-    LaunchConfig,
     /// Submenú Tema ▸ *n*.
     SetTheme(String),
     /// Recargar la configuración desde disco.
@@ -66,7 +64,6 @@ impl TrayCommand {
             "toggle" => Self::ToggleVisibility,
             "edit" => Self::ToggleEdit,
             "restart" => Self::RestartOverlays,
-            "configure" => Self::LaunchConfig,
             "reload" => Self::Reload,
             "about" => Self::About,
             "quit" => Self::Quit,
@@ -272,7 +269,6 @@ impl ksni::Tray for SniTray {
             edit,
             item("Reiniciar overlay", TrayCommand::RestartOverlays),
             item("Recargar configuración", TrayCommand::Reload),
-            item("Configurar…", TrayCommand::LaunchConfig),
             MenuItem::SubMenu(SubMenu {
                 label: "Tema".into(),
                 submenu: temas,
@@ -390,45 +386,6 @@ fn run(
         }
         handle.shutdown();
     });
-}
-
-/// "Configurar…": lanza una GUI dedicada si existe, si no `bongocatctl` en un
-/// terminal conocido. Lista fija de binarios, **sin shell** ni interpolar nada
-/// (spec 0011 §Seguridad).
-pub fn launch_config() {
-    use std::process::Command;
-    if Command::new("bongocat-config").spawn().is_ok() {
-        return;
-    }
-    // `-e` no es universal (p. ej. `cosmic-term` no lo soporta en absoluto:
-    // `spawn()` igualmente tendría éxito y abriría un terminal vacío sin
-    // avisar de nada). Cada terminal conocido, con la forma que de verdad
-    // entiende para arrancar ya con `bongocatctl`.
-    let with_cmd: &[(&str, &[&str])] = &[
-        ("alacritty", &["-e", "bongocatctl"]),
-        ("kitty", &["bongocatctl"]),
-        ("foot", &["bongocatctl"]),
-        ("konsole", &["-e", "bongocatctl"]),
-        ("xterm", &["-e", "bongocatctl"]),
-        ("gnome-terminal", &["--", "bongocatctl"]),
-        ("wezterm", &["start", "--", "bongocatctl"]),
-    ];
-    for (term, args) in with_cmd {
-        if Command::new(term).args(*args).spawn().is_ok() {
-            return;
-        }
-    }
-    // `cosmic-term` (y el alias `x-terminal-emulator`, que en muchos sistemas
-    // COSMIC apunta ahí) no acepta un comando por línea de órdenes: se abre a
-    // secas y el usuario teclea `bongocatctl` él mismo.
-    for term in ["cosmic-term", "x-terminal-emulator"] {
-        if Command::new(term).spawn().is_ok() {
-            return;
-        }
-    }
-    eprintln!(
-        "bongocat: no encuentro un terminal para 'Configurar…'; ejecuta `bongocatctl` a mano"
-    );
 }
 
 /// PNG del icono del tray: el gato con gafas (arte propio del usuario, fondo

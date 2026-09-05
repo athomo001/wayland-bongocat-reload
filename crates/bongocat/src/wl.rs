@@ -1177,7 +1177,6 @@ impl State {
                 let r = self.set_theme(&name);
                 eprintln!("bongocat: tray → tema {name}: {r}");
             }
-            C::LaunchConfig => tray::launch_config(),
             C::About => eprintln!(
                 "Bongo Cat {} — https://github.com/athomo001/wayland-bongocat-reload",
                 env!("CARGO_PKG_VERSION")

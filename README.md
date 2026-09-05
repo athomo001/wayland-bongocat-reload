@@ -146,8 +146,11 @@ si tu escritorio tiene un host StatusNotifierItem (paneles de KDE, COSMIC,
 waybar con el módulo de tray, xfce4-panel…; en GNOME hace falta la extensión
 AppIndicator). Menú: **Mostrar/Ocultar** · **Modo edición** (con marca ✓;
 arrastra el gato con el ratón — ver abajo) · **Reiniciar overlay** ·
-**Recargar configuración** · **Configurar…** · **Tema ▸** (lista los temas
-instalados, marca el activo, cambia con un clic) · **Acerca de** · **Cerrar**.
+**Recargar configuración** · **Tema ▸** (lista los temas instalados, marca el
+activo, cambia con un clic) · **Acerca de** · **Cerrar**.
+
+La ventana de configuración visual es trabajo de la Fase 4 (`specs/0007-*`);
+hasta entonces se ajusta editando el `.conf` o con `bongocatctl`.
 
 `--no-tray` lo desactiva para una ejecución sin tocar la config.
 
