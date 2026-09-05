@@ -8,7 +8,7 @@ use std::path::Path;
 
 const FW: u32 = 128;
 const FH: u32 = 128;
-const COLS: u32 = 12;
+const COLS: u32 = 16;
 const ROWS: u32 = 18;
 
 /// Extrae limpiamente el personaje Miku de una celda de la cuadrícula eliminando sombras y ruido exterior,
@@ -354,9 +354,9 @@ fn walk_stride_sprite(src: &RgbaImage, phase: f32) -> RgbaImage {
     let tau = std::f32::consts::TAU;
     let angle = phase * tau;
 
-    // Movimiento cíclico de piernas: paso adelante/atrás y elevación de rodilla
-    let stride_amp = 3.2f32;
-    let lift_amp = 2.4f32;
+    // Movimiento amplio de piernas: paso adelante/atrás y elevación de rodilla
+    let stride_amp = 4.8f32;
+    let lift_amp = 3.6f32;
 
     let left_dx = angle.sin() * stride_amp;
     let left_dy = -angle.sin().max(0.0) * lift_amp;
@@ -364,10 +364,10 @@ fn walk_stride_sprite(src: &RgbaImage, phase: f32) -> RgbaImage {
     let right_dx = -angle.sin() * stride_amp;
     let right_dy = -(-angle.sin()).max(0.0) * lift_amp;
 
-    // Oscilación y rebote del cuerpo (2 rebotes por ciclo de dos pasos)
-    let body_bob = (angle * 2.0).sin().abs() * 1.6;
-    let body_tilt = angle.sin() * 1.0;
-    let hair_sway = (angle + 0.5).sin() * 2.2;
+    // Oscilación y rebote del cuerpo (2 rebotes completos por ciclo de dos pasos)
+    let body_bob = (angle * 2.0).sin().abs() * 3.0;
+    let body_tilt = angle.sin() * 2.0;
+    let hair_sway = (angle + 0.5).sin() * 4.5;
 
     for py in 0..FH {
         for px in 0..FW {
@@ -527,25 +527,30 @@ fn main() {
 
     let raw_img = image::open(src_path).expect("No se pudo abrir miku_chibi_sprites");
 
-    // Extrae y procesa los sprites individuales con silueta limpia y borde blanco puro
-    let s_idle0 = extract_clean_miku_sticker(&raw_img, 0, 0, 4, 4); // Ojos abiertos tiernos
-    let s_idle_smile = extract_clean_miku_sticker(&raw_img, 1, 0, 4, 4); // Ojos cerrados sonriendo
-    let s_boring = extract_clean_miku_sticker(&raw_img, 3, 0, 4, 4); // Acurrucada somnolienta
+    // Extrae y procesa los 16 sprites individuales con silueta limpia y borde blanco puro
+    // Fila 0: Expresiones base de pie
+    let s_idle_open = extract_clean_miku_sticker(&raw_img, 0, 0, 4, 4); // (0,0) Ojos abiertos mirando al frente
+    let s_idle_smile = extract_clean_miku_sticker(&raw_img, 1, 0, 4, 4); // (1,0) Ojos cerrados sonriendo tierna
+    let s_idle_wink = extract_clean_miku_sticker(&raw_img, 2, 0, 4, 4); // (2,0) Guiño de ojo coqueto
+    let s_idle_sigh = extract_clean_miku_sticker(&raw_img, 3, 0, 4, 4); // (3,0) Ojos cerrados suspirando / relajada
 
-    let _s_write0 = extract_clean_miku_sticker(&raw_img, 0, 1, 4, 4);
-    let s_write1 = extract_clean_miku_sticker(&raw_img, 2, 1, 4, 4); // Tocando sintetizador
-    let _s_write2 = extract_clean_miku_sticker(&raw_img, 3, 1, 4, 4);
+    // Fila 1: Actividades / Manos
+    let _s_act_pad = extract_clean_miku_sticker(&raw_img, 0, 1, 4, 4); // (0,1) Libreta y lápiz
+    let _s_act_book = extract_clean_miku_sticker(&raw_img, 1, 1, 4, 4); // (1,1) Leyendo libro
+    let s_act_synth = extract_clean_miku_sticker(&raw_img, 2, 1, 4, 4); // (2,1) Tocando sintetizador
+    let s_act_pen = extract_clean_miku_sticker(&raw_img, 3, 1, 4, 4); // (3,1) De pie con lápiz y guiño alegre
 
-    let s_sleep0 = extract_clean_miku_sticker(&raw_img, 0, 2, 4, 4); // Acostada en almohada
-    let s_sleep1 = extract_clean_miku_sticker(&raw_img, 1, 2, 4, 4);
-    let s_sleep2 = extract_clean_miku_sticker(&raw_img, 2, 2, 4, 4);
-    let _s_sleep3 = extract_clean_miku_sticker(&raw_img, 3, 2, 4, 4);
+    // Fila 2: Descanso y sueño
+    let s_sleep_flat = extract_clean_miku_sticker(&raw_img, 0, 2, 4, 4); // (0,2) Almohada acostada
+    let s_sleep_snug = extract_clean_miku_sticker(&raw_img, 1, 2, 4, 4); // (1,2) Almohada durmiendo profundo
+    let s_sleep_zzz = extract_clean_miku_sticker(&raw_img, 2, 2, 4, 4); // (2,2) Almohada roncando
+    let s_sit_curl = extract_clean_miku_sticker(&raw_img, 3, 2, 4, 4); // (3,2) Sentada abrazando rodillas
 
-    let s_happy0 = extract_clean_miku_sticker(&raw_img, 0, 3, 4, 4); // Agitando puerro negi
-    let _s_happy1 = extract_clean_miku_sticker(&raw_img, 3, 3, 4, 4);
-
-    let s_ram0 = extract_clean_miku_sticker(&raw_img, 1, 3, 4, 4); // Sosteniendo módulo RAM
-    let s_ram1 = extract_clean_miku_sticker(&raw_img, 2, 3, 4, 4); // Mordisco a la RAM
+    // Fila 3: Acciones especiales y golosinas
+    let s_happy_negi = extract_clean_miku_sticker(&raw_img, 0, 3, 4, 4); // (0,3) Bailando agitando puerro negi
+    let s_ram_hold = extract_clean_miku_sticker(&raw_img, 1, 3, 4, 4); // (1,3) Sosteniendo módulo RAM
+    let s_ram_bite = extract_clean_miku_sticker(&raw_img, 2, 3, 4, 4); // (2,3) Mordisco "nom nom" a la RAM
+    let s_both_trophy = extract_clean_miku_sticker(&raw_img, 3, 3, 4, 4); // (3,3) Puerro + RAM triunfante
 
     let sheet_w = COLS * FW;
     let sheet_h = ROWS * FH;
@@ -559,146 +564,204 @@ fn main() {
 
     let tau = std::f32::consts::TAU;
 
-    // ── Fila 0 (1 en ini): Idle (12 frames de respiración sinusoidal continua y suave) ────────────
-    for col in 0..12 {
-        let phase = (col as f32 / 12.0) * tau;
-        let dy = -phase.sin() * 1.8;
-        let scale_y = 1.0 + phase.sin() * 0.018;
-        place(col, 0, &transform_sprite(&s_idle0, 0.0, dy, scale_y));
+    // ── Fila 0 (1 en ini): Idle (16 frames: parpadeo suave, guiño coqueto, respiración viva y coletas) ──
+    for col in 0..16 {
+        let phase = (col as f32 / 16.0) * tau;
+        let dy = -phase.sin() * 2.8;
+        let scale_y = 1.0 + phase.sin() * 0.025;
+        let hair_dx = (phase + 0.8).cos() * 3.5;
+
+        let base_sprite = match col {
+            0..=2 => &s_idle_open,
+            3 => &blend_sprites(&s_idle_open, &s_idle_smile, 0.6),
+            4 => &s_idle_smile, // Parpadeo tierno con ojos cerrados
+            5 => &blend_sprites(&s_idle_smile, &s_idle_open, 0.6),
+            6..=8 => &s_idle_open,
+            9 => &blend_sprites(&s_idle_open, &s_idle_wink, 0.6),
+            10 => &s_idle_wink, // Guiño coqueto precioso
+            11 => &blend_sprites(&s_idle_wink, &s_idle_open, 0.6),
+            12..=13 => &s_idle_open,
+            14 => &s_idle_sigh, // Suspiro relajado
+            15 => &blend_sprites(&s_idle_sigh, &s_idle_open, 0.5),
+            _ => &s_idle_open,
+        };
+
+        place(
+            col,
+            0,
+            &transform_sprite(base_sprite, hair_dx * 0.4, dy, scale_y),
+        );
     }
 
-    // ── Fila 1 (2 en ini): Start Writing (6 frames de transición fluida desde reposo al sintetizador) ─
-    for col in 0..6 {
-        let t = (col as f32 + 1.0) / 7.0;
-        let blended = blend_sprites(&s_idle0, &s_write1, t);
-        let bob = (t * std::f32::consts::PI).sin() * 1.2;
+    // ── Fila 1 (2 en ini): Start Writing (8 frames: transición orgánica sacando el sintetizador) ──
+    for col in 0..8 {
+        let t = (col as f32 + 1.0) / 9.0;
+        let blended = if t < 0.5 {
+            let sub_t = t * 2.0;
+            blend_sprites(&s_idle_open, &s_act_pen, sub_t)
+        } else {
+            let sub_t = (t - 0.5) * 2.0;
+            blend_sprites(&s_act_pen, &s_act_synth, sub_t)
+        };
+        let bob = (t * std::f32::consts::PI).sin() * 2.0;
         place(col, 1, &transform_sprite(&blended, 0.0, -bob, 1.0));
     }
 
-    // ── Fila 2 (3 en ini): Writing (12 frames fluidos tocando el sintetizador con notas musicales) ─
-    for col in 0..12 {
-        let phase = (col as f32 / 12.0) * tau;
-        let dx = phase.sin() * 1.0;
-        let dy = -(phase * 2.0).cos() * 1.0;
-        let scale_y = 1.0 + (phase * 2.0).cos() * 0.012;
-        let mut w = transform_sprite(&s_write1, dx, dy, scale_y);
+    // ── Fila 2 (3 en ini): Writing (16 frames tocando sintetizador con balanceo rítmico y notas musicales) ──
+    for col in 0..16 {
+        let phase = (col as f32 / 16.0) * tau;
+        // Balanceo rítmico dinámico tocando teclas
+        let dx = phase.sin() * 2.2;
+        let dy = -(phase * 4.0).cos() * 1.8;
+        let scale_y = 1.0 + (phase * 4.0).cos() * 0.02;
+        let mut w = transform_sprite(&s_act_synth, dx, dy, scale_y);
+
+        // Notas musicales turquesa ascendiendo al ritmo
         if col == 2 || col == 3 {
-            draw_music_note(&mut w, 38, 28 - (col as i32 - 2) * 4, false);
-        } else if col == 5 || col == 6 {
-            draw_music_note(&mut w, 88, 26 - (col as i32 - 5) * 4, true);
-        } else if col == 8 || col == 9 {
-            draw_music_note(&mut w, 94, 22 - (col as i32 - 8) * 4, false);
-        } else if col == 11 {
-            draw_music_note(&mut w, 44, 24, true);
+            draw_music_note(&mut w, 36, 30 - (col as i32 - 2) * 5, false);
+        } else if col == 6 || col == 7 {
+            draw_music_note(&mut w, 88, 28 - (col as i32 - 6) * 5, true);
+        } else if col == 10 || col == 11 {
+            draw_music_note(&mut w, 96, 24 - (col as i32 - 10) * 5, false);
+        } else if col == 14 || col == 15 {
+            draw_music_note(&mut w, 40, 26 - (col as i32 - 14) * 5, true);
         }
+
         place(col, 2, &w);
     }
 
-    // ── Fila 3 (4 en ini): End Writing (6 frames de transición fluida desde el sintetizador a reposo) ─
-    for col in 0..6 {
-        let t = (col as f32 + 1.0) / 7.0;
-        let blended = blend_sprites(&s_write1, &s_idle0, t);
-        let bob = (t * std::f32::consts::PI).sin() * 1.0;
+    // ── Fila 3 (4 en ini): End Writing (8 frames: transición orgánica guardando el sintetizador) ──
+    for col in 0..8 {
+        let t = (col as f32 + 1.0) / 9.0;
+        let blended = if t < 0.5 {
+            let sub_t = t * 2.0;
+            blend_sprites(&s_act_synth, &s_act_pen, sub_t)
+        } else {
+            let sub_t = (t - 0.5) * 2.0;
+            blend_sprites(&s_act_pen, &s_idle_open, sub_t)
+        };
+        let bob = (t * std::f32::consts::PI).sin() * 1.6;
         place(col, 3, &transform_sprite(&blended, 0.0, -bob, 1.0));
     }
 
-    // ── Fila 4 (5 en ini): Sleep (12 frames acostada durmiendo plácidamente con respiración y Zzzz) ─
-    for col in 0..12 {
-        let phase = (col as f32 / 12.0) * tau;
-        let dy = -phase.sin() * 1.2;
-        let scale_y = 1.0 + phase.sin() * 0.012;
-        let base = if col < 4 {
-            &s_sleep0
-        } else if col < 8 {
-            &s_sleep1
+    // ── Fila 4 (5 en ini): Sleep (16 frames acostada durmiendo con respiración y Zzzz en olas) ──
+    for col in 0..16 {
+        let phase = (col as f32 / 16.0) * tau;
+        let dy = -phase.sin() * 1.8;
+        let scale_y = 1.0 + phase.sin() * 0.016;
+        let base = if col < 5 {
+            &s_sleep_flat
+        } else if col < 11 {
+            &s_sleep_snug
         } else {
-            &s_sleep2
+            &s_sleep_zzz
         };
         place(col, 4, &transform_sprite(base, 0.0, dy, scale_y));
     }
 
-    // ── Fila 5 (6 en ini): Happy (12 frames agitando el puerro negi alegremente en arco) ──────────
-    for col in 0..12 {
-        let phase = (col as f32 / 12.0) * tau;
-        let dx = phase.sin() * 1.8;
-        let dy = -phase.cos().abs() * 2.2;
-        let scale_y = 1.0 + phase.cos().abs() * 0.022;
-        let mut h = transform_sprite(&s_happy0, dx, dy, scale_y);
+    // ── Fila 5 (6 en ini): Happy (16 frames baile enérgico con puerro y RAM) ──
+    for col in 0..16 {
+        let phase = (col as f32 / 16.0) * tau;
+        let dx = phase.sin() * 3.0;
+        let dy = -phase.cos().abs() * 3.6;
+        let scale_y = 1.0 + phase.cos().abs() * 0.035;
+
+        let base = if (6..=9).contains(&col) {
+            &s_both_trophy
+        } else {
+            &s_happy_negi
+        };
+
+        let mut h = transform_sprite(base, dx, dy, scale_y);
         if col == 3 || col == 4 {
-            draw_music_note(&mut h, 102, 24 - (col as i32 - 3) * 4, false);
-        } else if col == 8 || col == 9 {
-            draw_music_note(&mut h, 106, 20 - (col as i32 - 8) * 4, true);
+            draw_music_note(&mut h, 104, 26 - (col as i32 - 3) * 5, false);
+        } else if col == 11 || col == 12 {
+            draw_music_note(&mut h, 108, 22 - (col as i32 - 11) * 5, true);
         }
         place(col, 5, &h);
     }
 
-    // ── Fila 6 (7 en ini): Boring (8 frames somnolienta y acurrucada con respiración suave) ─────────
+    // ── Fila 6 (7 en ini): Boring (8 frames sentada acurrucada abrazando rodillas) ──
     for col in 0..8 {
         let phase = (col as f32 / 8.0) * tau;
-        let dy = -phase.sin() * 1.4;
-        let scale_y = 1.0 + phase.sin() * 0.014;
-        place(col, 6, &transform_sprite(&s_boring, 0.0, dy, scale_y));
+        let dy = -phase.sin() * 2.0;
+        let scale_y = 1.0 + phase.sin() * 0.02;
+        place(col, 6, &transform_sprite(&s_sit_curl, 0.0, dy, scale_y));
     }
 
-    // ── Filas 7..14 (8..15 en ini): Look_* (8 direcciones de mirada con seguimiento de ojos) ───────
+    // ── Filas 7..14 (8..15 en ini): Look_* (8 direcciones con seguimiento de ojos y parpadeo) ──
     let dirs: [(f32, f32); 8] = [
-        (-4.0, 0.0),  // look_left
-        (4.0, 0.0),   // look_right
-        (0.0, -3.0),  // look_up
-        (0.0, 3.0),   // look_down
-        (-3.0, -2.5), // look_up_left
-        (3.0, -2.5),  // look_up_right
-        (-3.0, 2.5),  // look_down_left
-        (3.0, 2.5),   // look_down_right
+        (-4.5, 0.0),  // look_left
+        (4.5, 0.0),   // look_right
+        (0.0, -3.5),  // look_up
+        (0.0, 3.5),   // look_down
+        (-3.5, -2.8), // look_up_left
+        (3.5, -2.8),  // look_up_right
+        (-3.5, 2.8),  // look_down_left
+        (3.5, 2.8),   // look_down_right
     ];
     for (idx, (dx, dy)) in dirs.iter().enumerate() {
         let row = 7 + idx as u32;
-        for col in 0..4 {
-            let mult = match col {
-                0 => 1.0,
-                1 => 0.94,
-                2 => 0.88,
-                _ => 0.96,
-            };
-            place(
-                col,
-                row,
-                &transform_sprite(&s_idle0, *dx * mult, *dy * mult, 1.0),
-            );
-        }
+        // Frame 0: mirando con ojos abiertos
+        place(0, row, &transform_sprite(&s_idle_open, *dx, *dy, 1.0));
+        // Frame 1: mirando con inclinación suave
+        place(
+            1,
+            row,
+            &transform_sprite(&s_idle_open, *dx * 0.9, *dy * 0.9, 1.005),
+        );
+        // Frame 2: parpadeo dulce mirando hacia la dirección
+        place(
+            2,
+            row,
+            &transform_sprite(&s_idle_smile, *dx * 0.8, *dy * 0.8, 1.0),
+        );
+        // Frame 3: abriendo ojos de nuevo
+        place(
+            3,
+            row,
+            &transform_sprite(&s_idle_open, *dx * 0.95, *dy * 0.95, 1.003),
+        );
     }
 
-    // ── Fila 15 (16 en ini): Wake Up (8 frames despertando alegremente con transición suave) ───────
-    for col in 0..4 {
-        let t = (col as f32 + 1.0) / 5.0;
-        let s = blend_sprites(&s_boring, &s_idle_smile, t);
-        place(col, 15, &s);
-    }
-    for col in 4..8 {
-        let t = (col as f32 - 3.0) / 5.0;
-        let s = blend_sprites(&s_idle_smile, &s_idle0, t);
-        place(col, 15, &s);
-    }
-
-    // ── Fila 16 (17 en ini): Walk (12 frames ciclo de pasos articulado con balanceo orgánico) ─────
-    for col in 0..12 {
-        let phase = col as f32 / 12.0;
-        place(col, 16, &walk_stride_sprite(&s_idle0, phase));
-    }
-
-    // ── Fila 17 (18 en ini): Eat RAM (12 frames comiendo RAM con mordiscos continuos y masticado) ──
-    for col in 0..12 {
+    // ── Fila 15 (16 en ini): Wake Up (8 frames despertando desde acurrucada hasta de pie sonriente) ──
+    for col in 0..8 {
         let sprite = match col {
-            0..=1 => &s_ram0,
-            2..=4 => &s_ram1,
-            5..=7 => &s_ram0,
-            8..=9 => &s_ram1,
-            10..=11 => &s_idle_smile,
-            _ => &s_idle0,
+            0..=1 => &s_sit_curl,
+            2..=3 => &s_idle_sigh,
+            4..=5 => &s_idle_smile,
+            _ => &s_idle_open,
         };
-        let phase = (col as f32 / 12.0) * tau;
-        let dy = -phase.sin() * 1.2;
-        place(col, 17, &transform_sprite(sprite, 0.0, dy, 1.012));
+        let t = (col as f32) / 7.0;
+        let lift = (1.0 - t) * -2.0;
+        place(col, 15, &transform_sprite(sprite, 0.0, lift, 1.0));
+    }
+
+    // ── Fila 16 (17 en ini): Walk (16 frames zancadas articuladas con rebote y coletas volando) ──
+    for col in 0..16 {
+        let phase = col as f32 / 16.0;
+        let sprite = if col % 8 < 4 {
+            &s_idle_open
+        } else {
+            &s_idle_smile
+        };
+        place(col, 16, &walk_stride_sprite(sprite, phase));
+    }
+
+    // ── Fila 17 (18 en ini): Eat RAM (16 frames merendando RAM: sacar, morder crujiente, masticar y celebrar) ──
+    for col in 0..16 {
+        let (sprite, dy) = match col {
+            0..=2 => (&s_ram_hold, 0.0),
+            3 => (&blend_sprites(&s_ram_hold, &s_ram_bite, 0.7), -1.0),
+            4..=6 => (&s_ram_bite, -2.5), // ¡Mordisco crujiente!
+            7 => (&blend_sprites(&s_ram_bite, &s_ram_hold, 0.7), -1.5),
+            8..=10 => (&s_ram_hold, -0.8),     // Masticando
+            11..=13 => (&s_both_trophy, -3.0), // ¡Celebración deliciosa!
+            _ => (&s_idle_smile, 0.0),         // Relamiéndose satisfecha
+        };
+        let phase = (col as f32 / 16.0) * tau;
+        let bounce = dy - (phase * 2.0).sin().abs() * 1.0;
+        place(col, 17, &transform_sprite(sprite, 0.0, bounce, 1.01));
     }
 
     let out_dir = Path::new("themes/miku");
@@ -715,7 +778,7 @@ fn main() {
     );
 
     let mut writing_frames = Vec::new();
-    for col in 0..12 {
+    for col in 0..16 {
         let mut f_buf = vec![0u8; (FW * FH * 4) as usize];
         for y in 0..FH {
             for x in 0..FW {
