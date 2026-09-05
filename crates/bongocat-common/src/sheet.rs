@@ -419,6 +419,45 @@ pub fn scale_bilinear(src: &[u8], w: u32, h: u32, k: u32) -> (Vec<u8>, u32, u32)
     (out, ow, oh)
 }
 
+/// Reescala `src` (`sw`×`sh`, 4 bytes/píxel) a `dw`×`dh` **arbitrarios** con
+/// interpolación bilineal. A diferencia de [`scale_bilinear`] (solo factores
+/// enteros hacia arriba) esto sirve para **reducir**: un sprite sheet que se
+/// quiere más pequeño que un marco (`cat_height < frame_h`).
+#[must_use]
+pub fn resize_bilinear(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> (Vec<u8>, u32, u32) {
+    let (dw, dh) = (dw.max(1), dh.max(1));
+    if sw == 0 || sh == 0 {
+        return (vec![0u8; (dw * dh * 4) as usize], dw, dh);
+    }
+    if (sw, sh) == (dw, dh) {
+        return (src.to_vec(), dw, dh);
+    }
+    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    let (wmax, hmax) = ((sw - 1) as f32, (sh - 1) as f32);
+    let (rx, ry) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
+    let sample =
+        |x: u32, y: u32, c: usize| -> f32 { f32::from(src[((y * sw + x) * 4) as usize + c]) };
+    for oy in 0..dh {
+        let fy = ((oy as f32 + 0.5) * ry - 0.5).clamp(0.0, hmax);
+        let y0 = fy as u32;
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - y0 as f32;
+        for ox in 0..dw {
+            let fx = ((ox as f32 + 0.5) * rx - 0.5).clamp(0.0, wmax);
+            let x0 = fx as u32;
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - x0 as f32;
+            let di = ((oy * dw + ox) * 4) as usize;
+            for c in 0..4 {
+                let top = sample(x0, y0, c) * (1.0 - wx) + sample(x1, y0, c) * wx;
+                let bot = sample(x0, y1, c) * (1.0 - wx) + sample(x1, y1, c) * wx;
+                out[di + c] = (top * (1.0 - wy) + bot * wy).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    (out, dw, dh)
+}
+
 /// Convierte un frame de **RGBA recto** (el que entrega un PNG) a **BGRA
 /// premultiplicado** in situ — el formato que consume `anim::blit_over` y que
 /// espera `WL_SHM_FORMAT_ARGB8888`. Cada canal de color se multiplica por el

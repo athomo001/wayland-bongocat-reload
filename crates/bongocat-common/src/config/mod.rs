@@ -260,6 +260,18 @@ impl Default for Config {
     }
 }
 
+/// El `bongocat.conf.example` que `install.sh` copia como config inicial: son
+/// los valores **de fábrica** que ve el usuario. Distinto de `Config::default()`
+/// (que es solo el respaldo del parser para una clave ausente, heredado del C).
+pub const EXAMPLE_INI: &str = include_str!("../../../../bongocat.conf.example");
+
+/// Configuración **de fábrica**: la del `bongocat.conf.example` shipped. La usa
+/// el botón "Valores de fábrica" de la ventana de configuración (spec 0007).
+#[must_use]
+pub fn factory_config() -> Config {
+    parse_ini(EXAMPLE_INI).0
+}
+
 /// Parsea el texto de un `bongocat.conf`. Las claves inválidas o desconocidas se
 /// **descartan con un aviso**; la configuración resultante siempre es usable.
 /// Equivale a `load_config` sin la parte de fichero/dispositivos.

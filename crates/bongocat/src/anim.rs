@@ -202,6 +202,22 @@ pub fn rasterize_from<S: AsRef<[u8]>>(
 /// coincide). Un estado sin fuente se omite. `cat_height` es la altura objetivo;
 /// el factor entero real puede quedar por debajo si `frame_h` no la divide (el
 /// `classic` SVG no tiene esta limitación; es el precio del pixel-art).
+/// Tamaño de salida de un sprite sheet para una `cat_height` objetivo:
+/// `(w, h, k, down)`. Si `cat_height >= frame_h`, escala **entera** hacia arriba
+/// (`k = ⌊cat_height/frame_h⌋`, pixel-art nítido). Si es menor, **reduce**
+/// bilinealmente a esa altura exacta (`down = true`, `k = 1`) — antes ese caso
+/// quedaba clavado a ×1 y el vpet no se hacía más pequeño.
+fn sheet_target(fw: u32, fh: u32, cat_height: u32) -> (u32, u32, u32, bool) {
+    let target_h = cat_height.max(1);
+    if target_h < fh {
+        let dw = ((fw * target_h) / fh).max(1);
+        (dw, target_h, 1, true)
+    } else {
+        let k = sheet::integer_scale(fh, target_h);
+        (fw * k, fh * k, k, false)
+    }
+}
+
 #[must_use]
 pub fn build_sheet_cache(
     sheet: &SheetTheme,
@@ -211,8 +227,7 @@ pub fn build_sheet_cache(
     mirror_y: bool,
 ) -> BTreeMap<String, Vec<Vec<u8>>> {
     let (fw, fh) = (sheet.frame_w.max(1), sheet.frame_h.max(1));
-    let k = sheet::integer_scale(fh, cat_height.max(1));
-    let (w, h) = (fw * k, fh * k);
+    let (w, h, k, down) = sheet_target(fw, fh, cat_height);
 
     // Ajusta un frame RGBA recto (`frame_w`×`frame_h`, ya recortado) a BGRA
     // premultiplicado, escalado y con el espejo aplicado. Se premultiplica
@@ -221,7 +236,10 @@ pub fn build_sheet_cache(
     let linear = sheet.scale_filter == sheet::ScaleFilter::Linear;
     let finish = |mut px: Vec<u8>| -> Vec<u8> {
         sheet::premul_bgra_from_straight_rgba(&mut px);
-        if k > 1 {
+        if down {
+            // Más pequeño que un marco: reducción bilineal a la altura exacta.
+            px = sheet::resize_bilinear(&px, fw, fh, w, h).0;
+        } else if k > 1 {
             px = if linear {
                 sheet::scale_bilinear(&px, fw, fh, k).0
             } else {
@@ -276,8 +294,7 @@ pub fn rasterize_sheet(
     mirror_y: bool,
 ) -> Result<Frames, Box<dyn Error>> {
     let (fw, fh) = (sheet.frame_w.max(1), sheet.frame_h.max(1));
-    let k = sheet::integer_scale(fh, cat_height.max(1));
-    let (w, h) = (fw * k, fh * k);
+    let (w, h, _, _) = sheet_target(fw, fh, cat_height);
 
     let cache = build_sheet_cache(sheet, images, cat_height, mirror_x, mirror_y);
     if cache.is_empty() {

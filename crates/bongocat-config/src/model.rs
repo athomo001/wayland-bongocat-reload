@@ -173,14 +173,15 @@ impl Model {
         self.status = "restablecido".to_owned();
     }
 
-    /// Vuelve a los **valores de fábrica** (`Config::default()`) todos los campos
-    /// numéricos / booleanos / enum / hora — **no** toca el tema, los monitores
-    /// ni las rutas de dispositivo. Queda como cambios sin guardar (hay que
-    /// pulsar "Guardar" para que persista).
+    /// Vuelve a los **valores de fábrica** (los del `bongocat.conf.example`
+    /// shipped, no lo guardado) todos los campos numéricos / booleanos / enum /
+    /// hora — **no** toca el tema, los monitores ni las rutas de dispositivo.
+    /// Queda como cambios sin guardar (hay que pulsar "Guardar" para que
+    /// persista).
     pub fn factory_reset(&mut self) {
         use bongocat_common::field_meta::{FieldKind, FIELDS};
 
-        let def = Config::default();
+        let def = bongocat_common::config::factory_config();
         let def_doc = ConfDoc::parse(&def.to_ini());
         let cur_doc = ConfDoc::parse(&self.cfg.to_ini());
         let mut n = 0;

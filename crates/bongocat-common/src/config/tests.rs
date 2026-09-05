@@ -180,6 +180,20 @@ fn set_live_valida_recorta_y_falla() {
 }
 
 #[test]
+fn factory_config_es_el_example_y_no_avisa() {
+    let (_, w) = parse_ini(EXAMPLE_INI);
+    assert!(
+        w.is_empty(),
+        "el bongocat.conf.example no debe generar avisos: {w:?}"
+    );
+    let f = factory_config();
+    // Valores que el usuario ve como "normales" (≠ Config::default()).
+    assert_eq!(f.cat_height, 110);
+    assert_eq!(f.cat_opacity, 100);
+    assert_ne!(f, Config::default(), "fábrica ≠ default del parser");
+}
+
+#[test]
 fn comentarios_y_espacios_en_blanco() {
     let src = "# esto es un comentario\n  fps = 30  # comentario en línea\n\n   \t  \n; comentario con punto y coma\ncat_height = 100\n";
     let (c, w) = parse_ini(src);
