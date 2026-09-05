@@ -14,7 +14,7 @@
 use std::error::Error;
 use std::time::{Duration, Instant};
 
-use bongocat_common::config::{Align, Config, Position};
+use bongocat_common::config::{Align, Config};
 use bongocat_common::paw::{self, apply_mirror, frame_from_paw_state, FRAME_SLEEPING};
 use calloop::signals::{Signal, Signals};
 use calloop::timer::{TimeoutAction, Timer};
@@ -142,16 +142,6 @@ impl Dispatch<wl_output::WlOutput, ()> for OutputProbe {
             }
         }
     }
-}
-
-/// Anclaje de la layer-surface para una posición del overlay (siempre a los dos
-/// lados horizontales).
-fn anchor_for(pos: Position) -> Anchor {
-    let edge = match pos {
-        Position::Top => Anchor::TOP,
-        Position::Bottom => Anchor::BOTTOM,
-    };
-    edge | Anchor::LEFT | Anchor::RIGHT
 }
 
 /// Rasteriza los 5 fotogramas a la altura `h` (px) desde el tema cargado, o del
@@ -347,8 +337,8 @@ pub fn run_overlay(
         None => None,
     };
 
-    // Alto lógico de la barra; el ancho lo decide el compositor (anclada a los
-    // dos lados). Valor inicial de fallback hasta el primer `configure`.
+    // Tamaño de reserva hasta el primer `configure`: el compositor dimensiona la
+    // superficie a la salida entera (anclada a los cuatro lados, tamaño 0×0).
     let height: u32 = config.overlay_height.max(1) as u32;
     let width: u32 = config.screen_width.max(1) as u32;
 
@@ -370,8 +360,15 @@ pub fn run_overlay(
         target_output.as_ref(), // None = la salida que elija el compositor
     );
 
-    layer.set_anchor(anchor_for(config.overlay_position));
-    layer.set_size(0, height);
+    // Superficie a **pantalla completa** y transparente: el vpet se dibuja en
+    // cualquier `(x, y)` y el resto es click-through. Anclar a los cuatro lados
+    // + tamaño 0×0 hace que el compositor la dimensione a la salida entera.
+    // `overlay_height` / `overlay_position` / `overlay_opacity` quedan como
+    // legado (ya no cambian la superficie; el vpet se posiciona con
+    // `cat_y_offset` y se arrastra con el modo edición). `height`/`width` siguen
+    // como tamaño de reserva hasta el primer `configure`.
+    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+    layer.set_size(0, 0);
     layer.set_exclusive_zone(-1); // no reservar espacio; el overlay flota
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
@@ -718,12 +715,15 @@ impl State {
         let xoff = scale_offset_120(x_off, s);
         let yoff = scale_offset_120(y_off, s);
         let roam_phys = scale_offset_120(self.roam_x.round() as i32, s);
-        // Anclaje vertical: `Center` (clásico) centra; `Baseline` (sprite sheets)
-        // apoya el frame en el borde inferior de la barra.
-        let y = match self.frames.anchor {
+        // Punto de partida vertical: `Center` (clásico) a media pantalla;
+        // `Baseline` (sprite sheets) apoyado en el borde inferior. `cat_y_offset`
+        // lo mueve a cualquier altura; se acota para que **siempre** queden al
+        // menos 24 px del vpet dentro de la pantalla (que no se pierda).
+        let y_base = match self.frames.anchor {
             bongocat_common::sheet::Anchor::Center => (phys_h - ch) / 2,
             bongocat_common::sheet::Anchor::Baseline => phys_h - ch,
-        } + yoff;
+        };
+        let y = (y_base + yoff).clamp(24 - ch, (phys_h - 24).max(0));
         let base_x = match align {
             Align::Center => (phys_w - cw) / 2 + xoff,
             Align::Left => xoff,
@@ -808,18 +808,9 @@ impl State {
             self.rerasterize();
         }
 
-        let mut surface_changed = false;
-        if c.overlay_height != old.overlay_height {
-            self.layer.set_size(0, c.overlay_height.max(1) as u32);
-            surface_changed = true;
-        }
-        if c.overlay_position != old.overlay_position {
-            self.layer.set_anchor(anchor_for(c.overlay_position));
-            surface_changed = true;
-        }
-        if surface_changed {
-            self.layer.commit(); // el `configure` que llega redibuja con el tamaño nuevo
-        }
+        // `overlay_height` / `overlay_position` ya no redimensionan la
+        // superficie (ocupa toda la pantalla); solo mueven el vpet dentro, así
+        // que basta con redibujar.
         self.draw();
     }
 
@@ -888,11 +879,11 @@ impl State {
             .as_ref()
             .map(|t| t.vpet.track_mouse)
             .unwrap_or(true);
-        if !track_mouse {
-            self.gaze_dir = bongocat_common::mouse::GazeDirection::Center;
-        } else if self.gaze_dir != bongocat_common::mouse::GazeDirection::Center
-            && now.duration_since(self.last_gaze_at) > Duration::from_millis(600)
-        {
+        // La mirada vuelve al centro si el vPet no sigue al ratón, o si lleva
+        // más de 600 ms sin actualizarse (el cursor se quedó quieto).
+        let gaze_expired = self.gaze_dir != bongocat_common::mouse::GazeDirection::Center
+            && now.duration_since(self.last_gaze_at) > Duration::from_millis(600);
+        if !track_mouse || gaze_expired {
             self.gaze_dir = bongocat_common::mouse::GazeDirection::Center;
         }
 
@@ -1547,21 +1538,10 @@ impl State {
                 }
             };
 
-        if hidden {
-            // Oculto (pantalla completa o `HIDE` manual): barra transparente y
-            // sin gato (opacidad efectiva 0 en `draw_bar`).
-            canvas.fill(0);
-        } else {
-            // Fondo de la barra: negro con `overlay_opacity`. Premultiplicado
-            // con RGB=0 → bytes [B,G,R,A] = [0,0,0,opacidad]. 0 = transparente.
-            let op = self.config.overlay_opacity.clamp(0, 255) as u8;
-            if op == 0 {
-                canvas.fill(0);
-            } else {
-                for px in canvas.chunks_exact_mut(4) {
-                    px.copy_from_slice(&[0, 0, 0, op]);
-                }
-            }
+        // Fondo siempre transparente: la superficie ocupa toda la pantalla, un
+        // tinte a pantalla completa nunca es lo que se quiere para un vpet.
+        canvas.fill(0);
+        if !hidden {
             // Opacidad del gato: % (0–100) → factor 0–255 para el blit.
             let cat_op = (self.config.cat_opacity.clamp(0, 100) * 255 / 100) as u8;
             let flip_on_walk = self

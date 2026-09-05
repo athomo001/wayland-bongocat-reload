@@ -8,8 +8,8 @@ use std::path::Path;
 
 const FW: u32 = 128;
 const FH: u32 = 128;
-const COLS: u32 = 6;
-const ROWS: u32 = 16;
+const COLS: u32 = 12;
+const ROWS: u32 = 18;
 
 /// Extrae limpiamente el personaje Miku de una celda de la cuadrícula eliminando sombras y ruido exterior,
 /// y genera un borde de sticker blanco puro (#FFFFFF) de 4.5px de grosor sin ningún artefacto oscuro.
@@ -398,6 +398,40 @@ fn walk_stride_sprite(src: &RgbaImage, phase: f32) -> RgbaImage {
     out
 }
 
+/// Mezcla e interpola suavemente dos sprites con suavizado smoothstep para transiciones fluidas.
+fn blend_sprites(a: &RgbaImage, b: &RgbaImage, t: f32) -> RgbaImage {
+    let mut out = ImageBuffer::new(FW, FH);
+    let t = t.clamp(0.0, 1.0);
+    let ease = t * t * (3.0 - 2.0 * t); // Curva cúbica smoothstep
+    for y in 0..FH {
+        for x in 0..FW {
+            let pa = a.get_pixel(x, y);
+            let pb = b.get_pixel(x, y);
+            let wa = (pa[3] as f32 / 255.0) * (1.0 - ease);
+            let wb = (pb[3] as f32 / 255.0) * ease;
+            let w_sum = wa + wb;
+            if w_sum < 0.005 {
+                continue;
+            }
+            let r = (pa[0] as f32 * wa + pb[0] as f32 * wb) / w_sum;
+            let g = (pa[1] as f32 * wa + pb[1] as f32 * wb) / w_sum;
+            let b_col = (pa[2] as f32 * wa + pb[2] as f32 * wb) / w_sum;
+            let alpha = (w_sum * 255.0).clamp(0.0, 255.0) as u8;
+            out.put_pixel(
+                x,
+                y,
+                Rgba([
+                    r.round().clamp(0.0, 255.0) as u8,
+                    g.round().clamp(0.0, 255.0) as u8,
+                    b_col.round().clamp(0.0, 255.0) as u8,
+                    alpha,
+                ]),
+            );
+        }
+    }
+    out
+}
+
 /// Dibuja una nota musical pequeña y estilizada con borde blanco (#FFFFFF)
 fn draw_music_note(dst: &mut RgbaImage, cx: i32, cy: i32, is_double: bool) {
     let note_color = Rgba([57, 197, 187, 255]); // Turquesa Miku #39C5BB
@@ -523,64 +557,90 @@ fn main() {
         image::imageops::overlay(&mut final_sheet, sprite, ox as i64, oy as i64);
     };
 
-    // ── Fila 0 (1 en ini): Idle (6 frames de respiración suave continua, ojos abiertos tiernos) ───
-    place(0, 0, &transform_sprite(&s_idle0, 0.0, 0.0, 1.0));
-    place(1, 0, &transform_sprite(&s_idle0, 0.0, -0.7, 1.007));
-    place(2, 0, &transform_sprite(&s_idle0, 0.0, -1.4, 1.014));
-    place(3, 0, &transform_sprite(&s_idle0, 0.0, -2.0, 1.020));
-    place(4, 0, &transform_sprite(&s_idle0, 0.0, -1.4, 1.014));
-    place(5, 0, &transform_sprite(&s_idle0, 0.0, -0.7, 1.007));
+    let tau = std::f32::consts::TAU;
 
-    // ── Fila 1 (2 en ini): Writing (6 frames fluidos tocando el sintetizador con notas musicales) ─
-    let w0 = transform_sprite(&s_write1, 0.0, 0.0, 1.0);
-    let w1 = transform_sprite(&s_write1, -0.6, 0.6, 0.994);
-    let mut w2 = transform_sprite(&s_write1, -0.3, -1.2, 1.012);
-    let w3 = transform_sprite(&s_write1, 0.6, 0.6, 0.994);
-    let mut w4 = transform_sprite(&s_write1, 0.3, -1.2, 1.012);
-    let mut w5 = transform_sprite(&s_write1, 0.0, -0.5, 1.005);
-    draw_music_note(&mut w2, 38, 30, false);
-    draw_music_note(&mut w4, 90, 26, true);
-    draw_music_note(&mut w5, 94, 20, false);
+    // ── Fila 0 (1 en ini): Idle (12 frames de respiración sinusoidal continua y suave) ────────────
+    for col in 0..12 {
+        let phase = (col as f32 / 12.0) * tau;
+        let dy = -phase.sin() * 1.8;
+        let scale_y = 1.0 + phase.sin() * 0.018;
+        place(col, 0, &transform_sprite(&s_idle0, 0.0, dy, scale_y));
+    }
 
-    place(0, 1, &w0);
-    place(1, 1, &w1);
-    place(2, 1, &w2);
-    place(3, 1, &w3);
-    place(4, 1, &w4);
-    place(5, 1, &w5);
+    // ── Fila 1 (2 en ini): Start Writing (6 frames de transición fluida desde reposo al sintetizador) ─
+    for col in 0..6 {
+        let t = (col as f32 + 1.0) / 7.0;
+        let blended = blend_sprites(&s_idle0, &s_write1, t);
+        let bob = (t * std::f32::consts::PI).sin() * 1.2;
+        place(col, 1, &transform_sprite(&blended, 0.0, -bob, 1.0));
+    }
 
-    // ── Fila 2 (3 en ini): Sleep (6 frames acostada durmiendo plácidamente en almohada con Zzzz) ──
-    place(0, 2, &transform_sprite(&s_sleep0, 0.0, 0.0, 1.0));
-    place(1, 2, &transform_sprite(&s_sleep1, 0.0, -0.6, 1.006));
-    place(2, 2, &transform_sprite(&s_sleep2, 0.0, -1.2, 1.012));
-    place(3, 2, &transform_sprite(&s_sleep2, 0.0, -1.5, 1.015));
-    place(4, 2, &transform_sprite(&s_sleep1, 0.0, -0.9, 1.009));
-    place(5, 2, &transform_sprite(&s_sleep0, 0.0, -0.3, 1.003));
+    // ── Fila 2 (3 en ini): Writing (12 frames fluidos tocando el sintetizador con notas musicales) ─
+    for col in 0..12 {
+        let phase = (col as f32 / 12.0) * tau;
+        let dx = phase.sin() * 1.0;
+        let dy = -(phase * 2.0).cos() * 1.0;
+        let scale_y = 1.0 + (phase * 2.0).cos() * 0.012;
+        let mut w = transform_sprite(&s_write1, dx, dy, scale_y);
+        if col == 2 || col == 3 {
+            draw_music_note(&mut w, 38, 28 - (col as i32 - 2) * 4, false);
+        } else if col == 5 || col == 6 {
+            draw_music_note(&mut w, 88, 26 - (col as i32 - 5) * 4, true);
+        } else if col == 8 || col == 9 {
+            draw_music_note(&mut w, 94, 22 - (col as i32 - 8) * 4, false);
+        } else if col == 11 {
+            draw_music_note(&mut w, 44, 24, true);
+        }
+        place(col, 2, &w);
+    }
 
-    // ── Fila 3 (4 en ini): Happy (6 frames agitando el puerro negi alegremente) ──────────
-    let h0 = transform_sprite(&s_happy0, -1.2, 0.0, 1.0);
-    let h1 = transform_sprite(&s_happy0, -0.5, -1.5, 1.015);
-    let mut h2 = transform_sprite(&s_happy0, 0.4, -2.4, 1.024);
-    let mut h3 = transform_sprite(&s_happy0, 1.4, -1.8, 1.018);
-    let h4 = transform_sprite(&s_happy0, 0.6, -0.8, 1.008);
-    let h5 = transform_sprite(&s_happy0, -0.4, 0.0, 1.0);
-    draw_music_note(&mut h2, 102, 25, false);
-    draw_music_note(&mut h3, 106, 20, true);
+    // ── Fila 3 (4 en ini): End Writing (6 frames de transición fluida desde el sintetizador a reposo) ─
+    for col in 0..6 {
+        let t = (col as f32 + 1.0) / 7.0;
+        let blended = blend_sprites(&s_write1, &s_idle0, t);
+        let bob = (t * std::f32::consts::PI).sin() * 1.0;
+        place(col, 3, &transform_sprite(&blended, 0.0, -bob, 1.0));
+    }
 
-    place(0, 3, &h0);
-    place(1, 3, &h1);
-    place(2, 3, &h2);
-    place(3, 3, &h3);
-    place(4, 3, &h4);
-    place(5, 3, &h5);
+    // ── Fila 4 (5 en ini): Sleep (12 frames acostada durmiendo plácidamente con respiración y Zzzz) ─
+    for col in 0..12 {
+        let phase = (col as f32 / 12.0) * tau;
+        let dy = -phase.sin() * 1.2;
+        let scale_y = 1.0 + phase.sin() * 0.012;
+        let base = if col < 4 {
+            &s_sleep0
+        } else if col < 8 {
+            &s_sleep1
+        } else {
+            &s_sleep2
+        };
+        place(col, 4, &transform_sprite(base, 0.0, dy, scale_y));
+    }
 
-    // ── Fila 4 (5 en ini): Boring (4 frames somnolienta y acurrucada con respiración lenta) ──
-    place(0, 4, &transform_sprite(&s_boring, 0.0, 0.0, 1.0));
-    place(1, 4, &transform_sprite(&s_boring, 0.0, -1.0, 1.010));
-    place(2, 4, &transform_sprite(&s_boring, 0.0, -1.5, 1.015));
-    place(3, 4, &transform_sprite(&s_boring, 0.0, -0.6, 1.006));
+    // ── Fila 5 (6 en ini): Happy (12 frames agitando el puerro negi alegremente en arco) ──────────
+    for col in 0..12 {
+        let phase = (col as f32 / 12.0) * tau;
+        let dx = phase.sin() * 1.8;
+        let dy = -phase.cos().abs() * 2.2;
+        let scale_y = 1.0 + phase.cos().abs() * 0.022;
+        let mut h = transform_sprite(&s_happy0, dx, dy, scale_y);
+        if col == 3 || col == 4 {
+            draw_music_note(&mut h, 102, 24 - (col as i32 - 3) * 4, false);
+        } else if col == 8 || col == 9 {
+            draw_music_note(&mut h, 106, 20 - (col as i32 - 8) * 4, true);
+        }
+        place(col, 5, &h);
+    }
 
-    // ── Filas 5..12 (6..13 en ini): Look_* (8 direcciones de mirada con ojos abiertos) ─
+    // ── Fila 6 (7 en ini): Boring (8 frames somnolienta y acurrucada con respiración suave) ─────────
+    for col in 0..8 {
+        let phase = (col as f32 / 8.0) * tau;
+        let dy = -phase.sin() * 1.4;
+        let scale_y = 1.0 + phase.sin() * 0.014;
+        place(col, 6, &transform_sprite(&s_boring, 0.0, dy, scale_y));
+    }
+
+    // ── Filas 7..14 (8..15 en ini): Look_* (8 direcciones de mirada con seguimiento de ojos) ───────
     let dirs: [(f32, f32); 8] = [
         (-4.0, 0.0),  // look_left
         (4.0, 0.0),   // look_right
@@ -592,34 +652,54 @@ fn main() {
         (3.0, 2.5),   // look_down_right
     ];
     for (idx, (dx, dy)) in dirs.iter().enumerate() {
-        let row = 5 + idx as u32;
-        place(0, row, &transform_sprite(&s_idle0, *dx, *dy, 1.0));
-        place(
-            1,
-            row,
-            &transform_sprite(&s_idle0, *dx * 0.85, *dy * 0.85, 1.005),
-        );
+        let row = 7 + idx as u32;
+        for col in 0..4 {
+            let mult = match col {
+                0 => 1.0,
+                1 => 0.94,
+                2 => 0.88,
+                _ => 0.96,
+            };
+            place(
+                col,
+                row,
+                &transform_sprite(&s_idle0, *dx * mult, *dy * mult, 1.0),
+            );
+        }
     }
 
-    // ── Fila 13 (14 en ini): Wake Up (4 frames despertando alegremente) ───────────
-    place(0, 13, &transform_sprite(&s_boring, 0.0, 0.0, 1.0));
-    place(1, 13, &transform_sprite(&s_boring, 0.0, -1.0, 1.01));
-    place(2, 13, &transform_sprite(&s_idle_smile, 0.0, -1.5, 1.015));
-    place(3, 13, &transform_sprite(&s_idle0, 0.0, 0.0, 1.0));
-
-    // ── Fila 14 (15 en ini): Walk (6 frames ciclo de pasos articulado con balanceo natural) ──
-    for col in 0..6 {
-        let phase = col as f32 / 6.0;
-        place(col, 14, &walk_stride_sprite(&s_idle0, phase));
+    // ── Fila 15 (16 en ini): Wake Up (8 frames despertando alegremente con transición suave) ───────
+    for col in 0..4 {
+        let t = (col as f32 + 1.0) / 5.0;
+        let s = blend_sprites(&s_boring, &s_idle_smile, t);
+        place(col, 15, &s);
+    }
+    for col in 4..8 {
+        let t = (col as f32 - 3.0) / 5.0;
+        let s = blend_sprites(&s_idle_smile, &s_idle0, t);
+        place(col, 15, &s);
     }
 
-    // ── Fila 15 (16 en ini): Eat RAM (6 frames comiendo RAM de forma continua) ────
-    place(0, 15, &transform_sprite(&s_ram0, 0.0, 0.0, 1.0));
-    place(1, 15, &transform_sprite(&s_ram0, 0.0, -1.0, 1.010));
-    place(2, 15, &transform_sprite(&s_ram1, 0.0, -1.6, 1.016));
-    place(3, 15, &transform_sprite(&s_ram1, 0.0, -1.2, 1.012));
-    place(4, 15, &transform_sprite(&s_idle_smile, 0.0, -0.6, 1.006));
-    place(5, 15, &transform_sprite(&s_idle0, 0.0, 0.0, 1.0));
+    // ── Fila 16 (17 en ini): Walk (12 frames ciclo de pasos articulado con balanceo orgánico) ─────
+    for col in 0..12 {
+        let phase = col as f32 / 12.0;
+        place(col, 16, &walk_stride_sprite(&s_idle0, phase));
+    }
+
+    // ── Fila 17 (18 en ini): Eat RAM (12 frames comiendo RAM con mordiscos continuos y masticado) ──
+    for col in 0..12 {
+        let sprite = match col {
+            0..=1 => &s_ram0,
+            2..=4 => &s_ram1,
+            5..=7 => &s_ram0,
+            8..=9 => &s_ram1,
+            10..=11 => &s_idle_smile,
+            _ => &s_idle0,
+        };
+        let phase = (col as f32 / 12.0) * tau;
+        let dy = -phase.sin() * 1.2;
+        place(col, 17, &transform_sprite(sprite, 0.0, dy, 1.012));
+    }
 
     let out_dir = Path::new("themes/miku");
     std::fs::create_dir_all(out_dir).expect("create_dir_all");
@@ -635,12 +715,12 @@ fn main() {
     );
 
     let mut writing_frames = Vec::new();
-    for col in 0..6 {
+    for col in 0..12 {
         let mut f_buf = vec![0u8; (FW * FH * 4) as usize];
         for y in 0..FH {
             for x in 0..FW {
                 let src_px = col * FW + x;
-                let src_py = FH + y;
+                let src_py = 2 * FH + y; // Fila 2 = writing
                 let p = final_sheet.get_pixel(src_px, src_py);
                 let dst_i = ((y * FW + x) * 4) as usize;
                 f_buf[dst_i..dst_i + 4].copy_from_slice(&p.0);
@@ -648,7 +728,7 @@ fn main() {
         }
         writing_frames.push(f_buf);
     }
-    let apng_bytes = encode_apng(FW, FH, &writing_frames, 6);
+    let apng_bytes = encode_apng(FW, FH, &writing_frames, 12);
     let apng_path = out_dir.join("writing.apng");
     std::fs::write(&apng_path, &apng_bytes).expect("write writing.apng");
     println!("Guardado: {} (APNG animación)", apng_path.display());
