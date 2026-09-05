@@ -116,6 +116,12 @@ pub struct Config {
     pub keypress_duration: i32,
     pub test_animation_duration: i32,
     pub test_animation_interval: i32,
+    /// Antes gobernaba el ritmo de sondeo del bucle de animación; desde que
+    /// `bongocat/src/wl.rs::State::next_wake` reprograma el tick a un instante
+    /// exacto (patas sueltas / sprite sheet en curso / antirrebote de pantalla
+    /// completa, con un tope de reposo aparte), ya no tiene efecto en tiempo de
+    /// ejecución. Se conserva parseado/clampado/mostrado por compatibilidad del
+    /// `.conf`.
     pub fps: i32,
     pub enable_hand_mapping: bool,
 

@@ -187,9 +187,29 @@ fn rasterize_theme(
     )
 }
 
-/// Duración entre fotogramas a partir de los FPS configurados.
-fn frame_dt_from_fps(fps: i32) -> Duration {
-    Duration::from_millis(1000 / u64::from(fps.clamp(1, 120) as u32))
+/// Tope de sondeo cuando no hay nada pendiente (sin patas sueltas, sin
+/// antirrebote de pantalla completa en curso, sin sprite sheet animando): red
+/// de seguridad para el sueño programado/por inactividad, `boring` y el
+/// decaimiento de `happy_kpm`, cuya granularidad de segundos no necesita más
+/// precisión. Ver [`State::next_wake`] — cierra el TODO de `## Notas` en
+/// `specs/PRESUPUESTOS.md` (el timer tickeaba siempre a `fps`, ~60 Hz, aunque
+/// nada cambiara).
+const IDLE_TICK_CAP: Duration = Duration::from_millis(200);
+
+/// Próximo instante en que hace falta volver a llamar a `tick()` para no
+/// perder un cambio: el primero de `candidates` que caiga en el futuro
+/// (patas sueltas, fin del antirrebote de pantalla completa, siguiente
+/// fotograma de un sprite sheet en curso); si ninguno aplica, `now + idle_cap`.
+/// Nunca acorta un candidato real más lejano que `idle_cap` — solo rellena
+/// cuando no hay nada concreto que esperar.
+#[must_use]
+fn next_wake_at(now: Instant, candidates: &[Option<Instant>], idle_cap: Duration) -> Instant {
+    candidates
+        .iter()
+        .filter_map(|c| *c)
+        .filter(|&t| t > now)
+        .min()
+        .unwrap_or(now + idle_cap)
 }
 
 /// Hora local en minutos desde medianoche (`0..1440`), o `None` si falla.
@@ -389,7 +409,6 @@ pub fn run_overlay(
         frames,
         theme,
         frame: config.idle_frame.clamp(0, 4) as u8,
-        frame_dt: frame_dt_from_fps(config.fps),
         left_hold_until: now,
         right_hold_until: now,
         last_activity: now,
@@ -533,16 +552,14 @@ pub fn run_overlay(
         None
     };
 
-    // Tick de animación a ritmo de FPS: recalcula el fotograma y redibuja si
-    // cambió. Lee `state.frame_dt` para respetar cambios de `fps` en caliente.
-    // TODO: bajar a un tick lento cuando no hay actividad (idle ~0% CPU).
-    lh.insert_source(
-        Timer::from_duration(frame_dt_from_fps(config.fps)),
-        |_, _, state| {
-            state.tick();
-            TimeoutAction::ToDuration(state.frame_dt)
-        },
-    )?;
+    // Tick de animación: recalcula el fotograma y redibuja si cambió. Se
+    // reprograma a un instante **exacto** (`State::next_wake`) en vez de a
+    // ritmo fijo — sin actividad cae a `IDLE_TICK_CAP` (~5 Hz) en lugar de
+    // tickear siempre a `fps` (hasta 120 Hz) sin nada que animar.
+    lh.insert_source(Timer::immediate(), |_, _, state| {
+        state.tick();
+        TimeoutAction::ToInstant(state.next_wake(Instant::now()))
+    })?;
 
     eprintln!("bongocat: barra {width}x{height} anclada; Ctrl+C para salir");
     while !state.exit {
@@ -571,8 +588,6 @@ struct State {
     theme: Option<theme::LoadedTheme>,
     /// Fotograma actual (0–4), lo decide la máquina de estados.
     frame: u8,
-    /// Duración entre ticks de animación (deriva de `fps`).
-    frame_dt: Duration,
     /// Instantes hasta los que cada pata sigue "bajada".
     left_hold_until: Instant,
     right_hold_until: Instant,
@@ -729,9 +744,10 @@ impl State {
     }
 
     /// Reacciona a un cambio de configuración (recarga de fichero o `SET` por
-    /// IPC): re-rasteriza si cambió el aspecto del gato, ajusta `frame_dt`,
-    /// redimensiona/reancla la barra si hace falta, y redibuja. Común a
-    /// `reload` y al `SET` en vivo.
+    /// IPC): re-rasteriza si cambió el aspecto del gato, redimensiona/reancla
+    /// la barra si hace falta, y redibuja. Común a `reload` y al `SET` en vivo.
+    /// `fps` ya no gobierna el ritmo de sondeo (ver [`State::next_wake`]); un
+    /// cambio en caliente no necesita reprogramar nada aquí.
     fn apply_config_diff(&mut self, old: &Config) {
         let c = self.config.clone();
         if c.theme != old.theme {
@@ -744,7 +760,6 @@ impl State {
         {
             self.rerasterize();
         }
-        self.frame_dt = frame_dt_from_fps(c.fps);
 
         let mut surface_changed = false;
         if c.overlay_height != old.overlay_height {
@@ -850,6 +865,30 @@ impl State {
         if changed {
             self.draw();
         }
+    }
+
+    /// Cuándo reprogramar el siguiente `tick()` (llamar justo después de uno).
+    /// Sin nada pendiente cae a [`IDLE_TICK_CAP`]; con una pata sujeta, un
+    /// antirrebote de pantalla completa en curso, o un sprite sheet animando,
+    /// se despierta en el instante exacto que le toca — nunca más tarde de lo
+    /// que haría falta, y sin sondear de más mientras no hay nada que hacer.
+    fn next_wake(&self, now: Instant) -> Instant {
+        let fullscreen_deadline = (self.want_hidden != self.hidden)
+            .then(|| self.want_hidden_since + Duration::from_millis(350));
+        let sheet_deadline = match &self.frames.kind {
+            anim::FramesKind::Sheet(sa) => sa.next_wake(),
+            anim::FramesKind::Classic(_) => None,
+        };
+        next_wake_at(
+            now,
+            &[
+                (self.left_hold_until > now).then_some(self.left_hold_until),
+                (self.right_hold_until > now).then_some(self.right_hold_until),
+                fullscreen_deadline,
+                sheet_deadline,
+            ],
+            IDLE_TICK_CAP,
+        )
     }
 
     /// Recarga la configuración desde disco y aplica los cambios en vivo.
@@ -1719,5 +1758,53 @@ impl Dispatch<ZcosmicToplevelHandleV1, ()> for State {
             }
             state.recompute_hidden();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_wake_at_toma_el_candidato_mas_cercano() {
+        let now = Instant::now();
+        let cap = Duration::from_millis(200);
+        let near = now + Duration::from_millis(30);
+        let far = now + Duration::from_millis(500);
+        assert_eq!(
+            next_wake_at(now, &[Some(far), Some(near), None], cap),
+            near,
+            "el más próximo, ignorando `None`"
+        );
+    }
+
+    #[test]
+    fn next_wake_at_ignora_candidatos_pasados() {
+        let now = Instant::now();
+        let cap = Duration::from_millis(200);
+        let pasado = now - Duration::from_millis(5);
+        let futuro = now + Duration::from_millis(80);
+        assert_eq!(
+            next_wake_at(now, &[Some(pasado), Some(futuro)], cap),
+            futuro,
+            "un candidato ya vencido no cuenta (se ignora, no dispara sondeo inmediato en bucle)"
+        );
+    }
+
+    #[test]
+    fn next_wake_at_sin_candidatos_cae_al_tope_de_reposo() {
+        let now = Instant::now();
+        let cap = Duration::from_millis(200);
+        assert_eq!(next_wake_at(now, &[None, None, None], cap), now + cap);
+    }
+
+    #[test]
+    fn next_wake_at_no_acorta_un_candidato_mas_lejano_que_el_tope() {
+        // Un sprite sheet lento (p. ej. 1 fps) no debe despertarse antes de lo
+        // que le toca solo porque el tope de reposo sea más corto.
+        let now = Instant::now();
+        let cap = Duration::from_millis(200);
+        let lejos = now + Duration::from_secs(1);
+        assert_eq!(next_wake_at(now, &[Some(lejos)], cap), lejos);
     }
 }

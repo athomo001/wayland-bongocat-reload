@@ -205,6 +205,30 @@ impl SheetAnim {
         (self.state, self.frame)
     }
 
+    /// Cuándo hace falta el próximo `tick()` para no perder un cambio de
+    /// fotograma: `None` si el estado actual es un **bucle de un solo
+    /// fotograma** (nada que animar hasta una entrada externa — tecla, sueño,
+    /// `happy`…); si no, el instante en que se cumple `1/fps` desde el último
+    /// avance (bucles multi-fotograma **y** one-shots en curso, que necesitan
+    /// esa misma llamada para completar su transición). Lo usa el llamante
+    /// para bajar el ritmo de sondeo cuando no hace falta más (spec: CPU en
+    /// reposo).
+    #[must_use]
+    pub fn next_wake(&self) -> Option<Instant> {
+        let len = self.cache.get(&self.state).map_or(0, Vec::len);
+        if !self.state.is_oneshot() && len <= 1 {
+            return None;
+        }
+        let fps = self
+            .fps
+            .get(&self.state)
+            .copied()
+            .unwrap_or(self.default_fps)
+            .max(1);
+        let per = Duration::from_nanos(1_000_000_000 / u64::from(fps));
+        Some(self.last_advance + per)
+    }
+
     /// Reposiciona el cursor tras un re-rasterizado (cambio de `cat_height` /
     /// escala HiDPI / recarga de config): el pixel-art cambia de tamaño pero la
     /// máquina de estados no debería "saltar" a idle. Si `state` ya no existe en
@@ -603,5 +627,55 @@ state_start_writing_frames = 1
         let mut b = SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10])]), &sheet, t0);
         b.tick(advance(t0, 10), false, false, false, false, true);
         assert_eq!(b.debug_pos().0, "idle");
+    }
+
+    #[test]
+    fn next_wake_none_si_el_bucle_es_de_un_solo_fotograma() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        // `idle` con un único fotograma: nada que animar sin una entrada externa.
+        let a = SheetAnim::from_cache(cache(&[("idle", &[0]), ("writing", &[10])]), &sheet, t0);
+        assert_eq!(a.next_wake(), None);
+    }
+
+    #[test]
+    fn next_wake_bucle_multi_fotograma_es_1_sobre_fps() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI); // idle sin fps propio -> default_fps = 10
+        let a = SheetAnim::from_cache(
+            cache(&[("idle", &[0, 1]), ("writing", &[10, 11])]),
+            &sheet,
+            t0,
+        );
+        assert_eq!(
+            a.next_wake(),
+            Some(t0 + Duration::from_millis(100)),
+            "10 fps -> 100 ms desde el último avance (= la entrada en el estado)"
+        );
+    }
+
+    #[test]
+    fn next_wake_one_shot_en_curso_no_se_pierde() {
+        let t0 = Instant::now();
+        let sheet = parse_sheet_ini(INI);
+        let mut a = SheetAnim::from_cache(
+            cache(&[
+                ("idle", &[0, 1]),
+                ("start_writing", &[5]),
+                ("writing", &[10, 11, 12]),
+            ]),
+            &sheet,
+            t0,
+        );
+        let t1 = advance(t0, 10);
+        a.tick(t1, false, true, false, false, false);
+        assert_eq!(a.debug_pos().0, "start_writing");
+        // Aunque tenga un solo fotograma, es un one-shot: hace falta una
+        // llamada más para completar la transición a `writing`.
+        assert_eq!(
+            a.next_wake(),
+            Some(t1 + Duration::from_millis(100)),
+            "start_writing sin fps propio -> default_fps = 10 -> 100 ms"
+        );
     }
 }

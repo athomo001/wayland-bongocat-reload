@@ -280,7 +280,7 @@ fn main() -> ExitCode {
         }
         println!("dry-run: temas disponibles: {:?}", theme::list());
         println!(
-            "dry-run: tray = {} (icono SNI pendiente; usa bongocatctl)",
+            "dry-run: tray = {}",
             if tray::wanted(loaded.config.enable_tray, args.no_tray) {
                 "activado"
             } else {
