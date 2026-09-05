@@ -19,3 +19,4 @@ pub mod scale;
 pub mod sheet;
 pub mod sleep;
 pub mod theme;
+pub mod vpet;

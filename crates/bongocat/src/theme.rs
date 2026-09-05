@@ -12,6 +12,7 @@ use bongocat_common::sheet::{parse_sheet_ini, SheetTheme};
 use bongocat_common::theme::{
     format_supported, parse_theme_ini, ThemeMeta, DEFAULT_FRAME_FILES, THEME_FORMAT_SUPPORTED,
 };
+use bongocat_common::vpet::{parse_vpet_ini, VpetConfig};
 
 use crate::anim::{SheetImages, SheetSource};
 use crate::png_decode;
@@ -37,62 +38,44 @@ pub struct SheetArt {
     pub images: SheetImages,
 }
 
-/// Un tema ya cargado en memoria: metadatos + el arte (SVG o sprite sheet).
+/// Un tema ya cargado en memoria: metadatos + el arte (SVG o sprite sheet) + config del vPet.
 pub struct LoadedTheme {
     pub meta: ThemeMeta,
     /// Directorio resuelto del tema.
     pub dir: PathBuf,
     pub art: ThemeArt,
+    /// Perfil de configuración y comportamiento del vPet (`vpet.ini` / `theme.ini`).
+    pub vpet: VpetConfig,
 }
 
 impl LoadedTheme {
+    #[allow(dead_code)]
+    pub fn vpet(&self) -> &VpetConfig {
+        &self.vpet
+    }
+
     pub fn cat_height(&self) -> Option<u32> {
-        match &self.art {
-            ThemeArt::Svg(_) => self.meta.default_cat_height,
-            ThemeArt::Sheet(s) => s.sheet.default_cat_height.or(self.meta.default_cat_height),
-        }
+        self.vpet.cat_height
     }
 
     pub fn cat_align(&self) -> Option<bongocat_common::config::Align> {
-        match &self.art {
-            ThemeArt::Svg(_) => self.meta.default_cat_align,
-            ThemeArt::Sheet(s) => s.sheet.default_cat_align.or(self.meta.default_cat_align),
-        }
+        self.vpet.cat_align
     }
 
     pub fn cat_x_offset(&self) -> Option<i32> {
-        match &self.art {
-            ThemeArt::Svg(_) => self.meta.default_cat_x_offset,
-            ThemeArt::Sheet(s) => s
-                .sheet
-                .default_cat_x_offset
-                .or(self.meta.default_cat_x_offset),
-        }
+        self.vpet.cat_x_offset
     }
 
     pub fn cat_y_offset(&self) -> Option<i32> {
-        match &self.art {
-            ThemeArt::Svg(_) => self.meta.default_cat_y_offset,
-            ThemeArt::Sheet(s) => s
-                .sheet
-                .default_cat_y_offset
-                .or(self.meta.default_cat_y_offset),
-        }
+        self.vpet.cat_y_offset
     }
 
     pub fn can_roam(&self) -> bool {
-        match &self.art {
-            ThemeArt::Svg(_) => self.meta.can_roam,
-            ThemeArt::Sheet(s) => s.sheet.can_roam || self.meta.can_roam,
-        }
+        self.vpet.can_roam
     }
 
     pub fn roam_speed(&self) -> f32 {
-        let sp = match &self.art {
-            ThemeArt::Svg(_) => self.meta.roam_speed,
-            ThemeArt::Sheet(s) => s.sheet.roam_speed.or(self.meta.roam_speed),
-        };
-        sp.unwrap_or(45) as f32
+        self.vpet.roam_speed as f32
     }
 
     /// Resumen de una línea para `theme check` / `--dry-run`.
@@ -236,9 +219,15 @@ fn load_dir(dir: &Path) -> Option<LoadedTheme> {
         return None;
     }
 
+    // Configuración específica del vPet (vpet.ini manda; theme.ini es fallback).
+    let vpet_file = std::fs::read_to_string(dir.join("vpet.ini")).unwrap_or_default();
+    let mut vpet = parse_vpet_ini(&vpet_file);
+    let theme_fallback = parse_vpet_ini(&ini);
+    vpet.merge_fallback(&theme_fallback);
+
     // `theme_format = 3`: sprite sheet PNG en rejilla (spec 0014).
     if meta.theme_format == 3 {
-        return load_sheet(dir, &ini, meta);
+        return load_sheet(dir, &ini, meta, vpet);
     }
 
     let mut frames: [Vec<u8>; 5] = Default::default();
@@ -283,6 +272,7 @@ fn load_dir(dir: &Path) -> Option<LoadedTheme> {
         meta,
         dir: dir.to_path_buf(),
         art: ThemeArt::Svg(Box::new(frames)),
+        vpet,
     })
 }
 
@@ -291,7 +281,7 @@ fn load_dir(dir: &Path) -> Option<LoadedTheme> {
 ///
 /// Acepta una **hoja global** (`sheet =`) y/o **hojas por estado**
 /// (`sheet_<estado> =`), spec 0014 §5.1. Cada fichero se decodifica una sola vez.
-fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
+fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta, vpet: VpetConfig) -> Option<LoadedTheme> {
     let sheet = parse_sheet_ini(ini);
     if sheet.frame_w == 0 || sheet.frame_h == 0 {
         eprintln!(
@@ -397,6 +387,7 @@ fn load_sheet(dir: &Path, ini: &str, meta: ThemeMeta) -> Option<LoadedTheme> {
         meta,
         dir: dir.to_path_buf(),
         art: ThemeArt::Sheet(SheetArt { sheet, images }),
+        vpet,
     };
     eprintln!(
         "bongocat: tema {} cargado de {}",

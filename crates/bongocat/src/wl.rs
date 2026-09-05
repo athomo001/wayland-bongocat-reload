@@ -882,20 +882,30 @@ impl State {
         let dt = now.duration_since(self.last_roam_tick).as_secs_f32();
         self.last_roam_tick = now;
 
-        // Si el ratón dejó de moverse hace más de 600ms, los ojos vuelven suavemente al centro
-        if self.gaze_dir != bongocat_common::mouse::GazeDirection::Center
+        // Seguimiento de ojos con el ratón (si el vPet lo tiene habilitado)
+        let track_mouse = self
+            .theme
+            .as_ref()
+            .map(|t| t.vpet.track_mouse)
+            .unwrap_or(true);
+        if !track_mouse {
+            self.gaze_dir = bongocat_common::mouse::GazeDirection::Center;
+        } else if self.gaze_dir != bongocat_common::mouse::GazeDirection::Center
             && now.duration_since(self.last_gaze_at) > Duration::from_millis(600)
         {
             self.gaze_dir = bongocat_common::mouse::GazeDirection::Center;
         }
 
         let idle_secs = now.duration_since(self.last_activity).as_secs();
-        let idle_sleep = self.config.idle_sleep_timeout_sec > 0
-            && idle_secs >= self.config.idle_sleep_timeout_sec as u64;
+        let sleep_timeout_sec = self
+            .theme
+            .as_ref()
+            .and_then(|t| t.vpet.sleep_timeout)
+            .unwrap_or(self.config.idle_sleep_timeout_sec as u64);
+        let idle_sleep = sleep_timeout_sec > 0 && idle_secs >= sleep_timeout_sec;
         // `boring` (spec 0014 §5.2): inactividad prolongada **antes** del sueño,
-        // a mitad del `idle_sleep_timeout`. Sin ese timeout no hay `boring`.
-        let boring = self.config.idle_sleep_timeout_sec > 0
-            && idle_secs >= (self.config.idle_sleep_timeout_sec as u64 / 2).max(1);
+        // a mitad del timeout de sueño. Sin ese timeout no hay `boring`.
+        let boring = sleep_timeout_sec > 0 && idle_secs >= (sleep_timeout_sec / 2).max(1);
 
         // Reposo por horario: si `enable_scheduled_sleep` y la hora local cae en
         // la franja `[sleep_begin, sleep_end)`. Porta `anim_is_sleep_time`.
@@ -949,18 +959,25 @@ impl State {
                 let happy = self.config.happy_kpm > 0
                     && self.kpm.per_minute(now) >= self.config.happy_kpm as usize;
 
-                // Acciones especiales de ocio en reposo (caminar, comer RAM):
-                let idle_special = if can_roam
-                    && !sleeping
-                    && !left
-                    && !right
-                    && self.gaze_dir == bongocat_common::mouse::GazeDirection::Center
-                {
-                    let phase = idle_secs % 24;
-                    if (4..8).contains(&phase) {
-                        Some(crate::sheet_anim::StateId::Walk)
-                    } else if (14..18).contains(&phase) {
-                        Some(crate::sheet_anim::StateId::EatRam)
+                // Acciones especiales de ocio en reposo configuradas en el vPet activo:
+                let vpet = self.theme.as_ref().map(|t| &t.vpet);
+                let idle_special = if let Some(vp) = vpet {
+                    if !sleeping
+                        && !left
+                        && !right
+                        && self.gaze_dir == bongocat_common::mouse::GazeDirection::Center
+                        && !vp.idle_actions.is_empty()
+                        && vp.idle_action_interval > 0
+                    {
+                        let total_cycle = vp.idle_action_interval * vp.idle_actions.len() as u64;
+                        let phase = idle_secs % total_cycle;
+                        let idx = (phase / vp.idle_action_interval) as usize;
+                        let in_action = phase % vp.idle_action_interval;
+                        if in_action < vp.idle_action_duration {
+                            crate::sheet_anim::StateId::from_theme_name(&vp.idle_actions[idx])
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -969,7 +986,8 @@ impl State {
                 };
 
                 let mut moved = false;
-                if can_roam && idle_special == Some(crate::sheet_anim::StateId::Walk) {
+                let is_walking = idle_special == Some(crate::sheet_anim::StateId::Walk);
+                if can_roam && is_walking {
                     if self.roam_dir == 0.0 {
                         self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
                     }
@@ -979,7 +997,11 @@ impl State {
                         Align::Right => pw - cw - xoff,
                     };
                     let cur_phys = base_x + scale_offset_120(self.roam_x.round() as i32, s);
-                    let margin = 32;
+                    let margin = self
+                        .theme
+                        .as_ref()
+                        .map(|t| t.vpet.roam_margin)
+                        .unwrap_or(32);
 
                     if cur_phys <= margin && self.roam_dir < 0.0 {
                         self.roam_dir = 1.0;
@@ -1542,7 +1564,12 @@ impl State {
             }
             // Opacidad del gato: % (0–100) → factor 0–255 para el blit.
             let cat_op = (self.config.cat_opacity.clamp(0, 100) * 255 / 100) as u8;
-            let flip_h = if self.roam_dir < 0.0 {
+            let flip_on_walk = self
+                .theme
+                .as_ref()
+                .map(|t| t.vpet.flip_on_walk)
+                .unwrap_or(true);
+            let flip_h = if flip_on_walk && self.roam_dir < 0.0 {
                 !self.config.mirror_x
             } else {
                 self.config.mirror_x

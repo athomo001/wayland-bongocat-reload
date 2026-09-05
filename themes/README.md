@@ -93,5 +93,32 @@ un APNG (`--state`). Traduce las claves `custom_*`, escribe el tema en
 por un estado ausente: usa su reserva y lo informa. Ver
 [`COMUNIDAD.md`](COMUNIDAD.md) para packs y **licencias**.
 
+## Configuración modular de comportamiento (`vpet.ini`)
+
+Cada carpeta de tema/vPet puede incluir su propio `vpet.ini` para definir sus
+dimensiones sugeridas y dinámicas de conducta sin alterar la configuración global:
+
+```ini
+cat_height = 124          # altura propia del personaje
+cat_align = center        # alineación base
+cat_x_offset = 0          # corrección horizontal
+cat_y_offset = 6          # corrección vertical
+
+# Movimiento por pantalla
+can_roam = 1              # 1 = patrulla la barra/pantalla, 0 = quieto
+roam_speed = 45           # píxeles por segundo
+roam_margin = 32          # margen a los bordes
+flip_on_walk = 1          # voltea al cambiar de dirección
+
+# Conducta de ocio en reposo
+idle_actions = walk, eat_ram  # lista de estados especiales de ocio
+idle_action_interval = 12     # segundos entre acciones
+idle_action_duration = 5      # duración de cada acción
+
+# Interacción
+track_mouse = 1           # seguimiento de ojos con el ratón
+sleep_timeout = 30        # inactividad en segundos antes de dormir
+```
+
 Si algo falla al cargar (falta un SVG, no parsea, formato futuro…), bongocat
 **avisa y sigue con el gato embebido** — nunca se queda sin gato.
