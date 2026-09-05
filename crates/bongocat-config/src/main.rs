@@ -9,6 +9,7 @@
 //! Restablecer; se cierra sola si la instancia que la abrió desaparece. El mapa
 //! de pantalla y la galería de temas llegan en M4.
 
+mod expert;
 mod model;
 
 use std::collections::HashMap;
@@ -19,13 +20,14 @@ use bongocat_common::ipc;
 use model::{Model, Source};
 
 /// Secciones en el orden en que se muestran en la navegación lateral.
-const SECTIONS: [Section; 6] = [
+const SECTIONS: [Section; 7] = [
     Section::Position,
     Section::Appearance,
     Section::Input,
     Section::Sleep,
     Section::Theme,
     Section::Advanced,
+    Section::Expert,
 ];
 
 /// Cada cuánto se comprueba que la instancia sigue viva. Si desaparece, el
@@ -67,6 +69,8 @@ struct App {
     tied_to_instance: bool,
     last_ping: Instant,
     ping_fails: u8,
+    /// Ficheros `.ini` abiertos en el modo experto (vacío hasta entrar ahí).
+    raw: Vec<expert::RawFile>,
 }
 
 impl App {
@@ -81,6 +85,7 @@ impl App {
             tied_to_instance,
             last_ping: Instant::now(),
             ping_fails: 0,
+            raw: Vec::new(),
         }
     }
 
@@ -89,6 +94,7 @@ impl App {
         self.tied_to_instance = self.model.source == Source::Instance;
         self.ping_fails = 0;
         self.edits.clear();
+        self.raw.clear();
     }
 
     /// Si la ventana está atada a una instancia, comprueba que sigue respondiendo;
@@ -129,6 +135,10 @@ impl eframe::App for App {
             ui.add_space(4.0);
             ui.heading(self.section.label_es());
             ui.add_space(10.0);
+            if self.section == Section::Expert {
+                self.expert_panel(ui);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -136,11 +146,10 @@ impl eframe::App for App {
                     // se recoloca arrastrándolo, y sigue con su conducta.
                     if self.section == Section::Position && self.model.roaming {
                         ui.label(
-                            "Este vpet se mueve solo por la pantalla.\n\n\
-                             Para recolocarlo o cambiar su tamaño, abre la bandeja \
-                             del sistema → «Arrastre libre» y muévelo con el ratón \
-                             (la rueda cambia el tamaño). Mientras lo arrastras sigue \
-                             haciendo lo suyo: caminar, dormir, etc.",
+                            "Este vpet se mueve solo por la pantalla. Para recolocarlo, \
+                             abre la bandeja del sistema → «Arrastre libre» y muévelo con \
+                             el ratón; al soltarlo sigue caminando. El tamaño está en \
+                             «Apariencia» (o con la rueda durante el arrastre).",
                         );
                         return;
                     }
@@ -236,6 +245,72 @@ impl App {
             });
             ui.add_space(5.0);
         });
+    }
+
+    /// Modo experto: editores de texto crudo de los `.ini`.
+    fn expert_panel(&mut self, ui: &mut egui::Ui) {
+        if self.raw.is_empty() {
+            self.raw = expert::gather(&self.model);
+        }
+        ui.colored_label(
+            egui::Color32::from_rgb(0xd6, 0x9e, 0x2e),
+            "⚠ Editas los ficheros directamente. Un error de sintaxis puede impedir \
+             que bongocat arranque; el parser descarta la línea mala pero conviene \
+             revisar.",
+        );
+        ui.add_space(8.0);
+
+        if self.raw.is_empty() {
+            ui.label("No encuentro ningún fichero editable (¿sin bongocat.conf?).");
+            return;
+        }
+
+        let instance = opt(&self.instance).map(str::to_owned);
+        let theme = self.model.cfg.theme.trim().to_owned();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for rf in &mut self.raw {
+                    egui::CollapsingHeader::new(format!(
+                        "{}{}",
+                        rf.label,
+                        if rf.dirty() { "  •" } else { "" }
+                    ))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.weak(
+                            egui::RichText::new(rf.path.display().to_string())
+                                .small()
+                                .monospace(),
+                        );
+                        ui.add(
+                            egui::TextEdit::multiline(&mut rf.text)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(14),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(rf.dirty(), egui::Button::new("Guardar"))
+                                .clicked()
+                            {
+                                rf.save(instance.as_deref(), &theme);
+                            }
+                            if ui
+                                .add_enabled(rf.dirty(), egui::Button::new("Descartar"))
+                                .clicked()
+                            {
+                                rf.reload();
+                            }
+                            if !rf.status.is_empty() {
+                                ui.label(egui::RichText::new(&rf.status).small());
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+            });
     }
 }
 

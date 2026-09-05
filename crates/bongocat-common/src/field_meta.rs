@@ -13,9 +13,9 @@ use crate::config::{self, ALIGN_VALUES, LAYER_VALUES, MOUSE_PAW_VALUES, POSITION
 /// Sección en la que la ventana de configuración agrupa el campo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// Posición y tamaño del vpet.
+    /// Posición del vpet (alineación y desfases).
     Position,
-    /// Apariencia (opacidad, espejo, capa…).
+    /// Apariencia: tamaño, opacidad, espejo, capa…
     Appearance,
     /// Entrada de teclado y ratón.
     Input,
@@ -26,6 +26,9 @@ pub enum Section {
     /// Ajustes que la mayoría no toca (o legado sin efecto). La ventana los
     /// esconde tras un desplegable "avanzado".
     Advanced,
+    /// Modo experto: editar los ficheros `.ini` (`bongocat.conf`, `theme.ini`,
+    /// `vpet.ini`) a mano. No tiene campos de `FIELDS`; lo maneja la ventana.
+    Expert,
 }
 
 impl Section {
@@ -33,12 +36,13 @@ impl Section {
     #[must_use]
     pub fn label_es(self) -> &'static str {
         match self {
-            Section::Position => "Posición y tamaño",
+            Section::Position => "Posición",
             Section::Appearance => "Apariencia",
             Section::Input => "Entrada",
             Section::Sleep => "Reposo",
             Section::Theme => "Tema",
             Section::Advanced => "Avanzado",
+            Section::Expert => "Modo experto",
         }
     }
 }
@@ -166,8 +170,8 @@ pub const FIELDS: &[FieldMeta] = &[
     },
     int(
         "cat_height",
-        "Altura del vpet",
-        Section::Position,
+        "Tamaño (altura)",
+        Section::Appearance,
         10,
         200,
         2,
@@ -665,7 +669,7 @@ mod tests {
         assert!(validate_value("cat_height", "80").is_ok());
         // fuera de rango: mensaje con la etiqueta y los límites
         let e = validate_value("cat_height", "999").unwrap_err();
-        assert!(e.contains("Altura del vpet") && e.contains("200"), "{e}");
+        assert!(e.contains("Tamaño") && e.contains("200"), "{e}");
         // tipo mal
         assert!(validate_value("cat_height", "alto").is_err());
         // clave inexistente → delega en el parser
@@ -687,6 +691,7 @@ mod tests {
             Section::Sleep,
             Section::Theme,
             Section::Advanced,
+            Section::Expert,
         ] {
             assert!(!s.label_es().is_empty());
         }
