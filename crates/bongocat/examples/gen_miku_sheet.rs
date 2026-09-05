@@ -347,47 +347,83 @@ fn transform_sprite(src: &RgbaImage, dx: f32, dy: f32, scale_y: f32) -> RgbaImag
     out
 }
 
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Genera un fotograma del ciclo de caminata articulando piernas, balanceo del cuerpo y coletas
-/// sin saltarse jamás píxeles, mediante muestreo inverso continuo.
+/// mediante deformación continua con pesos suaves (smoothstep) que previene cualquier corte en el pelo,
+/// la cintura o duplicación de piernas.
 fn walk_stride_sprite(src: &RgbaImage, phase: f32) -> RgbaImage {
     let mut out = ImageBuffer::new(FW, FH);
     let tau = std::f32::consts::TAU;
     let angle = phase * tau;
 
-    // Movimiento amplio de piernas: paso adelante/atrás y elevación de rodilla
-    let stride_amp = 4.8f32;
-    let lift_amp = 3.6f32;
+    // 1. Dinámica global de caminata:
+    // Rebote rítmico hacia abajo en cada paso (2 rebotes por ciclo de 2 pasos)
+    let body_bob = -(angle * 2.0).sin().abs() * 3.0;
+    // Inclinación suave del cuerpo al transferir el peso
+    let body_sway = angle.sin() * 1.5;
 
-    let left_dx = angle.sin() * stride_amp;
-    let left_dy = -angle.sin().max(0.0) * lift_amp;
+    // 2. Movimiento de zancada de las piernas
+    let stride_amp = 3.8f32;
+    let lift_amp = 3.0f32;
 
-    let right_dx = -angle.sin() * stride_amp;
-    let right_dy = -(-angle.sin()).max(0.0) * lift_amp;
+    let left_leg_dx = angle.sin() * stride_amp;
+    let left_leg_dy = -angle.sin().max(0.0) * lift_amp;
 
-    // Oscilación y rebote del cuerpo (2 rebotes completos por ciclo de dos pasos)
-    let body_bob = (angle * 2.0).sin().abs() * 3.0;
-    let body_tilt = angle.sin() * 2.0;
-    let hair_sway = (angle + 0.5).sin() * 4.5;
+    let right_leg_dx = -angle.sin() * stride_amp;
+    let right_leg_dy = -(-angle.sin()).max(0.0) * lift_amp;
+
+    // 3. Balanceo inercial continuo de las coletas (flotando elásticamente)
+    let hair_sway = (angle + 0.6).sin() * 4.2;
+    let hair_lift = -(angle * 2.0 + 0.3).cos() * 2.0;
 
     for py in 0..FH {
+        let y_f = py as f32;
+        // Peso vertical para zona de piernas: 0 arriba en la cintura (y < 92), transición suave a 1 en los pies
+        let leg_mask_y = smoothstep(92.0, 114.0, y_f);
+
+        // Peso vertical para coletas: flotan desde los clips hacia las puntas
+        let hair_mask_y = smoothstep(42.0, 112.0, y_f);
+
         for px in 0..FW {
-            let (sx, sy) = if py >= 94 {
-                // Zona de piernas/pies
-                if px < 63 {
-                    (px as f32 - left_dx, py as f32 - left_dy)
-                } else {
-                    (px as f32 - right_dx, py as f32 - right_dy)
-                }
-            } else if px < 46 {
-                // Coleta izquierda (balanceo con inercia)
-                (px as f32 - hair_sway, py as f32 + body_bob)
-            } else if px > 82 {
-                // Coleta derecha (balanceo con inercia)
-                (px as f32 - hair_sway, py as f32 + body_bob)
-            } else {
-                // Cabeza y torso
-                (px as f32 - body_tilt, py as f32 + body_bob)
-            };
+            let x_f = px as f32;
+
+            // Coleta izquierda: sólo en el lado izquierdo (x < 50), 0 en el cuerpo/piernas
+            let hair_l_weight = smoothstep(56.0, 36.0, x_f) * hair_mask_y;
+            // Coleta derecha: sólo en el lado derecho (x > 78), 0 en el cuerpo/piernas
+            let hair_r_weight = smoothstep(72.0, 92.0, x_f) * hair_mask_y;
+
+            // Pierna izquierda: centrada en x ≈ 56, 0 en el pelo lateral y 0 en la pierna derecha
+            let leg_l_weight =
+                smoothstep(46.0, 54.0, x_f) * smoothstep(65.0, 58.0, x_f) * leg_mask_y;
+            // Pierna derecha: centrada en x ≈ 72, 0 en el pelo lateral y 0 en la pierna izquierda
+            let leg_r_weight =
+                smoothstep(63.0, 70.0, x_f) * smoothstep(82.0, 74.0, x_f) * leg_mask_y;
+
+            // Desplazamiento compuesto totalmente continuo:
+            let mut dx = body_sway;
+            let mut dy = body_bob;
+
+            // Balanceo de coletas en los laterales sin afectar a las piernas
+            dx += hair_l_weight * hair_sway;
+            dy += hair_l_weight * hair_lift;
+
+            dx += hair_r_weight * hair_sway;
+            dy += hair_r_weight * hair_lift;
+
+            // Movimiento de pierna izquierda
+            dx += leg_l_weight * left_leg_dx;
+            dy += leg_l_weight * left_leg_dy;
+
+            // Movimiento de pierna derecha
+            dx += leg_r_weight * right_leg_dx;
+            dy += leg_r_weight * right_leg_dy;
+
+            let sx = x_f - dx;
+            let sy = y_f - dy;
 
             let p = sample_bilinear(src, sx, sy);
             if p[3] > 0 {
