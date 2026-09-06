@@ -49,6 +49,9 @@ pub struct Model {
     /// La ventana esconde los campos de posición: se recoloca arrastrando
     /// (bandeja → "Modo edición"). Solo se sabe con instancia viva.
     pub roaming: bool,
+    /// Temas instalados (`THEME list` de la instancia): `["embedded", …]`.
+    /// Vacío si no hay instancia.
+    pub themes: Vec<String>,
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -66,6 +69,7 @@ impl Model {
                 dirty: BTreeSet::new(),
                 source: Source::Instance,
                 roaming: instance_roaming(instance.as_deref()),
+                themes: instance_themes(instance.as_deref()),
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -81,6 +85,7 @@ impl Model {
                     Source::Defaults
                 },
                 roaming: false,
+                themes: Vec::new(),
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -90,6 +95,7 @@ impl Model {
                 dirty: BTreeSet::new(),
                 source: Source::Defaults,
                 roaming: false,
+                themes: Vec::new(),
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -168,9 +174,47 @@ impl Model {
         self.cfg = fresh.cfg;
         self.source = fresh.source;
         self.roaming = fresh.roaming;
+        self.themes = fresh.themes;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
+    }
+
+    /// Nombre del tema activo tal como se muestra en la galería (`"embedded"` si
+    /// `theme` está vacío).
+    #[must_use]
+    pub fn active_theme(&self) -> &str {
+        let t = self.cfg.theme.trim();
+        if t.is_empty() {
+            "embedded"
+        } else {
+            t
+        }
+    }
+
+    /// Cambia el tema activo. `"embedded"` → el vpet embebido (`theme` vacío).
+    /// Con instancia lo aplica en vivo (`THEME <n>`); marca `theme` como sucia.
+    pub fn set_theme(&mut self, name: &str) {
+        let stored = if name == "embedded" { "" } else { name };
+        if self.source.connected() {
+            match ipc::send_request(self.instance.as_deref(), &format!("THEME {name}")) {
+                Ok(r) if r.starts_with("ERR") => {
+                    self.status = format!("la instancia no cambió de tema: {r}");
+                    return;
+                }
+                Err(e) => {
+                    self.status = format!("no respondió la instancia: {e}");
+                    return;
+                }
+                Ok(_) => {}
+            }
+            // La instancia ya aplicó y ajustó su `vpet.ini`; recarga para que la
+            // ventana (roaming, altura efectiva…) quede al día.
+            self.roaming = instance_roaming(self.instance.as_deref());
+        }
+        self.cfg.theme = stored.to_owned();
+        self.dirty.insert("theme".to_owned());
+        self.status = format!("tema: {name}");
     }
 
     /// Vuelve a los **valores de fábrica** (los del `wayvpet.conf.example`
@@ -265,6 +309,15 @@ fn instance_roaming(instance: Option<&str>) -> bool {
         .any(|kv| kv == "roaming=1")
 }
 
+/// Lista de temas instalados (`THEME list` → `"embedded classic …"`). Vacío si
+/// no responde.
+fn instance_themes(instance: Option<&str>) -> Vec<String> {
+    match ipc::send_request(instance, "THEME list") {
+        Ok(r) if !r.starts_with("ERR") => r.split_whitespace().map(str::to_owned).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Pide `DUMP` a la instancia y parsea la respuesta. `None` si no hay instancia
 /// o la respuesta no es una config.
 fn load_from_instance(instance: Option<&str>) -> Option<(Config, String)> {
@@ -287,6 +340,7 @@ mod tests {
             dirty: BTreeSet::new(),
             source: Source::Defaults,
             roaming: false,
+            themes: Vec::new(),
             instance: None,
             path: None,
             status: String::new(),

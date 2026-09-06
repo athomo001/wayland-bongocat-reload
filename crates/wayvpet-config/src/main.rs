@@ -139,6 +139,10 @@ impl eframe::App for App {
                 self.expert_panel(ui);
                 return;
             }
+            if self.section == Section::Theme {
+                self.theme_panel(ui);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -322,6 +326,49 @@ impl App {
                     ui.add_space(6.0);
                 }
             });
+    }
+
+    /// Sección "Tema": galería de temas instalados (clic para cambiar en vivo) +
+    /// campo de texto para una ruta a una carpeta de tema propia.
+    fn theme_panel(&mut self, ui: &mut egui::Ui) {
+        let active = self.model.active_theme().to_owned();
+
+        if self.model.themes.is_empty() {
+            ui.label(
+                "La galería de temas necesita una instancia de wayvpet en marcha. \
+                 Mientras tanto, escribe el nombre o la ruta del tema abajo.",
+            );
+        } else {
+            ui.label("Clic en un tema para activarlo (se aplica al instante):");
+            ui.add_space(6.0);
+            let mut pick: Option<String> = None;
+            ui.horizontal_wrapped(|ui| {
+                for name in &self.model.themes {
+                    let is_active = *name == active;
+                    let label = if name == "embedded" {
+                        "vpet embebido".to_owned()
+                    } else {
+                        name.clone()
+                    };
+                    if ui.selectable_label(is_active, label).clicked() && !is_active {
+                        pick = Some(name.clone());
+                    }
+                }
+            });
+            if let Some(name) = pick {
+                self.model.set_theme(&name);
+                self.edits.remove("theme");
+            }
+        }
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Tema propio (ruta a una carpeta)").strong());
+        if let Some(meta) = FIELDS.iter().find(|f| f.key == "theme") {
+            field_widget(ui, &mut self.model, &mut self.edits, meta);
+            ui.small(meta.help_es);
+        }
     }
 }
 
