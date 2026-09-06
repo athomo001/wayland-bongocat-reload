@@ -23,8 +23,9 @@ cd "$(dirname "$0")"
 if [ "${1:-}" = "--uninstall" ]; then
   rm -fv "$BINDIR/wayvpet" "$BINDIR/wayvpetctl" "$BINDIR/wayvpet-config" \
          "$DATADIR/wayvpet.conf.example" "$MANDIR/wayvpet.1" \
+         "$DATADIR"/presets/*.conf \
          "$APPDIR/wayvpet-config.desktop"
-  rmdir --ignore-fail-on-non-empty "$DATADIR" 2>/dev/null || true
+  rmdir --ignore-fail-on-non-empty "$DATADIR/presets" "$DATADIR" 2>/dev/null || true
   echo "Listo. Tu configuración en $CONFDIR no se ha tocado."
   echo "Si instalaste el servicio:  wayvpet --uninstall-service"
   exit 0
@@ -40,6 +41,8 @@ install -Dm755 target/release/wayvpetctl     "$BINDIR/wayvpetctl"
 # Ventana gráfica de configuración (spec 0007): la abre "Configurar…" del tray.
 install -Dm755 target/release/wayvpet-config "$BINDIR/wayvpet-config"
 install -Dm644 wayvpet.conf.example          "$DATADIR/wayvpet.conf.example"
+# Presets (spec 0008 §8.2): .conf parciales que aplica `wayvpetctl preset apply`.
+for p in presets/*.conf; do [ -f "$p" ] && install -Dm644 "$p" "$DATADIR/presets/$(basename "$p")"; done
 install -Dm644 packaging/wayvpet-config.desktop "$APPDIR/wayvpet-config.desktop"
 [ -f man/wayvpet.1 ] && install -Dm644 man/wayvpet.1 "$MANDIR/wayvpet.1" || true
 

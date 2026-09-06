@@ -33,6 +33,8 @@ Uso: wayvpetctl [-c FICHERO] <orden> [args]
   theme [list]           Lista los temas disponibles
   theme next             Pasa al siguiente tema
   theme set NOMBRE       Cambia de tema en caliente (NOMBRE o 'embedded')
+  preset [list]          Lista los presets disponibles
+  preset apply NOMBRE    Aplica un preset (.conf parcial) sobre la config activa
   get-live CLAVE    Lee un valor de la instancia (config viva)
   set-live CLAVE V  Cambia un valor en caliente (no toca el fichero)
   save              Persiste al .conf lo cambiado con set-live (conserva formato)
@@ -132,6 +134,14 @@ fn main() -> ExitCode {
         ["theme", "set", name] => cmd_ipc(args.monitor.as_deref(), &format!("THEME {name}"), ""),
         ["theme", ..] => {
             eprintln!("wayvpetctl: uso: theme [list] | theme next | theme set NOMBRE");
+            ExitCode::from(2)
+        }
+        ["preset"] | ["preset", "list"] => cmd_ipc(args.monitor.as_deref(), "PRESET list", ""),
+        ["preset", "apply", name] => {
+            cmd_ipc(args.monitor.as_deref(), &format!("PRESET {name}"), "")
+        }
+        ["preset", ..] => {
+            eprintln!("wayvpetctl: uso: preset [list] | preset apply NOMBRE");
             ExitCode::from(2)
         }
         ["reload"] => cmd_ipc(args.monitor.as_deref(), "RELOAD", "OK"),

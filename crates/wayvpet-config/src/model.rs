@@ -57,6 +57,8 @@ pub struct Model {
     pub screen: (i32, i32),
     /// Nombres de las salidas conectadas (`OUTPUTS`). Vacío si no hay instancia.
     pub outputs: Vec<String>,
+    /// Presets disponibles (`PRESET list`). Vacío si no hay instancia.
+    pub presets: Vec<String>,
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -77,6 +79,7 @@ impl Model {
                 themes: instance_themes(instance.as_deref()),
                 screen: instance_screen(instance.as_deref()),
                 outputs: instance_outputs(instance.as_deref()),
+                presets: instance_presets(instance.as_deref()),
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -95,6 +98,7 @@ impl Model {
                 themes: Vec::new(),
                 screen: (1920, 1080),
                 outputs: Vec::new(),
+                presets: Vec::new(),
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -107,6 +111,7 @@ impl Model {
                 themes: Vec::new(),
                 screen: (1920, 1080),
                 outputs: Vec::new(),
+                presets: Vec::new(),
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -188,6 +193,7 @@ impl Model {
         self.themes = fresh.themes;
         self.screen = fresh.screen;
         self.outputs = fresh.outputs;
+        self.presets = fresh.presets;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
@@ -228,6 +234,35 @@ impl Model {
         self.cfg.theme = stored.to_owned();
         self.dirty.insert("theme".to_owned());
         self.status = format!("tema: {name}");
+    }
+
+    /// Aplica un preset (`.conf` parcial) por encima de la config activa. Solo
+    /// con instancia: `PRESET <n>` y luego recarga el modelo del `DUMP`.
+    pub fn apply_preset(&mut self, name: &str) {
+        if !self.source.connected() {
+            self.status = "los presets necesitan una instancia en marcha".to_owned();
+            return;
+        }
+        match ipc::send_request(self.instance.as_deref(), &format!("PRESET {name}")) {
+            Ok(r) if r.starts_with("ERR") => {
+                self.status = format!("no se pudo aplicar {name}: {r}");
+                return;
+            }
+            Err(e) => {
+                self.status = format!("no respondió la instancia: {e}");
+                return;
+            }
+            Ok(r) => self.status = r,
+        }
+        // La instancia ya lo aplicó y marcó sus claves sucias; recargamos el
+        // DUMP y dejamos "sin guardar" para que el usuario decida persistir.
+        if let Some((cfg, _)) = load_from_instance(self.instance.as_deref()) {
+            self.cfg = cfg;
+        }
+        self.roaming = instance_roaming(self.instance.as_deref());
+        // Marca todas las claves del preset como sucias comparando con el .conf
+        // de disco no es trivial aquí; basta con marcar que hay cambios.
+        self.dirty.insert("__preset__".to_owned());
     }
 
     /// Vuelve a los **valores de fábrica** (los del `wayvpet.conf.example`
@@ -357,6 +392,14 @@ fn instance_outputs(instance: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Presets disponibles (`PRESET list`). Vacío si no responde.
+fn instance_presets(instance: Option<&str>) -> Vec<String> {
+    match ipc::send_request(instance, "PRESET list") {
+        Ok(r) if !r.starts_with("ERR") => r.split_whitespace().map(str::to_owned).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Pide `DUMP` a la instancia y parsea la respuesta. `None` si no hay instancia
 /// o la respuesta no es una config.
 fn load_from_instance(instance: Option<&str>) -> Option<(Config, String)> {
@@ -382,6 +425,7 @@ mod tests {
             themes: Vec::new(),
             screen: (1920, 1080),
             outputs: Vec::new(),
+            presets: Vec::new(),
             instance: None,
             path: None,
             status: String::new(),

@@ -29,6 +29,9 @@ pub enum Section {
     /// Modo experto: editar los ficheros `.ini` (`wayvpet.conf`, `theme.ini`,
     /// `vpet.ini`) a mano. No tiene campos de `FIELDS`; lo maneja la ventana.
     Expert,
+    /// Presets: aplicar un `.conf` parcial de un tirón (spec 0008 §8.2). Sin
+    /// campos de `FIELDS`; lo maneja la ventana.
+    Presets,
 }
 
 impl Section {
@@ -43,6 +46,7 @@ impl Section {
             Section::Theme => "Tema",
             Section::Advanced => "Avanzado",
             Section::Expert => "Modo experto",
+            Section::Presets => "Presets",
         }
     }
 }
@@ -693,6 +697,7 @@ mod tests {
             Section::Theme,
             Section::Advanced,
             Section::Expert,
+            Section::Presets,
         ] {
             assert!(!s.label_es().is_empty());
         }

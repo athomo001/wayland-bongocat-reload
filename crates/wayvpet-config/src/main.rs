@@ -21,7 +21,7 @@ use wayvpet_common::field_meta::{FieldKind, FieldMeta, Section, FIELDS};
 use wayvpet_common::ipc;
 
 /// Secciones en el orden en que se muestran en la navegación lateral.
-const SECTIONS: [Section; 7] = [
+const SECTIONS: [Section; 8] = [
     Section::Position,
     Section::Appearance,
     Section::Input,
@@ -29,6 +29,7 @@ const SECTIONS: [Section; 7] = [
     Section::Theme,
     Section::Advanced,
     Section::Expert,
+    Section::Presets,
 ];
 
 /// Cada cuánto se comprueba que la instancia sigue viva. Si desaparece, el
@@ -160,6 +161,10 @@ impl eframe::App for App {
             }
             if self.section == Section::Theme {
                 self.theme_panel(ui);
+                return;
+            }
+            if self.section == Section::Presets {
+                self.presets_panel(ui);
                 return;
             }
             egui::ScrollArea::vertical()
@@ -355,6 +360,30 @@ impl App {
 
     /// Sección "Tema": galería de temas instalados (clic para cambiar en vivo) +
     /// campo de texto para una ruta a una carpeta de tema propia.
+    /// Sección "Presets": botones que aplican un `.conf` parcial de un tirón.
+    fn presets_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            "Un preset cambia varias opciones a la vez (sobre la configuración              actual). Se aplica al instante; pulsa Guardar si quieres que quede.",
+        );
+        ui.add_space(8.0);
+        if self.model.presets.is_empty() {
+            ui.label("No hay presets (necesita una instancia en marcha, o instala presets en ~/.local/share/wayvpet/presets/).");
+            return;
+        }
+        let mut pick: Option<String> = None;
+        ui.horizontal_wrapped(|ui| {
+            for name in &self.model.presets {
+                if ui.button(name).clicked() {
+                    pick = Some(name.clone());
+                }
+            }
+        });
+        if let Some(n) = pick {
+            self.model.apply_preset(&n);
+            self.edits.clear();
+        }
+    }
+
     fn theme_panel(&mut self, ui: &mut egui::Ui) {
         let active = self.model.active_theme().to_owned();
 

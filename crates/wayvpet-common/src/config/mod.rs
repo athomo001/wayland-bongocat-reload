@@ -9,6 +9,7 @@
 
 mod doc;
 mod line;
+pub mod presets;
 
 pub use doc::ConfDoc;
 pub use line::{split_line, Line};

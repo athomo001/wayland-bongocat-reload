@@ -1546,6 +1546,48 @@ impl State {
                 names.dedup();
                 names.join(" ")
             }
+            // Presets (spec 0008 §8.2): `PRESET list` o `PRESET <nombre>` para
+            // aplicar un `.conf` parcial por encima de la config activa.
+            "PRESET" => match arg1 {
+                "" | "list" => wayvpet_common::config::presets::list().join(" "),
+                name => match wayvpet_common::config::presets::load(name) {
+                    Ok(pairs) => {
+                        let old = self.config.clone();
+                        let mut n = 0;
+                        let mut warns: Vec<String> = Vec::new();
+                        for (k, v) in pairs {
+                            match wayvpet_common::config::set_live(&mut self.config, &k, &v) {
+                                Ok(w) => {
+                                    self.ipc_dirty.insert(k.clone());
+                                    warns.extend(w);
+                                    n += 1;
+                                }
+                                Err(e) => warns.push(format!("{k}: {e}")),
+                            }
+                        }
+                        // Un `SET` de posición/tamaño limpia el override del
+                        // `vpet.ini` (ver el arm "SET"); aquí basta con redibujar.
+                        if let Some(t) = self.theme.as_mut() {
+                            if self.ipc_dirty.contains("cat_x_offset") {
+                                t.vpet.cat_x_offset = None;
+                            }
+                            if self.ipc_dirty.contains("cat_y_offset") {
+                                t.vpet.cat_y_offset = None;
+                            }
+                            if self.ipc_dirty.contains("cat_height") {
+                                t.vpet.cat_height = None;
+                            }
+                        }
+                        self.apply_config_diff(&old);
+                        if warns.is_empty() {
+                            format!("OK preset {name} ({n} claves)")
+                        } else {
+                            format!("OK preset {name} ({n} claves; {})", warns.join("; "))
+                        }
+                    }
+                    Err(e) => format!("ERR {e}"),
+                },
+            },
             "THEME" => match arg1 {
                 "" => "ERR uso: THEME list | next | <nombre>".to_string(),
                 "list" => {
