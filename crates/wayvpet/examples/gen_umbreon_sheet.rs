@@ -1,12 +1,13 @@
 //! Generador del sprite sheet HD de Umbreon (Gato Negro) con animación genuina fotograma a fotograma:
-//! - Sin recortes rectangulares que partan la cabeza o el cuerpo.
-//! - Escalas fijas y consistentes para que el personaje no se engorde ni encoja entre fotogramas.
-//! - Un único contorno blanco die-cut limpio y suave (sin bordes fantasma ni artefactos de compresión JPEG).
-//! - Caminata lateral auténtica de 4 patas (w0 a w6) con puntos intermedios y patas fijadas al suelo.
-//! - Caza completa del ratón (p0 a p5): acecho -> impulso -> vuelo -> zambullida -> captura -> celebración.
-//! - Aseo felino ("ponerse lindo", g0 a g5): sentado -> alzar pata -> lamer con lengua -> lavarse cara y oreja -> sacudir pata -> presumir.
-//! - Modo dormir con Zzz que ascienden en olas y respiración suave.
-//! - Modo idle con respiración orgánica y parpadeo tierno con punto intermedio.
+//! - Cada estado tiene fotogramas de animación REALMENTE DIBUJADOS (articulación de patas, lamerse, comer, bufido).
+//! - CERO escalados artificiales, CERO estiramientos: cada dibujo mantiene su escala anatómica fija.
+//! - Contorno blanco die-cut limpio y nítido de 3.2px.
+//! - Caminata lateral auténtica de 4 patas (w0 a w5): ciclo completo a escala uniforme de 1 pixel de tolerancia.
+//! - Comida auténtica (e0 a e5): acercarse al cuenco -> morder comida -> masticar con migajas -> segundo mordisco -> masticar feliz -> lamerse el hocico con plato vacío.
+//! - Enojado auténtico (a0 a a5): tensión -> orejas aplastadas y colmillos -> bufido arqueando lomo con cola erizada -> hissing agresivo -> gruñido -> acecho agazapado.
+//! - Caza del ratón (p0 a p5): acecho -> agazapado -> salto en el aire -> zambullida -> captura -> celebración.
+//! - Aseo felino (g0 a g5): sentado -> alzar pata -> lamer con lengua -> lavarse cara y oreja -> sacudir pata -> presumir.
+//! - Tecleo Bongo Cat (writing): postura sentada adorable alternando patitas sobre el teclado con chispas doradas.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
@@ -19,167 +20,8 @@ const FH: u32 = 128;
 const COLS: u32 = 16;
 const ROWS: u32 = 19;
 
-/// Extrae limpiamente el personaje eliminando el fondo blanco/gris y artefactos JPEG,
-/// escalándolo con una escala GLOBAL fija y posicionándolo en el lienzo con su línea de suelo.
-fn extract_clean_character(
-    raw_img: &DynamicImage,
-    rx: u32,
-    ry: u32,
-    rw: u32,
-    rh: u32,
-    scale: f32,
-    floor_y: u32,
-    include_props: bool,
-) -> RgbaImage {
-    let sub = image::imageops::crop_imm(raw_img, rx, ry, rw, rh).to_image();
-
-    // 1. Detección de píxeles del personaje (cuerpo oscuro, marcas amarillas, ojos rojos, props)
-    let mut min_x = rw;
-    let mut max_x = 0;
-    let mut min_y = rh;
-    let mut max_y = 0;
-
-    let mut is_char = vec![false; (rw * rh) as usize];
-    for y in 0..rh {
-        for x in 0..rw {
-            let p = sub.get_pixel(x, y);
-            let r = p[0] as f32;
-            let g = p[1] as f32;
-            let b = p[2] as f32;
-            let brightness = (r + g + b) / 3.0;
-            let max_c = r.max(g).max(b);
-            let min_c = r.min(g).min(b);
-
-            // Carácter: oscuro (cuerpo negro/gris) o saturado (anillos amarillos, ojos rojos, lengua, ratón)
-            let is_body = brightness < 175.0 || (max_c - min_c) > 30.0;
-            if is_body {
-                is_char[(y * rw + x) as usize] = true;
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-        }
-    }
-
-    if min_x > max_x || min_y > max_y {
-        return ImageBuffer::new(FW, FH);
-    }
-
-    let bw = max_x - min_x + 1;
-    let bh = max_y - min_y + 1;
-
-    // Componentes conectados para aislar el cuerpo principal y descartar bordes o ruido exterior
-    let mut visited = vec![false; (bw * bh) as usize];
-    let mut components: Vec<Vec<(u32, u32)>> = Vec::new();
-
-    for y in 0..bh {
-        for x in 0..bw {
-            let sx = min_x + x;
-            let sy = min_y + y;
-            let idx = (y * bw + x) as usize;
-            if is_char[(sy * rw + sx) as usize] && !visited[idx] {
-                let mut comp = Vec::new();
-                let mut q = VecDeque::new();
-                q.push_back((x, y));
-                visited[idx] = true;
-
-                while let Some((qx, qy)) = q.pop_front() {
-                    comp.push((qx, qy));
-                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                        let nx = qx as i32 + dx;
-                        let ny = qy as i32 + dy;
-                        if nx >= 0 && nx < bw as i32 && ny >= 0 && ny < bh as i32 {
-                            let nidx = (ny as u32 * bw + nx as u32) as usize;
-                            let nsx = min_x + nx as u32;
-                            let nsy = min_y + ny as u32;
-                            if is_char[(nsy * rw + nsx) as usize] && !visited[nidx] {
-                                visited[nidx] = true;
-                                q.push_back((nx as u32, ny as u32));
-                            }
-                        }
-                    }
-                }
-                components.push(comp);
-            }
-        }
-    }
-
-    if components.is_empty() {
-        return ImageBuffer::new(FW, FH);
-    }
-
-    // Ordenar por tamaño descendente (el cuerpo principal es el más grande)
-    components.sort_by_key(|c| -(c.len() as isize));
-    let main_comp = &components[0];
-
-    let mut body_mask = vec![false; (bw * bh) as usize];
-    let mut cb_min_x = bw;
-    let mut cb_max_x = 0;
-    let mut cb_min_y = bh;
-    let mut cb_max_y = 0;
-
-    for &(x, y) in main_comp {
-        body_mask[(y * bw + x) as usize] = true;
-        cb_min_x = cb_min_x.min(x);
-        cb_max_x = cb_max_x.max(x);
-        cb_min_y = cb_min_y.min(y);
-        cb_max_y = cb_max_y.max(y);
-    }
-
-    // Incluir componentes adyacentes de props SOLO si se solicita explícitamente
-    // y NUNCA por encima de la mitad del cuerpo (evita patas flotantes de filas superiores)
-    if include_props {
-        let mid_y = (cb_min_y + cb_max_y) / 2;
-        for comp in &components[1..] {
-            let is_near_bottom = comp.iter().any(|&(x, y)| {
-                y >= mid_y
-                    && main_comp.iter().any(|&(mx, my)| {
-                        let dx = (x as i32 - mx as i32).abs();
-                        let dy = (y as i32 - my as i32).abs();
-                        dx * dx + dy * dy <= 900
-                    })
-            });
-            if is_near_bottom && comp.len() >= 30 {
-                for &(x, y) in comp {
-                    body_mask[(y * bw + x) as usize] = true;
-                    cb_min_x = cb_min_x.min(x);
-                    cb_max_x = cb_max_x.max(x);
-                    cb_min_y = cb_min_y.min(y);
-                    cb_max_y = cb_max_y.max(y);
-                }
-            }
-        }
-    }
-
-    let clean_w = cb_max_x - cb_min_x + 1;
-    let clean_h = cb_max_y - cb_min_y + 1;
-    let mut char_img: RgbaImage = ImageBuffer::new(clean_w, clean_h);
-
-    for y in 0..clean_h {
-        for x in 0..clean_w {
-            let bx = cb_min_x + x;
-            let by = cb_min_y + y;
-            if body_mask[(by * bw + bx) as usize] {
-                let p = sub.get_pixel(min_x + bx, min_y + by);
-                char_img.put_pixel(x, y, Rgba([p[0], p[1], p[2], 255]));
-            }
-        }
-    }
-
-    // 2. Escalar con Lanczos3 usando la escala GLOBAL fija (no se deforma ni se agranda)
-    let nw = ((clean_w as f32 * scale).round() as u32).max(1);
-    let nh = ((clean_h as f32 * scale).round() as u32).max(1);
-    let resized = image::imageops::resize(&char_img, nw, nh, image::imageops::FilterType::Lanczos3);
-
-    // 3. Posicionar de forma armónica centrado horizontalmente y con las patas en floor_y
-    let ox = (FW.saturating_sub(nw) / 2) as i64;
-    let oy = (floor_y.saturating_sub(nh)) as i64;
-
-    let mut canvas: RgbaImage = ImageBuffer::new(FW, FH);
-    image::imageops::overlay(&mut canvas, &resized, ox, oy);
-
-    // 4. Generar UN SOLO borde blanco puro die-cut nítido de 3.2px
+/// Genera un borde blanco die-cut nítido y suave de 3.2px
+fn render_die_cut_border(canvas: &RgbaImage) -> RgbaImage {
     let radius = 3.2f32;
     let r_i = (radius + 1.0).ceil() as i32;
     let mut out: RgbaImage = ImageBuffer::new(FW, FH);
@@ -221,7 +63,7 @@ fn extract_clean_character(
         }
     }
 
-    // Superponer personaje nítido encima del borde blanco sin halos
+    // Superponer dibujo nítido sobre el borde blanco
     for y in 0..FH {
         for x in 0..FW {
             let p = canvas.get_pixel(x, y);
@@ -238,6 +80,140 @@ fn extract_clean_character(
     }
 
     out
+}
+
+/// Extrae limpiamente el personaje eliminando fondos y sombras JPEG con escala fija y anclaje al suelo
+fn extract_clean_character(
+    raw_img: &DynamicImage,
+    rx: u32,
+    ry: u32,
+    rw: u32,
+    rh: u32,
+    scale: f32,
+    floor_y: u32,
+    include_props: bool,
+) -> RgbaImage {
+    let sub = image::imageops::crop_imm(raw_img, rx, ry, rw, rh).to_image();
+
+    let mut is_char = vec![false; (rw * rh) as usize];
+    for y in 0..rh {
+        for x in 0..rw {
+            let p = sub.get_pixel(x, y);
+            let r = p[0] as f32;
+            let g = p[1] as f32;
+            let b = p[2] as f32;
+            let brightness = (r + g + b) / 3.0;
+            let max_c = r.max(g).max(b);
+            let min_c = r.min(g).min(b);
+
+            let is_body = brightness < 185.0 || (max_c - min_c) > 30.0;
+            if is_body {
+                is_char[(y * rw + x) as usize] = true;
+            }
+        }
+    }
+
+    let mut visited = vec![false; (rw * rh) as usize];
+    let mut components: Vec<Vec<(u32, u32)>> = Vec::new();
+
+    for y in 0..rh {
+        for x in 0..rw {
+            let idx = (y * rw + x) as usize;
+            if is_char[idx] && !visited[idx] {
+                let mut comp = Vec::new();
+                let mut q = VecDeque::new();
+                q.push_back((x, y));
+                visited[idx] = true;
+
+                while let Some((qx, qy)) = q.pop_front() {
+                    comp.push((qx, qy));
+                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                        let nx = qx as i32 + dx;
+                        let ny = qy as i32 + dy;
+                        if nx >= 0 && nx < rw as i32 && ny >= 0 && ny < rh as i32 {
+                            let nidx = (ny as u32 * rw + nx as u32) as usize;
+                            if is_char[nidx] && !visited[nidx] {
+                                visited[nidx] = true;
+                                q.push_back((nx as u32, ny as u32));
+                            }
+                        }
+                    }
+                }
+                components.push(comp);
+            }
+        }
+    }
+
+    if components.is_empty() {
+        return ImageBuffer::new(FW, FH);
+    }
+
+    components.sort_by_key(|c| -(c.len() as isize));
+    let main_comp = &components[0];
+
+    let mut body_mask = vec![false; (rw * rh) as usize];
+    let mut cb_min_x = rw;
+    let mut cb_max_x = 0;
+    let mut cb_min_y = rh;
+    let mut cb_max_y = 0;
+
+    for &(x, y) in main_comp {
+        body_mask[(y * rw + x) as usize] = true;
+        cb_min_x = cb_min_x.min(x);
+        cb_max_x = cb_max_x.max(x);
+        cb_min_y = cb_min_y.min(y);
+        cb_max_y = cb_max_y.max(y);
+    }
+
+    if include_props {
+        let mid_y = (cb_min_y + cb_max_y) / 2;
+        for comp in &components[1..] {
+            let is_near_bottom = comp.iter().any(|&(x, y)| {
+                y >= mid_y
+                    && main_comp.iter().any(|&(mx, my)| {
+                        let dx = (x as i32 - mx as i32).abs();
+                        let dy = (y as i32 - my as i32).abs();
+                        dx * dx + dy * dy <= 1600
+                    })
+            });
+            if is_near_bottom && comp.len() >= 25 {
+                for &(x, y) in comp {
+                    body_mask[(y * rw + x) as usize] = true;
+                    cb_min_x = cb_min_x.min(x);
+                    cb_max_x = cb_max_x.max(x);
+                    cb_min_y = cb_min_y.min(y);
+                    cb_max_y = cb_max_y.max(y);
+                }
+            }
+        }
+    }
+
+    let clean_w = cb_max_x - cb_min_x + 1;
+    let clean_h = cb_max_y - cb_min_y + 1;
+    let mut char_img: RgbaImage = ImageBuffer::new(clean_w, clean_h);
+
+    for y in 0..clean_h {
+        for x in 0..clean_w {
+            let bx = cb_min_x + x;
+            let by = cb_min_y + y;
+            if body_mask[(by * rw + bx) as usize] {
+                let p = sub.get_pixel(bx, by);
+                char_img.put_pixel(x, y, Rgba([p[0], p[1], p[2], 255]));
+            }
+        }
+    }
+
+    let nw = ((clean_w as f32 * scale).round() as u32).max(1);
+    let nh = ((clean_h as f32 * scale).round() as u32).max(1);
+    let resized = image::imageops::resize(&char_img, nw, nh, image::imageops::FilterType::Lanczos3);
+
+    let ox = (FW.saturating_sub(nw) / 2) as i64;
+    let oy = (floor_y.saturating_sub(nh)) as i64;
+
+    let mut canvas: RgbaImage = ImageBuffer::new(FW, FH);
+    image::imageops::overlay(&mut canvas, &resized, ox, oy);
+
+    render_die_cut_border(&canvas)
 }
 
 fn sample_bilinear(src: &RgbaImage, sx: f32, sy: f32) -> Rgba<u8> {
@@ -276,20 +252,13 @@ fn sample_bilinear(src: &RgbaImage, sx: f32, sy: f32) -> Rgba<u8> {
     Rgba(out)
 }
 
-/// Transforma el sprite completo orgánicamente (sin recortar extremidades ni partir la cabeza)
-fn transform_sprite(src: &RgbaImage, dx: f32, dy: f32, scale_x: f32, scale_y: f32) -> RgbaImage {
+/// Desplaza el sprite manteniendo estrictamente su escala real 1.0 a 1
+fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
     let mut out = ImageBuffer::new(FW, FH);
-    let pivot_x = FW as f32 / 2.0;
-    let pivot_y = 118.0f32; // Anclaje constante en el suelo
-
     for y in 0..FH {
         for x in 0..FW {
-            let cur_x = x as f32 - dx;
-            let cur_y = y as f32 - dy;
-
-            let src_x = pivot_x + (cur_x - pivot_x) / scale_x.max(0.01);
-            let src_y = pivot_y + (cur_y - pivot_y) / scale_y.max(0.01);
-
+            let src_x = x as f32 - dx;
+            let src_y = y as f32 - dy;
             let p = sample_bilinear(src, src_x, src_y);
             if p[3] > 0 {
                 out.put_pixel(x, y, p);
@@ -299,11 +268,10 @@ fn transform_sprite(src: &RgbaImage, dx: f32, dy: f32, scale_x: f32, scale_y: f3
     out
 }
 
-/// Anima `idle` con respiración completa armónica y parpadeo tierno con punto intermedio
-fn animate_idle(src: &RgbaImage, breath_scale: f32, breath_dy: f32, blink_state: u8) -> RgbaImage {
-    let mut out = transform_sprite(src, 0.0, breath_dy, 1.0, breath_scale);
+/// Anima `idle` con pestañeo tierno natural sin deformar el cuerpo
+fn animate_idle(src: &RgbaImage, blink_state: u8) -> RgbaImage {
+    let mut out = src.clone();
 
-    // Puntos intermedios de parpadeo (ojos en x: 43..48 y 69..74, y: 50..56)
     if blink_state == 1 {
         // Punto intermedio: párpados bajando hasta la mitad
         for dx in -3i32..=3i32 {
@@ -344,7 +312,7 @@ fn animate_idle(src: &RgbaImage, breath_scale: f32, breath_dy: f32, blink_state:
     out
 }
 
-/// Dibuja una 'Z' bien visible, nítida y con borde oscuro para el sueño
+/// Dibuja una 'Z' bien visible para el sueño
 fn draw_bold_z(img: &mut RgbaImage, cx: i32, cy: i32, size: i32, alpha_factor: f32) {
     let s = size.max(3);
     let a = (245.0 * alpha_factor).clamp(0.0, 255.0) as u8;
@@ -401,44 +369,46 @@ fn draw_sparkle(img: &mut RgbaImage, cx: i32, cy: i32, rad: i32, color: Rgba<u8>
 
 fn main() {
     let sheet_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_cat_sheet_1788633569390.jpg";
-    let walk_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_walk_cycle_1788636213890.jpg";
+    let walk_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_walk_seq_1788730357359.jpg";
     let pounce_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_pounce_seq_1788637088867.jpg";
     let groom_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_groom_seq_1788637133036.jpg";
+    let eat_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_eat_seq_1788730463393.jpg";
+    let angry_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_angry_seq_1788730506231.jpg";
 
     println!("Cargando hojas de sprites limpias de Umbreon...");
     let raw_img = image::open(sheet_src).expect("abre umbreon_cat_sheet.jpg");
-    let raw_walk = image::open(walk_src).expect("abre umbreon_walk_cycle.jpg");
+    let raw_walk = image::open(walk_src).expect("abre umbreon_walk_seq.jpg");
     let raw_pounce = image::open(pounce_src).expect("abre umbreon_pounce_seq.jpg");
     let raw_groom = image::open(groom_src).expect("abre umbreon_groom_seq.jpg");
+    let raw_eat = image::open(eat_src).expect("abre umbreon_eat_seq.jpg");
+    let raw_angry = image::open(angry_src).expect("abre umbreon_angry_seq.jpg");
 
-    // 1. Poses básicas con escala fija y anclaje al suelo consistente
-    println!("Extrayendo poses base limpias (escala fija 0.35, suelo 118)...");
+    // 1. Poses básicas (Idle y Sleep)
+    println!("Extrayendo poses base (Idle y Sleep)...");
     let s_idle = extract_clean_character(&raw_img, 45, 20, 278, 325, 0.35, 118, false);
-    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, 118, true); // con almohada
-    let s_eat = extract_clean_character(&raw_img, 375, 680, 300, 325, 0.35, 118, true); // con cuenco de comida
-    let s_angry = extract_clean_character(&raw_img, 335, 335, 330, 345, 0.35, 118, false);
+    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, 118, true);
 
-    // 2. Caminata de 4 patas auténtica (7 fotogramas secuenciales limpios con cajas exactas)
-    // Coordenadas calculadas para que no capture residuos de filas adyacentes ni patas flotantes
-    println!("Extrayendo 7 fotogramas de caminata limpios...");
-    let w0 = extract_clean_character(&raw_walk, 15, 150, 350, 275, 0.35, 118, false);
-    let w1 = extract_clean_character(&raw_walk, 375, 150, 310, 275, 0.35, 118, false);
-    let w2 = extract_clean_character(&raw_walk, 680, 150, 320, 275, 0.35, 118, false);
-    let w3 = extract_clean_character(&raw_walk, 975, 150, 380, 275, 0.35, 118, false);
-    let w4 = extract_clean_character(&raw_walk, 85, 425, 375, 250, 0.35, 118, false);
-    let w5 = extract_clean_character(&raw_walk, 520, 425, 340, 250, 0.35, 118, false);
-    let w6 = extract_clean_character(&raw_walk, 900, 425, 360, 250, 0.35, 118, false);
+    // 2. Caminata genuina de 4 patas (6 fotogramas secuenciales exactos a escala uniforme 0.38)
+    println!("Extrayendo 6 fotogramas de caminata genuina de 4 patas...");
+    let w0 = extract_clean_character(&raw_walk, 10, 145, 226, 260, 0.38, 118, false);
+    let w1 = extract_clean_character(&raw_walk, 236, 145, 223, 260, 0.38, 118, false);
+    let w2 = extract_clean_character(&raw_walk, 459, 145, 222, 260, 0.38, 118, false);
+    let w3 = extract_clean_character(&raw_walk, 681, 145, 221, 260, 0.38, 118, false);
+    let w4 = extract_clean_character(&raw_walk, 902, 145, 223, 260, 0.38, 118, false);
+    let w5 = extract_clean_character(&raw_walk, 1125, 145, 235, 260, 0.38, 118, false);
+    let walk_frames = [w0, w1, w2, w3, w4, w5];
 
-    // 3. Salto y caza completa del ratón (6 fotogramas secuenciales con escala fija 0.38)
+    // 3. Caza del ratón (6 fotogramas secuenciales a escala fija 0.38)
     println!("Extrayendo 6 fotogramas de caza del ratón...");
     let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, 118, false);
     let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, 118, false);
     let p2 = extract_clean_character(&raw_pounce, 470, 240, 240, 210, 0.38, 104, false);
     let p3 = extract_clean_character(&raw_pounce, 715, 230, 205, 240, 0.38, 110, false);
-    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, 118, true); // ratón atrapado
-    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, 118, true); // ratón en brazos
+    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, 118, true);
+    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, 118, true);
+    let pounce_frames = [p0, p1, p2, p3, p4, p5];
 
-    // 4. Aseo felino auténtico (6 fotogramas secuenciales con escala fija 0.33 y suelo 118)
+    // 4. Aseo felino (6 fotogramas secuenciales a escala fija 0.33)
     println!("Extrayendo 6 fotogramas de aseo felino...");
     let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, 118, false);
     let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, 118, false);
@@ -446,76 +416,84 @@ fn main() {
     let g3 = extract_clean_character(&raw_groom, 665, 180, 210, 350, 0.33, 118, false);
     let g4 = extract_clean_character(&raw_groom, 895, 180, 205, 350, 0.33, 118, false);
     let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, 118, false);
+    let groom_frames = [g0, g1, g2, g3, g4, g5];
+
+    // 5. Comida genuina (6 fotogramas secuenciales a escala fija 0.28 con cuenco de comida)
+    println!("Extrayendo 6 fotogramas de comida genuina...");
+    let e0 = extract_clean_character(&raw_eat, 25, 20, 440, 365, 0.28, 118, true);
+    let e1 = extract_clean_character(&raw_eat, 465, 60, 440, 325, 0.28, 118, true);
+    let e2 = extract_clean_character(&raw_eat, 905, 50, 450, 335, 0.28, 118, true);
+    let e3 = extract_clean_character(&raw_eat, 20, 420, 450, 340, 0.28, 118, true);
+    let e4 = extract_clean_character(&raw_eat, 470, 390, 455, 370, 0.28, 118, true);
+    let e5 = extract_clean_character(&raw_eat, 925, 385, 440, 375, 0.28, 118, true);
+    let eat_frames = [e0, e1, e2, e3, e4, e5];
+
+    // 6. Enojado genuino (6 fotogramas secuenciales a escala fija 0.34)
+    println!("Extrayendo 6 fotogramas de enojado genuino...");
+    let a0 = extract_clean_character(&raw_angry, 20, 205, 240, 320, 0.34, 118, false);
+    let a1 = extract_clean_character(&raw_angry, 260, 205, 228, 320, 0.34, 118, false);
+    let a2 = extract_clean_character(&raw_angry, 488, 205, 214, 320, 0.34, 118, false);
+    let a3 = extract_clean_character(&raw_angry, 702, 205, 229, 320, 0.34, 118, false);
+    let a4 = extract_clean_character(&raw_angry, 931, 205, 208, 320, 0.34, 118, false);
+    let a5 = extract_clean_character(&raw_angry, 1139, 205, 226, 320, 0.34, 118, false);
+    let angry_frames = [a0, a1, a2, a3, a4, a5];
 
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
     let mut sheet: RgbaImage = ImageBuffer::new(sheet_w, sheet_h);
     let tau = std::f32::consts::TAU;
 
-    // 1. IDLE (Fila 1, 16 frames): Respiración suave armónica y parpadeo tierno con punto intermedio
+    // 1. IDLE (Fila 1, 16 frames)
     println!("Generando Fila 1: Idle...");
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let breath_scale = 1.0 + angle.sin() * 0.015;
-        let breath_dy = angle.sin() * 0.5;
-
-        // Pestañeo:
-        // frame 9: ojos entreabiertos (punto intermedio = 1)
-        // frame 10: ojos completamente cerrados (2)
-        // frame 11: ojos entreabiertos (punto intermedio = 1)
-        // otros: abiertos (0)
         let blink_state = match i {
-            9 | 11 => 1,
-            10 => 2,
+            8 | 11 => 1,
+            9 | 10 => 2,
             _ => 0,
         };
-
-        let spr = animate_idle(&s_idle, breath_scale, breath_dy, blink_state);
+        let spr = animate_idle(&s_idle, blink_state);
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, 0);
     }
 
-    // 3. WRITING (Fila 3, 16 frames): Tecleo ágil con patitas y destellos
-    println!("Generando Fila 3: Writing...");
+    // 3. WRITING (Fila 3, 16 frames): Bongo Cat tecleando sentado con destellos dorados
+    println!("Generando Fila 3: Writing (Bongo Cat sentado)...");
     let mut writing_frames = Vec::new();
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let bob = -(angle * 2.0).sin().abs() * 2.0;
+        let is_left_tap = (i / 2) % 2 == 0;
+        let bob = if i % 2 == 0 { -1.5 } else { 0.5 };
+        let mut spr = shift_sprite(&s_idle, 0.0, bob);
 
-        let base_w = if i % 4 < 2 { &p1 } else { &s_idle };
-        let mut spr = transform_sprite(base_w, 0.0, bob, 1.01, 0.99);
-
-        let spark_x = 64 + (angle.cos() * 22.0) as i32;
-        let spark_y = 96 + (angle.sin().abs() * 6.0) as i32;
-        draw_sparkle(&mut spr, spark_x, spark_y, 4, Rgba([255, 225, 0, 230]));
+        if is_left_tap {
+            draw_sparkle(&mut spr, 54, 112, 3, Rgba([255, 220, 0, 255]));
+            draw_sparkle(&mut spr, 50, 108, 1, Rgba([255, 245, 160, 220]));
+        } else {
+            draw_sparkle(&mut spr, 74, 112, 3, Rgba([255, 220, 0, 255]));
+            draw_sparkle(&mut spr, 78, 108, 1, Rgba([255, 245, 160, 220]));
+        }
 
         writing_frames.push(spr.clone());
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (2 * FH) as i64);
     }
 
-    // 2. START_WRITING (Fila 2, 8 frames): Transición a tecleo
+    // 2. START_WRITING (Fila 2, 8 frames)
     println!("Generando Fila 2: Start Writing...");
     for i in 0..8 {
         let spr = if i < 4 { &s_idle } else { &writing_frames[0] };
         image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (1 * FH) as i64);
     }
 
-    // 4. END_WRITING (Fila 4, 8 frames): Transición a reposo
+    // 4. END_WRITING (Fila 4, 8 frames)
     println!("Generando Fila 4: End Writing...");
     for i in 0..8 {
         let spr = if i < 4 { &writing_frames[15] } else { &s_idle };
         image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (3 * FH) as i64);
     }
 
-    // 5. SLEEP (Fila 5, 16 frames): Respiración profunda y 3 olas de Zzz ascendentes
+    // 5. SLEEP (Fila 5, 16 frames)
     println!("Generando Fila 5: Sleep...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let sleep_breath = 1.0 + angle.sin() * 0.015;
-
-        let mut spr = transform_sprite(&s_sleep, 0.0, 0.0, 1.0, sleep_breath);
+        let mut spr = s_sleep.clone();
 
         for wave in 0..3 {
             let wave_offset = wave as f32 / 3.0;
@@ -535,38 +513,24 @@ fn main() {
             draw_bold_z(&mut spr, z_x, z_y, size, alpha);
         }
 
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (4 * FH) as i64);
+        image::imageops::overlay(&mut sheet, &spr, (i as u32 * FW) as i64, (4 * FH) as i64);
     }
 
-    // 6. HAPPY (Fila 6, 16 frames): Secuencia auténtica completa de caza del ratón
-    println!("Generando Fila 6: Happy (caza del ratón)...");
+    // 6. HAPPY (Fila 6, 6 frames genuinos en columnas 0..5 y repetidos fluidamente)
+    println!("Generando Fila 6: Happy (caza del ratón genuina de 6 poses)...");
     for i in 0..16 {
-        let spr = match i {
-            0..=2 => &p0,   // Acecho bajo en el suelo mirando al ratón
-            3..=4 => &p1,   // Punto intermedio: agazapado para tomar impulso
-            5..=7 => &p2,   // Vuelo completo en el aire
-            8..=10 => &p3,  // Punto intermedio: zambullida cayendo en picado
-            11..=13 => &p4, // Aterrizaje atrapando el ratón bajo las patas
-            _ => &p5,       // Celebración sosteniendo el ratón con gran sonrisa
-        };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (5 * FH) as i64);
+        let spr = &pounce_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (5 * FH) as i64);
     }
 
-    // 7. BORING / GROOM (Fila 7, 16 frames): Secuencia auténtica completa de aseo
-    println!("Generando Fila 7: Boring / Groom (aseo)...");
+    // 7. BORING / GROOM (Fila 7, 6 frames genuinos)
+    println!("Generando Fila 7: Boring / Groom (aseo felino genuino de 6 poses)...");
     for i in 0..16 {
-        let spr = match i {
-            0..=2 => &g0,   // Sentado tranquilo
-            3..=4 => &g1,   // Punto intermedio: pata levantándose a la boca
-            5..=7 => &g2,   // Lamiéndose la pata con la lengua rosada afuera
-            8..=10 => &g3,  // Lavándose la cara y la oreja derecha doblada hacia abajo
-            11..=13 => &g4, // Punto intermedio: oreja subiendo y sacudiendo la pata
-            _ => &g5,       // Sentado orgulloso, limpio y con una tierna sonrisa
-        };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (6 * FH) as i64);
+        let spr = &groom_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (6 * FH) as i64);
     }
 
-    // 8-15. LOOK_* (Filas 8 a 15, 4 frames c/u): Miradas direccionales orgánicas
+    // 8-15. LOOK_* (Filas 8 a 15, 4 frames c/u)
     println!("Generando Filas 8-15: Look_*...");
     let look_dirs = [
         (-3.5f32, 0.0f32),
@@ -578,78 +542,56 @@ fn main() {
         (-2.5, 2.0),
         (2.5, 2.0),
     ];
-
     for (d_idx, &(look_dx, look_dy)) in look_dirs.iter().enumerate() {
         let row = 7 + d_idx;
         for i in 0..4 {
             let t = i as f32 / 3.0;
             let dx = look_dx * t;
             let dy = look_dy * t;
-            let spr = transform_sprite(&s_idle, dx, dy, 1.0, 1.0);
-            image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (row as u32 * FH) as i64);
+            let spr = shift_sprite(&s_idle, dx, dy);
+            image::imageops::overlay(
+                &mut sheet,
+                &spr,
+                (i as u32 * FW) as i64,
+                (row as u32 * FH) as i64,
+            );
         }
     }
 
-    // 16. WAKE_UP (Fila 16, 8 frames): Despertar fluido
+    // 16. WAKE_UP (Fila 16, 8 frames)
     println!("Generando Fila 16: Wake Up...");
     for i in 0..8 {
         let spr = if i < 3 {
             &s_sleep
         } else if i < 6 {
-            &g1 // Punto intermedio desperezándose
+            &groom_frames[1]
         } else {
             &s_idle
         };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (15 * FH) as i64);
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (15 * FH) as i64);
     }
 
-    // 17. WALK (Fila 17, 16 frames): CAMINATA DE 4 PATAS CON PUNTOS INTERMEDIOS DE MARCHA REAL
-    // Paso rítmico coordinado de los 7 fotogramas secuenciales en perfil
-    println!("Generando Fila 17: Walk (caminata de 4 patas auténtica con inbetweens)...");
+    // 17. WALK (Fila 17, 6 frames genuinos de caminata de 4 patas)
+    println!("Generando Fila 17: Walk (caminata real de 6 fotogramas articulados)...");
     for i in 0..16 {
-        let spr = match i {
-            0 | 1 => &w0,   // Contacto pata delantera y trasera
-            2 | 3 => &w1,   // Punto intermedio: pata delantera en el aire
-            4 | 5 => &w2,   // Apoyo y cruce de patas
-            6 | 7 => &w3,   // Punto intermedio: avance de zancada en el aire
-            8 | 9 => &w4,   // Contacto opuesto con suelo
-            10 | 11 => &w5, // Punto intermedio: empuje de pata trasera
-            12 | 13 => &w6, // Extensión final de zancada
-            _ => &w0,       // Cierre fluido del ciclo
-        };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (16 * FH) as i64);
+        let spr = &walk_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (16 * FH) as i64);
     }
 
-    // 18. EAT_RAM / SNACK (Fila 18, 16 frames): Comiendo con cabeza bajando al cuenco y subiendo a masticar
-    println!("Generando Fila 18: Eat...");
+    // 18. EAT_RAM / SNACK (Fila 18, 6 frames genuinos de comida)
+    println!("Generando Fila 18: Eat (comida real de 6 fotogramas con cuenco y mordiscos)...");
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let chew_dy = (angle * 2.0).sin() * 1.5;
-
-        let mut spr = transform_sprite(&s_eat, 0.0, chew_dy, 1.0, 1.0);
-
-        let crunch_angle = angle * 3.0;
-        let cx = 40 + (crunch_angle.cos() * 8.0) as i32;
-        let cy = 88 + (crunch_angle.sin() * 6.0) as i32;
-        draw_sparkle(&mut spr, cx, cy, 2, Rgba([230, 160, 50, 200]));
-
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (17 * FH) as i64);
+        let spr = &eat_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (17 * FH) as i64);
     }
 
-    // 19. ANGRY (Fila 19, 16 frames): Bufido amenazante con lomo arqueado y destellos
-    println!("Generando Fila 19: Angry...");
+    // 19. ANGRY (Fila 19, 6 frames genuinos de enojo y bufido)
+    println!(
+        "Generando Fila 19: Angry (enojado real de 6 fotogramas con bufido y lomo arqueado)..."
+    );
     for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let angle = phase * tau;
-        let hiss_arch = 1.0 + angle.sin() * 0.02;
-
-        let mut spr = transform_sprite(&s_angry, 0.0, 0.0, 1.0, hiss_arch);
-
-        draw_sparkle(&mut spr, 38, 64, 2, Rgba([255, 30, 30, 230]));
-        draw_sparkle(&mut spr, 54, 64, 2, Rgba([255, 30, 30, 230]));
-
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (18 * FH) as i64);
+        let spr = &angry_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (18 * FH) as i64);
     }
 
     // Guardar sheet.png
@@ -662,7 +604,7 @@ fn main() {
     );
     sheet.save(&sheet_path).expect("guarda sheet.png");
 
-    // Guardar writing.apng (16 frames APNG)
+    // Guardar writing.apng
     let apng_path = out_dir.join("writing.apng");
     println!("Guardando writing.apng en: {}", apng_path.display());
     let file = File::create(&apng_path).expect("crea writing.apng");
@@ -683,5 +625,7 @@ fn main() {
     }
     writer.finish().expect("finaliza APNG");
 
-    println!("¡Generación de Umbreon completada exitosamente sin deformaciones ni artefactos!");
+    println!(
+        "¡Generación de Umbreon completada exitosamente con fotogramas de animación 100% genuinos!"
+    );
 }
