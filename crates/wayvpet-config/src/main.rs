@@ -4,10 +4,11 @@
 //! Toolkit: `egui`/`eframe` — se dibuja a sí misma, así que se ve igual en
 //! GNOME, KDE, COSMIC, Sway/Hyprland… sin librerías de toolkit del sistema.
 //!
-//! **M3 (esta versión):** cada campo de `field_meta` se renderiza según su
-//! `FieldKind` y se aplica **en vivo** por IPC `SET`; botones Guardar /
-//! Restablecer; se cierra sola si la instancia que la abrió desaparece. El mapa
-//! de pantalla y la galería de temas llegan en M4.
+//! Cada campo de `field_meta` se renderiza según su `FieldKind` y se aplica **en
+//! vivo** por IPC `SET`; Guardar / Deshacer / Valores de fábrica; se cierra sola
+//! si la instancia que la abrió desaparece; galería de temas y "mapa de
+//! pantalla" para colocar el vpet (M4); modo experto para editar los `.ini`.
+//! Falta de la fase: asistente de primer uso y presets/perfiles.
 
 mod expert;
 mod model;
@@ -156,6 +157,10 @@ impl eframe::App for App {
                              «Apariencia» (o con la rueda durante el arrastre).",
                         );
                         return;
+                    }
+                    if self.section == Section::Position {
+                        screen_map(ui, &mut self.model);
+                        ui.add_space(10.0);
                     }
                     for f in FIELDS.iter().filter(|f| f.section == self.section) {
                         field_row(ui, &mut self.model, &mut self.edits, f);
@@ -370,6 +375,71 @@ impl App {
             ui.small(meta.help_es);
         }
     }
+}
+
+/// "Mapa de pantalla": un rectángulo a escala de la salida donde se arrastra un
+/// punto para colocar el vpet. Trata los offsets como desde el **centro** de la
+/// pantalla (exacto para `classic`; aproximado para temas con anclaje distinto,
+/// pero los deslizadores y la vista previa en vivo afinan).
+fn screen_map(ui: &mut egui::Ui, model: &mut Model) {
+    let (sw, sh) = model.screen;
+    let (sw, sh) = (sw.max(1) as f32, sh.max(1) as f32);
+    let mw = 360.0_f32;
+    let mh = (mw * sh / sw).clamp(120.0, 260.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(mw, mh), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+
+    p.rect_filled(rect, 4.0, egui::Color32::from_gray(38));
+    // borde con 4 segmentos (API estable en cualquier versión de egui)
+    let g = egui::Stroke::new(1.0_f32, egui::Color32::from_gray(90));
+    for (a, b) in [
+        (rect.left_top(), rect.right_top()),
+        (rect.right_top(), rect.right_bottom()),
+        (rect.right_bottom(), rect.left_bottom()),
+        (rect.left_bottom(), rect.left_top()),
+    ] {
+        p.line_segment([a, b], g);
+    }
+    let c = rect.center();
+    let cross = egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80));
+    p.line_segment(
+        [egui::pos2(c.x - 7.0, c.y), egui::pos2(c.x + 7.0, c.y)],
+        cross,
+    );
+    p.line_segment(
+        [egui::pos2(c.x, c.y - 7.0), egui::pos2(c.x, c.y + 7.0)],
+        cross,
+    );
+
+    let (kx, ky) = (mw / sw, mh / sh);
+    let cur_x = model
+        .value("cat_x_offset")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let cur_y = model
+        .value("cat_y_offset")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let pad = egui::vec2(6.0, 6.0);
+    let inner = egui::Rect::from_min_max(rect.min + pad, rect.max - pad);
+    let dot = inner.clamp(egui::pos2(c.x + cur_x * kx, c.y + cur_y * ky));
+
+    let resp = ui.interact(
+        egui::Rect::from_center_size(dot, egui::vec2(18.0, 18.0)),
+        ui.id().with("screenmap_dot"),
+        egui::Sense::drag(),
+    );
+    p.circle_filled(dot, 7.0, egui::Color32::from_rgb(0xf4, 0xc8, 0x28));
+    p.circle_stroke(dot, 7.0, egui::Stroke::new(1.5_f32, egui::Color32::BLACK));
+
+    if resp.dragged() {
+        let np = inner.clamp(dot + resp.drag_delta());
+        let nx = (((np.x - c.x) / kx).round() as i32).clamp(-2560, 2560);
+        let ny = (((np.y - c.y) / ky).round() as i32).clamp(-1600, 1600);
+        let _ = model.set("cat_x_offset", &nx.to_string());
+        let _ = model.set("cat_y_offset", &ny.to_string());
+    }
+    ui.small("Arrastra el punto para colocar el vpet (aproximado; afina con los deslizadores).");
 }
 
 /// ¿Se acaba de pulsar Enter en este `ui`?

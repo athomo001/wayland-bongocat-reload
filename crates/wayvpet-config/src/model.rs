@@ -52,6 +52,9 @@ pub struct Model {
     /// Temas instalados (`THEME list` de la instancia): `["embedded", …]`.
     /// Vacío si no hay instancia.
     pub themes: Vec<String>,
+    /// Tamaño lógico de la salida (para el "mapa de pantalla"). Sin instancia,
+    /// un valor por defecto razonable.
+    pub screen: (i32, i32),
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -70,6 +73,7 @@ impl Model {
                 source: Source::Instance,
                 roaming: instance_roaming(instance.as_deref()),
                 themes: instance_themes(instance.as_deref()),
+                screen: instance_screen(instance.as_deref()),
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -86,6 +90,7 @@ impl Model {
                 },
                 roaming: false,
                 themes: Vec::new(),
+                screen: (1920, 1080),
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -96,6 +101,7 @@ impl Model {
                 source: Source::Defaults,
                 roaming: false,
                 themes: Vec::new(),
+                screen: (1920, 1080),
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -175,6 +181,7 @@ impl Model {
         self.source = fresh.source;
         self.roaming = fresh.roaming;
         self.themes = fresh.themes;
+        self.screen = fresh.screen;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
@@ -302,11 +309,29 @@ impl Model {
 
 /// Lee `STATE` de la instancia y saca `roaming=1`. `false` si no responde.
 fn instance_roaming(instance: Option<&str>) -> bool {
+    state_kv(instance).get("roaming").is_some_and(|v| v == "1")
+}
+
+/// Tamaño **lógico** de la salida donde dibuja la instancia (`STATE`
+/// `width`/`height`). `(1920, 1080)` si no responde o no lo trae.
+fn instance_screen(instance: Option<&str>) -> (i32, i32) {
+    let s = state_kv(instance);
+    let w = s.get("width").and_then(|v| v.parse().ok()).unwrap_or(1920);
+    let h = s.get("height").and_then(|v| v.parse().ok()).unwrap_or(1080);
+    (w, h)
+}
+
+/// `STATE` → mapa `clave→valor`. Vacío si la instancia no responde.
+fn state_kv(instance: Option<&str>) -> std::collections::HashMap<String, String> {
     ipc::send_request(instance, "STATE")
         .ok()
-        .into_iter()
-        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
-        .any(|kv| kv == "roaming=1")
+        .map(|s| {
+            s.split_whitespace()
+                .filter_map(|kv| kv.split_once('='))
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Lista de temas instalados (`THEME list` → `"embedded classic …"`). Vacío si
@@ -341,6 +366,7 @@ mod tests {
             source: Source::Defaults,
             roaming: false,
             themes: Vec::new(),
+            screen: (1920, 1080),
             instance: None,
             path: None,
             status: String::new(),
