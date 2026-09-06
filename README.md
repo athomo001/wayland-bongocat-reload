@@ -141,16 +141,27 @@ de importar mascotas de terceros).
 
 ## Icono de bandeja
 
-Con `enable_tray=1` (por defecto) aparece un icono en la bandeja del sistema
-si tu escritorio tiene un host StatusNotifierItem (paneles de KDE, COSMIC,
-waybar con el módulo de tray, xfce4-panel…; en GNOME hace falta la extensión
-AppIndicator). Menú: **Mostrar/Ocultar** · **Modo edición** (con marca ✓;
-arrastra el gato con el ratón — ver abajo) · **Reiniciar overlay** ·
+Con `enable_tray=1` (por defecto) aparece un icono en la bandeja del sistema.
+Menú: **Mostrar/Ocultar** · **Configurar…** (abre `wayvpet-config`) · **Modo
+edición** (con marca ✓; arrastra el vpet con el ratón) · **Reiniciar overlay** ·
 **Recargar configuración** · **Tema ▸** (lista los temas instalados, marca el
 activo, cambia con un clic) · **Acerca de** · **Cerrar**.
 
-La ventana de configuración visual es trabajo de la Fase 4 (`specs/0007-*`);
-hasta entonces se ajusta editando el `.conf` o con `wayvpetctl`.
+El protocolo es **StatusNotifierItem** (D-Bus puro, sin `libappindicator` ni
+`libdbus`). Por escritorio:
+
+| Escritorio | Estado |
+| --- | --- |
+| **KDE Plasma** | nativo, funciona sin nada |
+| **COSMIC** | nativo (applet de estado del panel) |
+| **Sway / Hyprland / wlroots** | con **waybar** (`"tray"`) o con un panel que traiga bandeja |
+| **XFCE / MATE / Cinnamon / LXQt** | applet "Área de notificación / de estado" del panel |
+| **GNOME** | necesita la extensión **AppIndicator and KStatusNotifierItem Support** ([extensions.gnome.org/extension/615](https://extensions.gnome.org/extension/615/appindicator-support/)). Ubuntu la trae de fábrica; Fedora Workstation no |
+
+Si el panel o la extensión aún no están listos al iniciar sesión, `wayvpet`
+**reintenta el registro ~30 s** antes de rendirse (así lo recoge un panel que
+carga tarde o una extensión recién activada). Si aun así no aparece, arranca
+`wayvpet-config` a mano o usa `wayvpetctl`.
 
 `--no-tray` lo desactiva para una ejecución sin tocar la config.
 

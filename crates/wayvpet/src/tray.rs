@@ -177,6 +177,8 @@ enum ToTray {
 
 /// El objeto `ksni::Tray`. Cada clic de menú manda un [`TrayCommand`] por
 /// `cmd_tx` al bucle del overlay; no hace trabajo pesado aquí (spec 0011).
+/// `Clone` para poder reintentar el registro si el host SNI tarda en aparecer.
+#[derive(Clone)]
 struct SniTray {
     cmd_tx: Sender<TrayCommand>,
     /// Temas instalados para el submenú "Tema"; el activo va marcado.
@@ -369,15 +371,35 @@ fn run(
     // llevar el futuro de `spawn()` a término, mantener vivo el `Handle` y
     // reenviarle los cambios de estado que llegan del bucle del overlay.
     futures_lite::future::block_on(async move {
-        let handle = match tray.spawn().await {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!(
-                    "wayvpet: no hay icono de bandeja ({e}); usa `wayvpetctl` \
-                     (show/hide/reload/restart/stop)"
-                );
-                return;
+        // El `StatusNotifierWatcher` puede no estar listo al iniciar sesión: el
+        // panel de KDE/Plasma tarda en cargar, la extensión AppIndicator de
+        // GNOME puede habilitarse después, xfce4-panel arranca en paralelo… Se
+        // reintenta unos 30 s antes de rendirse (con `--no-tray` o
+        // `enable_tray=0` ni siquiera se llega aquí).
+        let mut handle = None;
+        for intento in 0..10u32 {
+            match tray.clone().spawn().await {
+                Ok(h) => {
+                    handle = Some(h);
+                    break;
+                }
+                Err(e) => {
+                    if intento == 0 {
+                        eprintln!("wayvpet: aún no hay host de bandeja ({e}); reintentando…");
+                    }
+                    // Este hilo solo espera el registro; un `sleep` bloqueante
+                    // no molesta a nadie.
+                    thread::sleep(std::time::Duration::from_secs(3));
+                }
             }
+        }
+        let Some(handle) = handle else {
+            eprintln!(
+                "wayvpet: sin icono de bandeja (¿panel sin applet de estado? \
+                 ¿GNOME sin la extensión AppIndicator?); usa `wayvpetctl` \
+                 (show/hide/reload/restart/stop)"
+            );
+            return;
         };
         eprintln!("wayvpet: icono de bandeja activo");
         loop {
