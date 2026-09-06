@@ -1,13 +1,13 @@
-# Temas (skins) de Bongo Cat
+# Temas (skins) de wayvpet
 
 Un tema es **una carpeta** con 5 SVG y un `theme.ini`. No hace falta recompilar:
 suéltala en una ruta de temas y actívala con `theme = <nombre>` en el
-`bongocat.conf` (o `bongocatctl theme set <nombre>`).
+`wayvpet.conf` (o `wayvpetctl theme set <nombre>`).
 
 ## Rutas de búsqueda (por prioridad)
 
-1. `$XDG_DATA_HOME/bongocat/themes/` (por defecto `~/.local/share/bongocat/themes/`)
-2. `$XDG_DATA_DIRS/*/bongocat/themes/` (típico: `/usr/local/share`, `/usr/share`)
+1. `$XDG_DATA_HOME/wayvpet/themes/` (por defecto `~/.local/share/wayvpet/themes/`)
+2. `$XDG_DATA_DIRS/*/wayvpet/themes/` (típico: `/usr/local/share`, `/usr/share`)
 3. `./themes/` del repositorio (solo en desarrollo)
 
 `theme = /ruta/absoluta/a/mi-tema` también vale.
@@ -21,13 +21,13 @@ mi-tema/
   both-down.svg    sleeping.svg
 ```
 
-`theme.ini` (mismo formato INI que `bongocat.conf`):
+`theme.ini` (mismo formato INI que `wayvpet.conf`):
 
 ```ini
 name = Mi Skin
 author = tú <correo>
 license = CC-BY-4.0
-theme_format = 1              # formato que entiende bongocat (no lo cambies)
+theme_format = 1              # formato que entiende wayvpet (no lo cambies)
 theme_version = 1             # versión de tu contenido; súbela al editar
 # opcionales:
 aspect_ratio = 500:277        # ancho:alto de referencia (por defecto 500:277)
@@ -48,9 +48,9 @@ carga igual con metadatos vacíos y `theme_format = 1`.
 - **5 fotogramas**: `both-up` (reposo), `left-down`, `right-down`, `both-down`,
   `sleeping`.
 - Lienzo con **fondo transparente** y la misma relación de aspecto en los 5
-  (`500:277` por defecto; si usas otra, decláralo en `aspect_ratio`). bongocat
+  (`500:277` por defecto; si usas otra, decláralo en `aspect_ratio`). wayvpet
   escala manteniendo esa relación; la altura la pone el usuario (`cat_height`).
-- El personaje debe **ocupar el lienzo entero**, sin márgenes: bongocat rasteriza
+- El personaje debe **ocupar el lienzo entero**, sin márgenes: wayvpet rasteriza
   el SVG tal cual (a diferencia de `classic`, que aún lleva el recorte del
   editor).
 - **Solo trazados/formas vectoriales.** Sin `<text>` (no se rasteriza texto) y
@@ -73,23 +73,23 @@ arte no pixel-art). Estados animados con máquina de estados completa
 izquierda/derecha, autodetectado) vs `activity` (cualquier tecla → `writing`).
 
 - Una hoja global (`sheet = x.png`) y/o una por estado (`sheet_writing = w.apng`).
-- `happy_kpm` en el `bongocat.conf` activa el estado `happy` al superar N
+- `happy_kpm` en el `wayvpet.conf` activa el estado `happy` al superar N
   teclas/minuto (si el tema lo trae).
 - `anchor = baseline` (default) | `center` (mascotas voladoras).
 
 Ejemplo: `demo/` (`sheet.png` + `writing.apng`, arte propio CC0, regenerable con
-`cargo run -p bongocat --example gen_demo_sheet`).
+`cargo run -p wayvpet --example gen_demo_sheet`).
 
 ### Importar una mascota de wayland-vpets
 
 ```
-bongocat theme import-vpets <ORIGEN> [--name N] [--dry-run]
+wayvpet theme import-vpets <ORIGEN> [--name N] [--dry-run]
 ```
 
 `<ORIGEN>` puede ser una carpeta de mascota (`.conf` + hoja), un `.conf` suelto,
 una hoja PNG (`--frame-w`/`--frame-h`), una carpeta de PNGs `<estado>_<n>.png`, o
 un APNG (`--state`). Traduce las claves `custom_*`, escribe el tema en
-`~/.local/share/bongocat/themes/<N>/` y lo valida con `theme check`. Nunca falla
+`~/.local/share/wayvpet/themes/<N>/` y lo valida con `theme check`. Nunca falla
 por un estado ausente: usa su reserva y lo informa. Ver
 [`COMUNIDAD.md`](COMUNIDAD.md) para packs y **licencias**.
 
@@ -120,5 +120,5 @@ track_mouse = 1           # seguimiento de ojos con el ratón
 sleep_timeout = 30        # inactividad en segundos antes de dormir
 ```
 
-Si algo falla al cargar (falta un SVG, no parsea, formato futuro…), bongocat
+Si algo falla al cargar (falta un SVG, no parsea, formato futuro…), wayvpet
 **avisa y sigue con el gato embebido** — nunca se queda sin gato.

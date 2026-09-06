@@ -1,4 +1,4 @@
-# Cómo contribuir a Bongo Cat (overlay para Wayland)
+# Cómo contribuir a wayvpet (overlay para Wayland)
 
 ¡Gracias por el interés! 🐱 Este documento cubre el flujo de trabajo del código
 **Rust** (Fase 0.5 de la migración). La versión en inglés vive en
@@ -21,13 +21,13 @@ compilan desde el propio crate.
 
 ```bash
 git clone <este-repo>
-cd wayland-bongocat-reload
+cd wayland-wayvpet-reload
 
 cargo build            # debug
 cargo build --release  # release (optimizado, LTO, panic=abort)
 
 # ejecutar con vigilancia de la configuración
-cargo run -p bongocat -- -c bongocat.conf.example -w
+cargo run -p wayvpet -- -c wayvpet.conf.example -w
 ```
 
 Utilidades sin compositor: `--print-default-config`, `--validate`, `--dry-run`.
@@ -54,12 +54,12 @@ comentarios en inglés residuales (no bloquea).
   inglés.
 - Sigue el patrón del código de alrededor (densidad de comentarios, nombres,
   idioma).
-- `bongocat-common` es lógica pura: **sin** Wayland, sin hilos, sin procesos,
+- `wayvpet-common` es lógica pura: **sin** Wayland, sin hilos, sin procesos,
   `#![forbid(unsafe_code)]`. La única E/S permitida está en su módulo `io`.
-- En `bongocat`, `unsafe` está denegado salvo `#[allow(unsafe_code)]` acotado a
+- En `wayvpet`, `unsafe` está denegado salvo `#[allow(unsafe_code)]` acotado a
   un punto de FFI, con un comentario `// SAFETY:` que justifique cada bloque.
 - Añade pruebas para todo lo determinista (parseo, validación, aritmética,
-  máquina de estados). Las pruebas de `bongocat-common` van en el mismo módulo
+  máquina de estados). Las pruebas de `wayvpet-common` van en el mismo módulo
   (`#[cfg(test)] mod tests`).
 - Antes de tocar el modelo de procesos, hilos o el ciclo de vida de Wayland, lee
   `ARQUITECTURA.md`.
@@ -90,6 +90,6 @@ del overlay.
 Incluye:
 
 - Compositor y versión (`echo $XDG_CURRENT_DESKTOP`, versión del compositor).
-- Contenido del `bongocat.conf` (sin rutas personales).
-- Salida del terminal (`bongocat` es hablador por `stderr`).
+- Contenido del `wayvpet.conf` (sin rutas personales).
+- Salida del terminal (`wayvpet` es hablador por `stderr`).
 - Si es de pantalla completa o multi-monitor: qué aplicación, qué salidas.

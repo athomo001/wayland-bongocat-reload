@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instalador de un comando para Bongo Cat (spec 0002).
+# Instalador de un comando para wayvpet (spec 0002).
 #
 #   ./install.sh              instala en ~/.local  (sin sudo)
 #   PREFIX=/usr/local sudo ./install.sh
@@ -13,47 +13,47 @@ set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local}"
 DESTDIR="${DESTDIR:-}"
 BINDIR="$DESTDIR$PREFIX/bin"
-DATADIR="$DESTDIR$PREFIX/share/bongocat"
+DATADIR="$DESTDIR$PREFIX/share/wayvpet"
 MANDIR="$DESTDIR$PREFIX/share/man/man1"
 APPDIR="$DESTDIR$PREFIX/share/applications"
-CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/bongocat"
+CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/wayvpet"
 
 cd "$(dirname "$0")"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -fv "$BINDIR/bongocat" "$BINDIR/bongocatctl" "$BINDIR/bongocat-config" \
-         "$DATADIR/bongocat.conf.example" "$MANDIR/bongocat.1" \
-         "$APPDIR/bongocat-config.desktop"
+  rm -fv "$BINDIR/wayvpet" "$BINDIR/wayvpetctl" "$BINDIR/wayvpet-config" \
+         "$DATADIR/wayvpet.conf.example" "$MANDIR/wayvpet.1" \
+         "$APPDIR/wayvpet-config.desktop"
   rmdir --ignore-fail-on-non-empty "$DATADIR" 2>/dev/null || true
   echo "Listo. Tu configuración en $CONFDIR no se ha tocado."
-  echo "Si instalaste el servicio:  bongocat --uninstall-service"
+  echo "Si instalaste el servicio:  wayvpet --uninstall-service"
   exit 0
 fi
 
 if [ "${NO_BUILD:-}" != "1" ]; then
   echo ">> cargo build --release"
-  cargo build --release --locked -p bongocat -p bongocatctl -p bongocat-config
+  cargo build --release --locked -p wayvpet -p wayvpetctl -p wayvpet-config
 fi
 
-install -Dm755 target/release/bongocat        "$BINDIR/bongocat"
-install -Dm755 target/release/bongocatctl     "$BINDIR/bongocatctl"
+install -Dm755 target/release/wayvpet        "$BINDIR/wayvpet"
+install -Dm755 target/release/wayvpetctl     "$BINDIR/wayvpetctl"
 # Ventana gráfica de configuración (spec 0007): la abre "Configurar…" del tray.
-install -Dm755 target/release/bongocat-config "$BINDIR/bongocat-config"
-install -Dm644 bongocat.conf.example          "$DATADIR/bongocat.conf.example"
-install -Dm644 packaging/bongocat-config.desktop "$APPDIR/bongocat-config.desktop"
-[ -f man/bongocat.1 ] && install -Dm644 man/bongocat.1 "$MANDIR/bongocat.1" || true
+install -Dm755 target/release/wayvpet-config "$BINDIR/wayvpet-config"
+install -Dm644 wayvpet.conf.example          "$DATADIR/wayvpet.conf.example"
+install -Dm644 packaging/wayvpet-config.desktop "$APPDIR/wayvpet-config.desktop"
+[ -f man/wayvpet.1 ] && install -Dm644 man/wayvpet.1 "$MANDIR/wayvpet.1" || true
 
 # Configuración del usuario: solo si no existe (nunca se pisa la del usuario).
-if [ -z "$DESTDIR" ] && [ ! -e "$CONFDIR/bongocat.conf" ]; then
-  install -Dm644 bongocat.conf.example "$CONFDIR/bongocat.conf"
-  echo ">> Configuración inicial en $CONFDIR/bongocat.conf"
+if [ -z "$DESTDIR" ] && [ ! -e "$CONFDIR/wayvpet.conf" ]; then
+  install -Dm644 wayvpet.conf.example "$CONFDIR/wayvpet.conf"
+  echo ">> Configuración inicial en $CONFDIR/wayvpet.conf"
 fi
 
 echo
 echo "Instalado:"
-echo "  $BINDIR/bongocat"
-echo "  $BINDIR/bongocatctl"
-echo "  $BINDIR/bongocat-config   (ventana de configuración; o el tray → Configurar…)"
+echo "  $BINDIR/wayvpet"
+echo "  $BINDIR/wayvpetctl"
+echo "  $BINDIR/wayvpet-config   (ventana de configuración; o el tray → Configurar…)"
 case ":$PATH:" in
   *":$PREFIX/bin:"*) : ;;
   *) echo
@@ -61,6 +61,6 @@ case ":$PATH:" in
      echo "     export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
 echo
-echo "Arranca ahora:        bongocat -w"
-echo "Autoarranque (systemd): bongocat --install-service && \\"
-echo "                        systemctl --user enable --now bongocat.service"
+echo "Arranca ahora:        wayvpet -w"
+echo "Autoarranque (systemd): wayvpet --install-service && \\"
+echo "                        systemctl --user enable --now wayvpet.service"

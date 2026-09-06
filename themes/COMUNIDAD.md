@@ -1,14 +1,14 @@
 # Mascotas de la comunidad (`theme_format = 3`)
 
-bongocat lee de forma nativa el formato de sprite sheet de
+wayvpet lee de forma nativa el formato de sprite sheet de
 [**wayland-vpets**](https://github.com/furudbat/wayland-vpets) (furudbat, MIT) —
 un fork hermano que generaliza el gato a cientos de mascotas animadas. Con
-`bongocat theme import-vpets <origen>` puedes reutilizarlas.
+`wayvpet theme import-vpets <origen>` puedes reutilizarlas.
 
 > **Este repositorio NO incluye arte de terceros.** Solo se empaquetan
 > `classic`, `pink` (recoloreado propio) y `demo` (arte propio CC0). Todo lo de
-> abajo lo instalas **tú** en tu equipo; bongocat solo copia desde la ruta local
-> que le indicas a `~/.local/share/bongocat/themes/`.
+> abajo lo instalas **tú** en tu equipo; wayvpet solo copia desde la ruta local
+> que le indicas a `~/.local/share/wayvpet/themes/`.
 
 ## Aviso de propiedad intelectual
 
@@ -33,26 +33,26 @@ publique packs con arte libre.)*
 
 ```sh
 # Una carpeta de mascota (sprite sheet + su .conf):
-bongocat theme import-vpets ~/pets/charizard --name charizard
+wayvpet theme import-vpets ~/pets/charizard --name charizard
 
 # Solo ver el informe, sin escribir:
-bongocat theme import-vpets ~/pets/charizard --dry-run
+wayvpet theme import-vpets ~/pets/charizard --dry-run
 
 # Una hoja PNG suelta:
-bongocat theme import-vpets sheet.png --frame-w 64 --frame-h 64 --name mascota
+wayvpet theme import-vpets sheet.png --frame-w 64 --frame-h 64 --name mascota
 
 # Una carpeta de PNGs por estado (idle_0.png, writing_0.png, …):
-bongocat theme import-vpets ~/frames --name mascota
+wayvpet theme import-vpets ~/frames --name mascota
 
 # Un APNG = un estado:
-bongocat theme import-vpets fly.apng --state writing --name dragon
+wayvpet theme import-vpets fly.apng --state writing --name dragon
 ```
 
 El importador:
 
 - traduce `custom_sprite_sheet_filename`, `custom_<estado>_row/_frames`,
   `fps` / `animation_speed` y `row_base` (0/1) al formato nativo;
-- mapea los 15 estados de wayland-vpets a los que bongocat sabe conducir;
+- mapea los 15 estados de wayland-vpets a los que wayvpet sabe conducir;
   los que no (`working` / `moving`) se ignoran con aviso;
 - para un estado canónico ausente usa su **reserva** (`idle`→`writing`,
   `sleep`→`boring`→`idle`, …) y lo dice en el informe;

@@ -5,12 +5,12 @@
   ...
 }:
 let
-  cfg = config.programs.wayland-bongocat;
-  wayland-bongocat = pkgs.callPackage ./default.nix { };
+  cfg = config.programs.wayland-wayvpet;
+  wayland-wayvpet = pkgs.callPackage ./default.nix { };
   configFile = pkgs.writeTextFile {
-    name = "bongocat.conf";
+    name = "wayvpet.conf";
     text = ''
-      # Auto-generated config for `wayland-bongocat`
+      # Auto-generated config for `wayland-wayvpet`
 
       # Cat position and size
       cat_x_offset=${toString cfg.catXOffset}
@@ -59,24 +59,24 @@ let
 in
 {
   meta.maintainers = with lib.maintainers; [ ];
-  options.programs.wayland-bongocat = {
+  options.programs.wayland-wayvpet = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
       example = true;
-      description = "Enable `wayland-bongocat` overlay";
+      description = "Enable `wayland-wayvpet` overlay";
     };
     autostart = lib.mkOption {
       type = lib.types.bool;
       default = false;
       example = true;
-      description = "Enable and automatically start `bongocat-wayland` as a service on login";
+      description = "Enable and automatically start `wayvpet-wayland` as a service on login";
     };
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = wayland-bongocat;
-      description = "The wayland-bongocat package to use.";
+      default = wayland-wayvpet;
+      description = "The wayland-wayvpet package to use.";
     };
 
     # Debug mode
@@ -92,7 +92,7 @@ in
       type = lib.types.enum [ "top" "bottom" ];
       default = "top";
       example = "bottom";
-      description = "Bongocat overlay position on screen - `top` or `bottom`";
+      description = "Wayvpet overlay position on screen - `top` or `bottom`";
     };
     overlayHeight = lib.mkOption {
       type = lib.types.ints.between 20 300;
@@ -224,7 +224,7 @@ in
     inputDevices = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "/dev/input/event4" ];
-      description = "List of input devices to monitor, run `bongocat-find-devices` to see all devices to add to this list";
+      description = "List of input devices to monitor, run `wayvpet-find-devices` to see all devices to add to this list";
       example = [
         "/dev/input/event4"
         "/dev/input/event20"
@@ -234,7 +234,7 @@ in
     inputDeviceNames = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "List of input device names to monitor, run `bongocat-find-devices` to see all devices to add to this list";
+      description = "List of input device names to monitor, run `wayvpet-find-devices` to see all devices to add to this list";
       example = [
         "hfd.cn KW75 Keyboard"
       ];
@@ -257,7 +257,7 @@ in
     extraConfig = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "Extra lines to add to bongocat.conf";
+      description = "Extra lines to add to wayvpet.conf";
     };
   };
 

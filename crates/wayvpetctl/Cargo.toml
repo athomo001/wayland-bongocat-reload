@@ -1,0 +1,15 @@
+[package]
+name = "wayvpetctl"
+version = "3.0.0-dev"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+description = "Cliente de configuración y control de wayvpet (TUI, en curso)."
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+wayvpet-common = { path = "../wayvpet-common" }

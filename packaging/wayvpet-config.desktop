@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Configurar wayvpet
+Name[en]=Configure wayvpet
+Comment=Ajusta el vpet: posición, tamaño, apariencia, tema
+Comment[en]=Tune the vpet: position, size, appearance, theme
+Exec=wayvpet-config
+Icon=wayvpet
+Terminal=false
+Categories=Settings;Utility;
+Keywords=wayvpet;vpet;overlay;cat;
+StartupNotify=true

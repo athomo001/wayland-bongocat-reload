@@ -8,14 +8,14 @@
 ### Direct Installation with Flakes
 
 ```bash
-# Try `wayland-bongocat` without installing
-nix run github:saatvik333/wayland-bongocat
+# Try `wayland-wayvpet` without installing
+nix run github:saatvik333/wayland-wayvpet
 
 # Install to user profile
-nix profile install github:saatvik333/wayland-bongocat
+nix profile install github:saatvik333/wayland-wayvpet
 
 # Find your input devices
-bongocat-find-devices
+wayvpet-find-devices
 ```
 
 ### Using the NixOS Module (Recommended)
@@ -31,7 +31,7 @@ If you use flakes for your NixOS configuration (Which you should):
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    bongocat.url = "github:saatvik333/wayland-bongocat";
+    wayvpet.url = "github:saatvik333/wayland-wayvpet";
   };
 
   outputs = inputs: {
@@ -39,9 +39,9 @@ If you use flakes for your NixOS configuration (Which you should):
       system = "x86_64-linux";
       modules = [
         ./configuration.nix
-        inputs.bongocat.nixosModules.default
+        inputs.wayvpet.nixosModules.default
         {
-          programs.wayland-bongocat = {
+          programs.wayland-wayvpet = {
             enable = true;
             autostart = true;
           };
@@ -61,11 +61,11 @@ Download this repository wherever you desire and add this to your NixOS configur
   # Import the module
   imports = [
     # ... your other imports
-    /path/to/wayland-bongocat/nix/nixos-module.nix
+    /path/to/wayland-wayvpet/nix/nixos-module.nix
   ];
 
-  # Enable and configure bongocat
-  programs.wayland-bongocat = {
+  # Enable and configure wayvpet
+  programs.wayland-wayvpet = {
     enable = true;
     autostart = true;        # Start on login by creating a SystemD service
 
@@ -85,8 +85,8 @@ Download this repository wherever you desire and add this to your NixOS configur
     # Visual
     overlayOpacity = 0;      # Overlay bar transparency
 
-    # REQUIRED - Bongocat won't work properly without configuring this first
-    # Input devices (Find yours with `bongocat-find-devices`)
+    # REQUIRED - Wayvpet won't work properly without configuring this first
+    # Input devices (Find yours with `wayvpet-find-devices`)
     inputDevices = [
       # Example devices
       "/dev/input/event4"
@@ -112,14 +112,14 @@ A home manager module is also provided by the repository flake. It's just like t
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    bongocat.url = "github:saatvik333/wayland-bongocat";
+    wayvpet.url = "github:saatvik333/wayland-wayvpet";
   };
 
   outputs = inputs: {
     homeConfigurations.user = inputs.home-manager.lib.homeManagerConfiguration {
       # ...
       modules = [
-        inputs.bongocat.homeModule.default
+        inputs.wayvpet.homeModule.default
         # ...
       ];
     };
@@ -140,7 +140,7 @@ current directory.
 
 ## Configuration
 
-Run `bongocat-find-devices` to find all input devices.
+Run `wayvpet-find-devices` to find all input devices.
 
 This will show you:
 
@@ -151,7 +151,7 @@ This will show you:
 
 ### Manual Configuration
 
-Create a `bongocat.conf` file wherever you desire:
+Create a `wayvpet.conf` file wherever you desire:
 
 ```ini
 # Multiple input devices
@@ -176,19 +176,19 @@ enable_debug=0
 
 ## SystemD Service Management
 
-Set `programs.wayland-bongocat.autostart = true;` to create a SystemD user service so
+Set `programs.wayland-wayvpet.autostart = true;` to create a SystemD user service so
 it gets automatically started upon login.
 
 ```bash
 # Check service status
-systemctl --user status wayland-bongocat
+systemctl --user status wayland-wayvpet
 
 # Start/stop manually
-systemctl --user start wayland-bongocat
-systemctl --user stop wayland-bongocat
+systemctl --user start wayland-wayvpet
+systemctl --user stop wayland-wayvpet
 
 # View logs
-journalctl --user -u wayland-bongocat -f
+journalctl --user -u wayland-wayvpet -f
 ```
 
 ## Troubleshooting
@@ -205,15 +205,15 @@ If you get permission errors accessing input devices:
 
 If the SystemD service fails to start:
 
-1. **Check logs:** `journalctl --user -u wayland-bongocat -n 50`
-1. **Test manually:** `bongocat --config /nix/store/.../bongocat.conf`
-1. **Enable debug mode:** `programs.wayland-bongocat.enableDebug = true;`
+1. **Check logs:** `journalctl --user -u wayland-wayvpet -n 50`
+1. **Test manually:** `wayvpet --config /nix/store/.../wayvpet.conf`
+1. **Enable debug mode:** `programs.wayland-wayvpet.enableDebug = true;`
 
 ### Input Device Detection
 
 If keyboard input isn't detected:
 
-1. **Find your devices:** `bongocat-find-devices`
+1. **Find your devices:** `wayvpet-find-devices`
 
 1. **Test device events:** `sudo evtest  # Select your device and type`
 
@@ -221,7 +221,7 @@ If keyboard input isn't detected:
    If using the NixOS or home-manager module -
 
    ```nix
-   programs.wayland-bongocat.inputDevices = [
+   programs.wayland-wayvpet.inputDevices = [
        # Add as many devices as required and replace X with your device number
        "/dev/input/eventX"
        "/dev/input/eventX"
@@ -229,7 +229,7 @@ If keyboard input isn't detected:
    ];
    ```
 
-   Standalone (In your `bongocat.conf` file) -
+   Standalone (In your `wayvpet.conf` file) -
 
    ```ini
    # Add as many devices as required and replace `X` with the actual device number
@@ -238,12 +238,12 @@ If keyboard input isn't detected:
    keyboard_device=/dev/input/eventX
    ```
 
-You can also use the recommended `keyboard_name=your keyboard` config suggestion provided by `bongocat-find-devices`.
+You can also use the recommended `keyboard_name=your keyboard` config suggestion provided by `wayvpet-find-devices`.
 
 In the NixOS or home-manager module -
 
 ```nix
-programs.wayland-bongocat.inputDeviceNames = ["your keyboard"]
+programs.wayland-wayvpet.inputDeviceNames = ["your keyboard"]
 ```
 
 ### Wayland Compositor Compatibility
@@ -263,9 +263,9 @@ Ensure your compositor supports the layer shell protocol:
 You can override the package in the module:
 
 ```nix
-programs.wayland-bongocat = {
+programs.wayland-wayvpet = {
   enable = true;
-  package = pkgs.wayland-bongocat.overrideAttrs (old: {
+  package = pkgs.wayland-wayvpet.overrideAttrs (old: {
     # Custom build options
     buildInputs = old.buildInputs ++ [ pkgs.someExtraPackage ];
   });
@@ -278,16 +278,16 @@ You can run multiple instances using different configurations
 
 ```bash
 # Instance 1
-bongocat --config ~/.config/bongocat/work.conf &
+wayvpet --config ~/.config/wayvpet/work.conf &
 
 # Instance 2
-bongocat --config ~/.config/bongocat/gaming.conf &
+wayvpet --config ~/.config/wayvpet/gaming.conf &
 ```
 
 ### Integration with Window Managers
 
-- **Hyprland:** `exec-once = bongocat`
-- **Sway:** `exec bongocat`
+- **Hyprland:** `exec-once = wayvpet`
+- **Sway:** `exec wayvpet`
 
 ## Building from Source
 

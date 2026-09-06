@@ -422,50 +422,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bongocat"
-version = "3.0.0-dev"
-dependencies = [
- "bongocat-common",
- "calloop 0.14.4",
- "calloop-wayland-source 0.4.1",
- "evdev",
- "futures-lite",
- "image",
- "inotify",
- "ksni",
- "libc",
- "png 0.17.16",
- "resvg",
- "rustix 0.38.44",
- "seccompiler",
- "smithay-client-toolkit 0.19.2",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "wayland-scanner",
-]
-
-[[package]]
-name = "bongocat-common"
-version = "0.0.0"
-
-[[package]]
-name = "bongocat-config"
-version = "3.0.0-dev"
-dependencies = [
- "bongocat-common",
- "eframe",
- "egui",
-]
-
-[[package]]
-name = "bongocatctl"
-version = "3.0.0-dev"
-dependencies = [
- "bongocat-common",
-]
-
-[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3753,6 +3709,50 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "wayvpet"
+version = "3.0.0-dev"
+dependencies = [
+ "calloop 0.14.4",
+ "calloop-wayland-source 0.4.1",
+ "evdev",
+ "futures-lite",
+ "image",
+ "inotify",
+ "ksni",
+ "libc",
+ "png 0.17.16",
+ "resvg",
+ "rustix 0.38.44",
+ "seccompiler",
+ "smithay-client-toolkit 0.19.2",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "wayland-scanner",
+ "wayvpet-common",
+]
+
+[[package]]
+name = "wayvpet-common"
+version = "0.0.0"
+
+[[package]]
+name = "wayvpet-config"
+version = "3.0.0-dev"
+dependencies = [
+ "eframe",
+ "egui",
+ "wayvpet-common",
+]
+
+[[package]]
+name = "wayvpetctl"
+version = "3.0.0-dev"
+dependencies = [
+ "wayvpet-common",
 ]
 
 [[package]]

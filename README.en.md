@@ -1,9 +1,9 @@
-# Bongo Cat Wayland Overlay
+# wayvpet Wayland Overlay
 
 > 🇪🇸 El README principal de este fork está en español: [README.md](README.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-bongocat/releases)
+[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-wayvpet/releases)
 
 A cute Wayland overlay that shows an animated bongo cat reacting to your keyboard input.
 
@@ -25,11 +25,11 @@ A cute Wayland overlay that shows an animated bongo cat reacting to your keyboar
 
 ```bash
 # Arch Linux
-yay -S bongocat
+yay -S wayvpet
 
 # Other distros - build from source
-git clone https://github.com/saatvik333/wayland-bongocat.git
-cd wayland-bongocat && make
+git clone https://github.com/saatvik333/wayland-wayvpet.git
+cd wayland-wayvpet && make
 ```
 
 ### Setup Permissions
@@ -42,20 +42,20 @@ sudo usermod -a -G input $USER
 ### Find Your Keyboard
 
 ```bash
-bongocat-find-devices  # or ./scripts/find_input_devices.sh
+wayvpet-find-devices  # or ./scripts/find_input_devices.sh
 ```
 
 ### Run
 
 ```bash
-bongocat --watch-config
+wayvpet --watch-config
 # Optional: force one monitor from CLI
-bongocat --watch-config --monitor eDP-1
+wayvpet --watch-config --monitor eDP-1
 ```
 
 ## Configuration
 
-Create `~/.config/bongocat/bongocat.conf`:
+Create `~/.config/wayvpet/wayvpet.conf`:
 
 ```ini
 # ═══════════════════════════════════════════════════════════════════════════
@@ -75,7 +75,7 @@ overlay_position=bottom
 # mirror_x=0
 # mirror_y=0
 
-# Input device (run bongocat-find-devices to find yours)
+# Input device (run wayvpet-find-devices to find yours)
 keyboard_device=/dev/input/event4
 
 # Multi-monitor (comma-separated monitor names)
@@ -131,7 +131,7 @@ hot-reloadable with `--watch-config`.
 ## Command Line
 
 ```bash
-bongocat [OPTIONS]
+wayvpet [OPTIONS]
 
   -c, --config FILE    Config file path (default: auto-detect)
   -m, --monitor NAME   Force specific monitor output
@@ -159,9 +159,9 @@ sudo usermod -a -G input $USER
 <details>
 <summary>Cat not responding to keyboard</summary>
 
-1. Run `bongocat-find-devices` to find correct device
+1. Run `wayvpet-find-devices` to find correct device
 2. Update `keyboard_device` in config
-3. Restart bongocat
+3. Restart wayvpet
 
 </details>
 
@@ -175,8 +175,8 @@ Set `monitor=YOUR_MONITOR` (single) or `monitor=MON1,MON2` (multi) in config. Fi
 ## Building
 
 ```bash
-git clone https://github.com/saatvik333/wayland-bongocat.git
-cd wayland-bongocat
+git clone https://github.com/saatvik333/wayland-wayvpet.git
+cd wayland-wayvpet
 make          # Release build
 make debug    # Debug build
 ```

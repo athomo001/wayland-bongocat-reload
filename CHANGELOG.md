@@ -70,7 +70,7 @@ All notable changes to this project will be documented in this file.
 
 - **Config model** - `config_t` now stores per-config device/output arrays, inline comments are stripped, and `monitor` parsing loads multiple names with fallback to automatic output; keyboards hotplug state is rebuilt cleanly on reload.
 - **Wayland rendering** - Draw path takes `anim_lock`, surface recreation checks the applied layer/output/size snapshots, and buffer recreation is serialized to avoid tearing/races when configs change.
-- **Documentation & packaging** - README/`bongocat.conf.example` demonstrate comma-separated monitors, Makefile installs now ship the example config, and CLI help/version text was refreshed for v1.4.0.
+- **Documentation & packaging** - README/`wayvpet.conf.example` demonstrate comma-separated monitors, Makefile installs now ship the example config, and CLI help/version text was refreshed for v1.4.0.
 
 ### Fixed
 
@@ -119,7 +119,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Improved Anti-Aliasing** - Box filter for downscaling + proper alpha blending for smooth edges at any size
-- **Interactive Keyboard Detection** - New `--interactive` mode in `bongocat-find-devices` listens for actual key presses
+- **Interactive Keyboard Detection** - New `--interactive` mode in `wayvpet-find-devices` listens for actual key presses
 - **Hot-Reload Device Changes** - Changing keyboard devices in config now works without restart
 - **C23 Modern Codebase** - RAII macros, `[[nodiscard]]` attributes, guard clauses throughout
 
@@ -156,7 +156,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Multi-Monitor Support** - Choose which monitor to display bongocat on using the `monitor` configuration option
+- **Multi-Monitor Support** - Choose which monitor to display wayvpet on using the `monitor` configuration option
 - **Monitor Detection** - Automatic detection of available monitors with fallback to first monitor if specified monitor not found
 - **XDG Output Protocol** - Proper Wayland protocol implementation for monitor identification
 
@@ -177,7 +177,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Smart Fullscreen Detection** - Automatically hides overlay during fullscreen applications for a cleaner experience
-- **Enhanced Artwork** - Custom-drawn bongocat image files by [@Shreyabardia](https://github.com/Shreyabardia)
+- **Enhanced Artwork** - Custom-drawn wayvpet image files by [@Shreyabardia](https://github.com/Shreyabardia)
 - **Modular Architecture** - Reorganized codebase into logical modules for better maintainability
 
 ### Improved

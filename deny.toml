@@ -13,7 +13,7 @@ ignore = [
     "RUSTSEC-2024-0436",
     # `ttf-parser` sin mantenimiento (no es vulnerabilidad; el autor recomienda
     # `skrifa`). Entra solo por `egui`/`epaint`/`ab_glyph` en el binario
-    # **aparte** `bongocat-config` (spec 0007), no en el núcleo. La migración a
+    # **aparte** `wayvpet-config` (spec 0007), no en el núcleo. La migración a
     # `skrifa` es cosa de egui aguas arriba.
     "RUSTSEC-2026-0192",
 ]
@@ -32,7 +32,7 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
     "Unlicense", # ksni (icono de bandeja): dominio público, equivalente a CC0
-    # ── Solo por el binario aparte `bongocat-config` (egui/eframe, spec 0007) ──
+    # ── Solo por el binario aparte `wayvpet-config` (egui/eframe, spec 0007) ──
     "BSL-1.0",         # Boost Software License: permisiva tipo MIT (p. ej. `ryu`)
     "NCSA",            # Univ. of Illinois/NCSA: permisiva tipo MIT (`libloading`)
     "OFL-1.1",         # SIL Open Font License: fuentes que egui empaqueta (`default_fonts`)
@@ -43,7 +43,7 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Las dependencias `path` internas del workspace (bongocat-common) no llevan
+# Las dependencias `path` internas del workspace (wayvpet-common) no llevan
 # versión: son wildcard "legítimos", no de crates.io.
 allow-wildcard-paths = true
 

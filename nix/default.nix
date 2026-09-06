@@ -5,7 +5,7 @@
   wayland,
 }:
 stdenv.mkDerivation (finalAttrs: {
-  pname = "wayland-bongocat";
+  pname = "wayland-wayvpet";
   version = "2.0.2";
   src = ../.;
 
@@ -23,12 +23,12 @@ stdenv.mkDerivation (finalAttrs: {
     runHook preInstall
 
     # Install binaries
-    install -Dm755 build/bongocat $out/bin/${finalAttrs.meta.mainProgram}
-    install -Dm755 scripts/find_input_devices.sh $out/bin/bongocat-find-devices
+    install -Dm755 build/wayvpet $out/bin/${finalAttrs.meta.mainProgram}
+    install -Dm755 scripts/find_input_devices.sh $out/bin/wayvpet-find-devices
     
     # Install man page
-    install -Dm644 man/bongocat.1 $out/share/man/man1/bongocat.1
-    install -Dm644 bongocat.conf.example $out/share/bongocat/bongocat.conf.example
+    install -Dm644 man/wayvpet.1 $out/share/man/man1/wayvpet.1
+    install -Dm644 wayvpet.conf.example $out/share/wayvpet/wayvpet.conf.example
 
     runHook postInstall
   '';
@@ -36,10 +36,10 @@ stdenv.mkDerivation (finalAttrs: {
   # Package information
   meta = {
     description = "Delightful Wayland overlay that displays an animated bongo cat reacting to your keyboard input!";
-    homepage = "https://github.com/saatvik333/wayland-bongocat";
+    homepage = "https://github.com/saatvik333/wayland-wayvpet";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [voxi0];
-    mainProgram = "bongocat";
+    mainProgram = "wayvpet";
     platforms = lib.platforms.linux;
   };
 })

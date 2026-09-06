@@ -1,10 +1,10 @@
-# Bongo Cat — overlay para Wayland
+# wayvpet — overlay para Wayland
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 Un overlay para Wayland que muestra un gato bongo animado reaccionando a lo que
-escribes. Este fork (**wayland-bongocat-reload**) reescribió el núcleo en Rust
-y añadió instalación en un comando, control remoto (`bongocatctl` + icono de
+escribes. Este fork (**wayland-wayvpet-reload**) reescribió el núcleo en Rust
+y añadió instalación en un comando, control remoto (`wayvpetctl` + icono de
 bandeja), temas/skins con animación de sprite sheet, entrada de ratón, modo de
 edición con el ratón, y endurecimiento de seguridad/privacidad.
 
@@ -22,7 +22,7 @@ edición con el ratón, y endurecimiento de seguridad/privacidad.
   ficheros
 - 🔔 Icono en la bandeja del sistema: mostrar/ocultar, recargar, elegir tema,
   configurar, cerrar — todo con el ratón
-- 🖥️ Control remoto (`bongocatctl`) y socket IPC para automatizar/scriptear
+- 🖥️ Control remoto (`wayvpetctl`) y socket IPC para automatizar/scriptear
 - 🔥 Recarga de configuración en caliente (`-w`), incluidos los ficheros del
   tema activo
 - 🎮 Se auto-oculta en aplicaciones a pantalla completa
@@ -36,8 +36,8 @@ edición con el ratón, y endurecimiento de seguridad/privacidad.
 ## Instalación
 
 ```bash
-git clone https://github.com/athomo001/wayland-bongocat-reload.git
-cd wayland-bongocat-reload
+git clone https://github.com/athomo001/wayland-wayvpet-reload.git
+cd wayland-wayvpet-reload
 ./install.sh
 ```
 
@@ -49,7 +49,7 @@ PREFIX=/usr/local sudo ./install.sh
 ```
 
 El instalador también copia una configuración inicial en
-`~/.config/bongocat/bongocat.conf` **solo si no existe ya una tuya** — nunca
+`~/.config/wayvpet/wayvpet.conf` **solo si no existe ya una tuya** — nunca
 pisa una configuración existente.
 
 ### Permisos
@@ -64,7 +64,7 @@ sudo usermod -a -G input $USER
 ### Ejecutar
 
 ```bash
-bongocat -w   # -w = recarga en caliente al editar la configuración
+wayvpet -w   # -w = recarga en caliente al editar la configuración
 ```
 
 El teclado (y el ratón, si `enable_mouse=1`) se **autodetectan**; solo hace
@@ -73,8 +73,8 @@ acierta (`./scripts/find_input_devices.sh` los lista).
 
 ## Configuración
 
-Edita `~/.config/bongocat/bongocat.conf` — cada clave está documentada con
-más detalle en [`bongocat.conf.example`](bongocat.conf.example).
+Edita `~/.config/wayvpet/wayvpet.conf` — cada clave está documentada con
+más detalle en [`wayvpet.conf.example`](wayvpet.conf.example).
 
 <details>
 <summary>Todas las opciones</summary>
@@ -108,7 +108,7 @@ más detalle en [`bongocat.conf.example`](bongocat.conf.example).
 | `sleep_begin` / `sleep_end` | HH:MM | 00:00 | Inicio / fin del horario de reposo |
 | `disable_fullscreen_hide` | 0/1 | 0 | Mantener el overlay visible en pantalla completa |
 | `hotplug_scan_interval` | segundos | 30 | Cada cuánto rescanear dispositivos (0 = una vez) |
-| `enable_ipc` | 0/1 | 1 | Socket de control para `bongocatctl`/el tray |
+| `enable_ipc` | 0/1 | 1 | Socket de control para `wayvpetctl`/el tray |
 | `enable_tray` | 0/1 | 1 | Icono en la bandeja del sistema |
 
 `fps` sigue aceptándose por compatibilidad del fichero, pero ya no tiene
@@ -127,10 +127,10 @@ Un tema es una carpeta con SVG (vectorial) o una hoja de sprites PNG/APNG
 completa en [`themes/README.md`](themes/README.md).
 
 ```bash
-bongocat theme list                  # temas instalados
-bongocat theme new mi-skin           # crea una plantilla en $XDG_DATA_HOME
-bongocat theme check mi-skin         # valida un tema sin arrancar el overlay
-bongocat theme import-vpets ORIGEN   # importa una mascota de wayland-vpets
+wayvpet theme list                  # temas instalados
+wayvpet theme new mi-skin           # crea una plantilla en $XDG_DATA_HOME
+wayvpet theme check mi-skin         # valida un tema sin arrancar el overlay
+wayvpet theme import-vpets ORIGEN   # importa una mascota de wayland-vpets
 ```
 
 `import-vpets` acepta una carpeta de mascota, un `.conf` estilo wayland-vpets,
@@ -150,7 +150,7 @@ arrastra el gato con el ratón — ver abajo) · **Reiniciar overlay** ·
 activo, cambia con un clic) · **Acerca de** · **Cerrar**.
 
 La ventana de configuración visual es trabajo de la Fase 4 (`specs/0007-*`);
-hasta entonces se ajusta editando el `.conf` o con `bongocatctl`.
+hasta entonces se ajusta editando el `.conf` o con `wayvpetctl`.
 
 `--no-tray` lo desactiva para una ejecución sin tocar la config.
 
@@ -162,35 +162,35 @@ mientras está activo. Tres formas de entrar/salir, todas equivalentes:
 
 - **Tray**: clic en "Modo edición" (con marca ✓ mientras está activo) — la más
   fácil, sin terminal.
-- `bongocatctl edit on` / `bongocatctl edit off`.
+- `wayvpetctl edit on` / `wayvpetctl edit off`.
 - IPC: `EDIT on` / `EDIT off` / `EDIT toggle`.
 
-## Control remoto — `bongocatctl`
+## Control remoto — `wayvpetctl`
 
 Para automatizar o atar a atajos de teclado del compositor:
 
 ```bash
-bongocatctl show|hide|toggle      # mostrar/ocultar a mano
-bongocatctl theme next            # rotar temas
-bongocatctl theme set NOMBRE      # cambiar a un tema concreto
-bongocatctl state                 # estado actual de la instancia (JSON-like)
-bongocatctl get-live CLAVE        # leer una clave de la instancia en marcha
-bongocatctl set-live CLAVE VALOR  # cambiarla en caliente (sin tocar el fichero)
-bongocatctl save                  # persistir al .conf lo cambiado con set-live
-bongocatctl stop                  # cerrar la instancia
+wayvpetctl show|hide|toggle      # mostrar/ocultar a mano
+wayvpetctl theme next            # rotar temas
+wayvpetctl theme set NOMBRE      # cambiar a un tema concreto
+wayvpetctl state                 # estado actual de la instancia (JSON-like)
+wayvpetctl get-live CLAVE        # leer una clave de la instancia en marcha
+wayvpetctl set-live CLAVE VALOR  # cambiarla en caliente (sin tocar el fichero)
+wayvpetctl save                  # persistir al .conf lo cambiado con set-live
+wayvpetctl stop                  # cerrar la instancia
 ```
 
-`bongocatctl -h` lista todas las órdenes, incluidas las de fichero (`get`/
+`wayvpetctl -h` lista todas las órdenes, incluidas las de fichero (`get`/
 `set`/`dump`/`default`) que no necesitan una instancia en marcha.
 
 ## Autoarranque (systemd)
 
 ```bash
-bongocat --install-service
-systemctl --user enable --now bongocat.service
+wayvpet --install-service
+systemctl --user enable --now wayvpet.service
 ```
 
-`bongocat --uninstall-service` quita la unidad.
+`wayvpet --uninstall-service` quita la unidad.
 
 ## Desinstalación
 
@@ -199,8 +199,8 @@ systemctl --user enable --now bongocat.service
 ```
 
 Quita los binarios y la unidad de ejemplo instalados; **no toca** tu
-`~/.config/bongocat/bongocat.conf`. Si instalaste el servicio systemd, quítalo
-antes con `bongocat --uninstall-service`.
+`~/.config/wayvpet/wayvpet.conf`. Si instalaste el servicio systemd, quítalo
+antes con `wayvpet --uninstall-service`.
 
 ## Privacidad
 
@@ -226,7 +226,7 @@ sudo usermod -a -G input $USER   # y vuelve a iniciar sesión
 
 1. `./scripts/find_input_devices.sh` para encontrar el dispositivo correcto
 2. Fija `keyboard_device=` en la configuración
-3. Reinicia bongocat
+3. Reinicia wayvpet
 
 </details>
 
@@ -242,8 +242,8 @@ ven con `wlr-randr` o `hyprctl monitors`.
 <summary>No aparece el icono de la bandeja</summary>
 
 Revisa que tu panel tenga un applet de "área de estado"/bandeja del sistema
-(en GNOME, la extensión AppIndicator). Si `bongocat` imprime "icono de bandeja
-activo" en la terminal pero no ves nada, es el panel, no bongocat.
+(en GNOME, la extensión AppIndicator). Si `wayvpet` imprime "icono de bandeja
+activo" en la terminal pero no ves nada, es el panel, no wayvpet.
 
 </details>
 

@@ -24,7 +24,7 @@ pkgs.mkShellNoCC {
   ];
   shellHook = ''
     # Simple TUI
-    echo "🐱 Bongo Cat Development Environment"
+    echo "🐱 wayvpet Development Environment"
     echo "Build output is stored in 'build' if you don't use 'nix build'"
     echo "Commands:"
     echo "  nix build         - Build the Nix package (Build output is stored in 'result')"
@@ -39,6 +39,6 @@ pkgs.mkShellNoCC {
     echo "Helper scripts:"
     echo "  ./scripts/find_input_devices.sh - Find input devices"
     echo "  ./scripts/test_nix_build.sh     - Test Nix flake and package"
-    echo "  ./scripts/test_toggle.sh        - Test Bongocat toggle functionality (Install Bongocat first)"
+    echo "  ./scripts/test_toggle.sh        - Test Wayvpet toggle functionality (Install Wayvpet first)"
   '';
 }

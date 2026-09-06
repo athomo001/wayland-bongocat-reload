@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Bongo Cat - Input Device Discovery Tool v1.4.0
+# wayvpet - Input Device Discovery Tool v1.4.0
 # Interactive keyboard detection by listening for actual key events
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -8,7 +8,7 @@ set -euo pipefail
 trap 'exit 0' PIPE
 
 VERSION="2.0.2"
-SCRIPT_NAME="bongocat-find-devices"
+SCRIPT_NAME="wayvpet-find-devices"
 cleanup_dir=""
 
 # Colors
@@ -211,7 +211,7 @@ interactive_detect() {
   
   # Config suggestion
   header "Add to Config"
-  echo -e "  ${BOLD}~/.config/bongocat/bongocat.conf:${NC}"
+  echo -e "  ${BOLD}~/.config/wayvpet/wayvpet.conf:${NC}"
   echo
   echo -e "  ${DIM}# Option 1: By device path (may change on reboot)${NC}"
   for entry in "${detected_keyboards[@]}"; do
@@ -260,7 +260,7 @@ quick_detect() {
   fi
   
   echo
-  echo -e "${BOLD}🐱 Bongo Cat Device Discovery${NC} v$VERSION"
+  echo -e "${BOLD}🐱 wayvpet Device Discovery${NC} v$VERSION"
   
   header "Detected Devices"
   
@@ -285,7 +285,7 @@ quick_detect() {
   
   # Config suggestion
   header "Add to Config"
-  echo -e "  ${BOLD}~/.config/bongocat/bongocat.conf:${NC}"
+  echo -e "  ${BOLD}~/.config/wayvpet/wayvpet.conf:${NC}"
   echo
   echo -e "  ${DIM}# Option 1: By device path (may change on reboot)${NC}"
   for entry in "${keyboards[@]}"; do
@@ -333,7 +333,7 @@ generate_config_lines() {
 
 show_usage() {
   cat << EOF
-${BOLD}$SCRIPT_NAME${NC} v$VERSION - Find keyboards for Bongo Cat
+${BOLD}$SCRIPT_NAME${NC} v$VERSION - Find keyboards for wayvpet
 
 ${BOLD}USAGE${NC}
     $SCRIPT_NAME [OPTIONS]

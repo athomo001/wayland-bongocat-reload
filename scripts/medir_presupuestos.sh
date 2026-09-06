@@ -6,15 +6,15 @@
 #   ./scripts/medir_presupuestos.sh [ruta-al-conf]
 set -euo pipefail
 
-CONF="${1:-bongocat.conf.example}"
-BIN=target/release/bongocat
+CONF="${1:-wayvpet.conf.example}"
+BIN=target/release/wayvpet
 
 echo "== Compilando release =="
-cargo build --release -p bongocat -p bongocatctl >/dev/null
+cargo build --release -p wayvpet -p wayvpetctl >/dev/null
 
 echo
 echo "== Tamaño de binario =="
-for b in "$BIN" target/release/bongocatctl; do
+for b in "$BIN" target/release/wayvpetctl; do
   printf '  %-28s %s bytes  (%s)\n' "$b" "$(stat -c%s "$b")" \
     "$(numfmt --to=iec --suffix=B "$(stat -c%s "$b")")"
 done

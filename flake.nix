@@ -1,5 +1,5 @@
 {
-  description = "Bongo Cat Wayland Overlay - A fun animated overlay that reacts to keyboard input";
+  description = "wayvpet Wayland Overlay - A fun animated overlay that reacts to keyboard input";
 
   # Dependencies
   inputs = {
@@ -12,10 +12,10 @@
     inputs.flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = inputs.nixpkgs.legacyPackages.${system};
-        bongocat = pkgs.callPackage ./nix/default.nix {};
+        wayvpet = pkgs.callPackage ./nix/default.nix {};
       in {
         formatter = pkgs.alejandra;
-        packages.default = bongocat;
+        packages.default = wayvpet;
         devShells.default = import ./nix/shell.nix {
           inherit pkgs;
         };

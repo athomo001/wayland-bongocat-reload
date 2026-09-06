@@ -3,10 +3,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/bongocat-common",
-    "crates/bongocat",
-    "crates/bongocatctl",
-    "crates/bongocat-config",
+    "crates/wayvpet-common",
+    "crates/wayvpet",
+    "crates/wayvpetctl",
+    "crates/wayvpet-config",
 ]
 
 [workspace.package]
@@ -15,7 +15,7 @@ license = "MIT"
 # 1.80 lo impone `ksni` (icono de bandeja, spec 0011): D-Bus puro Rust vía
 # `zbus`/`async-io`, sin `libdbus` del sistema.
 rust-version = "1.80"
-repository = "https://github.com/athomo001/wayland-bongocat-reload"
+repository = "https://github.com/athomo001/wayvpet"
 
 [profile.release]
 lto = true

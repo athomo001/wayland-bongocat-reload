@@ -2,7 +2,7 @@
 # Test script for Nix builds
 set -euo pipefail
 
-echo "🧪 Testing Nix builds for wayland-bongocat"
+echo "🧪 Testing Nix builds for wayland-wayvpet"
 echo "=========================================="
 
 command -v nix >/dev/null || { echo "❌ Nix is required"; exit 1; }
