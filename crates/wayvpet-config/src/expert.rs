@@ -114,6 +114,48 @@ pub fn gather(model: &Model) -> Vec<RawFile> {
     out
 }
 
+/// Raíces donde buscar temas (`themes/README.md`).
+fn theme_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(h) = std::env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
+        roots.push(PathBuf::from(h).join("wayvpet/themes"));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        roots.push(Path::new(&home).join(".local/share/wayvpet/themes"));
+    }
+    if let Some(dirs) = std::env::var_os("XDG_DATA_DIRS").filter(|s| !s.is_empty()) {
+        roots.extend(std::env::split_paths(&dirs).map(|d| d.join("wayvpet/themes")));
+    } else {
+        roots.push(PathBuf::from("/usr/local/share/wayvpet/themes"));
+        roots.push(PathBuf::from("/usr/share/wayvpet/themes"));
+    }
+    roots.push(PathBuf::from("themes")); // desarrollo, desde la raíz del repo
+    roots
+}
+
+/// Nombres de temas instalados (carpetas con un `theme.ini`), ordenados y sin
+/// repetir, con `"embedded"` primero. Para cuando no hay instancia a la que
+/// pedir `THEME list`.
+#[must_use]
+pub fn installed_themes() -> Vec<String> {
+    let mut out = vec!["embedded".to_owned()];
+    let mut seen = std::collections::BTreeSet::new();
+    for root in theme_roots() {
+        let Ok(rd) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            if e.path().join("theme.ini").is_file() {
+                if let Some(n) = e.file_name().to_str() {
+                    if seen.insert(n.to_owned()) {
+                        out.push(n.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Localiza la carpeta de un tema por nombre (o la usa tal cual si es una ruta).
 /// Mismas rutas que `themes/README.md`.
 fn theme_dir(name: &str) -> Option<PathBuf> {

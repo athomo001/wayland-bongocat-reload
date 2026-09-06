@@ -72,12 +72,25 @@ struct App {
     ping_fails: u8,
     /// Ficheros `.ini` abiertos en el modo experto (vacío hasta entrar ahí).
     raw: Vec<expert::RawFile>,
+    /// Asistente de primer uso: `Some` mientras no haya `wayvpet.conf`.
+    wizard: Option<Wizard>,
+}
+
+/// Estado del asistente de primer uso (spec 0007 M5).
+struct Wizard {
+    step: u8,
+    themes: Vec<String>,
 }
 
 impl App {
     fn new(instance: String) -> Self {
         let model = Model::load(opt(&instance));
         let tied_to_instance = model.source == Source::Instance;
+        // Primer uso: sin instancia y sin fichero → guía en 3 pasos.
+        let wizard = (model.source == Source::Defaults).then(|| Wizard {
+            step: 0,
+            themes: expert::installed_themes(),
+        });
         Self {
             model,
             section: Section::Position,
@@ -87,6 +100,7 @@ impl App {
             last_ping: Instant::now(),
             ping_fails: 0,
             raw: Vec::new(),
+            wizard,
         }
     }
 
@@ -128,6 +142,10 @@ fn opt(s: &str) -> Option<&str> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.wizard.is_some() {
+            self.wizard_ui(ctx);
+            return;
+        }
         self.watch_instance(ctx);
         self.top_bar(ctx);
         self.side_nav(ctx);
@@ -440,6 +458,139 @@ fn screen_map(ui: &mut egui::Ui, model: &mut Model) {
         let _ = model.set("cat_y_offset", &ny.to_string());
     }
     ui.small("Arrastra el punto para colocar el vpet (aproximado; afina con los deslizadores).");
+}
+
+impl App {
+    /// Asistente de primer uso: 3 pasos → crea `wayvpet.conf`.
+    fn wizard_ui(&mut self, ctx: &egui::Context) {
+        let Some(w) = self.wizard.as_ref() else {
+            return;
+        };
+        let step = w.step;
+        let mut goto: Option<u8> = None;
+        let mut finish = false;
+        let mut skip = false;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(10.0);
+            ui.heading("Bienvenido a wayvpet");
+            ui.label("Vamos a crear tu configuración. Puedes cambiarlo todo luego.");
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("Paso {} de 3", step + 1))
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            ui.add_space(10.0);
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match step {
+                    0 => {
+                        ui.strong("Posición y tamaño");
+                        ui.small("Dónde aparece el vpet y cómo de grande.");
+                        ui.add_space(8.0);
+                        for key in ["cat_align", "cat_x_offset", "cat_y_offset", "cat_height"] {
+                            if let Some(m) = FIELDS.iter().find(|f| f.key == key) {
+                                field_row(ui, &mut self.model, &mut self.edits, m);
+                            }
+                        }
+                    }
+                    1 => {
+                        ui.strong("Entrada");
+                        ui.small(
+                            "El teclado se detecta solo. Aquí solo el ratón (opcional): \
+                         el vpet también anima una pata al moverlo o clicar.",
+                        );
+                        ui.add_space(8.0);
+                        for key in ["enable_mouse", "mouse_paw"] {
+                            if let Some(m) = FIELDS.iter().find(|f| f.key == key) {
+                                field_row(ui, &mut self.model, &mut self.edits, m);
+                            }
+                        }
+                    }
+                    _ => {
+                        ui.strong("Tema");
+                        ui.small("El aspecto del vpet. Puedes cambiarlo cuando quieras.");
+                        ui.add_space(8.0);
+                        let active = self.model.active_theme().to_owned();
+                        ui.horizontal_wrapped(|ui| {
+                            for name in &self.wizard.as_ref().unwrap().themes {
+                                let is_active = *name == active;
+                                let label = if name == "embedded" {
+                                    "vpet embebido".to_owned()
+                                } else {
+                                    name.clone()
+                                };
+                                if ui.selectable_label(is_active, label).clicked() {
+                                    self.model.cfg.theme = if name == "embedded" {
+                                        String::new()
+                                    } else {
+                                        name.clone()
+                                    };
+                                }
+                            }
+                        });
+                    }
+                });
+        });
+
+        egui::TopBottomPanel::bottom("wiz_nav").show(ctx, |ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Omitir (valores por defecto)").clicked() {
+                    skip = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if step == 2 {
+                        if ui.button("Crear configuración").clicked() {
+                            finish = true;
+                        }
+                    } else if ui.button("Siguiente").clicked() {
+                        goto = Some(step + 1);
+                    }
+                    if step > 0 && ui.button("Atrás").clicked() {
+                        goto = Some(step - 1);
+                    }
+                });
+            });
+            ui.add_space(6.0);
+        });
+
+        if let Some(s) = goto {
+            if let Some(w) = self.wizard.as_mut() {
+                w.step = s;
+            }
+        }
+        if skip {
+            self.model.cfg = wayvpet_common::config::factory_config();
+            finish = true;
+        }
+        if finish {
+            self.finish_wizard();
+        }
+    }
+
+    /// Escribe la config del asistente al `wayvpet.conf` y sale del modo guía.
+    fn finish_wizard(&mut self) {
+        let path = self
+            .model
+            .path
+            .clone()
+            .or_else(wayvpet_common::io::resolve_config_path_real);
+        match path {
+            Some(p) => match wayvpet_common::io::save_atomic(&p, &self.model.cfg.to_ini()) {
+                Ok(()) => {
+                    self.wizard = None;
+                    self.reload();
+                    self.model.status = format!("configuración creada en {}", p.display());
+                }
+                Err(e) => self.model.status = format!("no se pudo escribir {}: {e}", p.display()),
+            },
+            None => self.model.status = "no sé dónde crear el wayvpet.conf (¿HOME?)".to_owned(),
+        }
+    }
 }
 
 /// ¿Se acaba de pulsar Enter en este `ui`?
