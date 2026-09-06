@@ -29,6 +29,7 @@ fn extract_clean_character(
     rh: u32,
     scale: f32,
     floor_y: u32,
+    include_props: bool,
 ) -> RgbaImage {
     let sub = image::imageops::crop_imm(raw_img, rx, ry, rw, rh).to_image();
 
@@ -126,22 +127,27 @@ fn extract_clean_character(
         cb_max_y = cb_max_y.max(y);
     }
 
-    // Incluir componentes adyacentes de props (ratón, comida, almohada)
-    for comp in &components[1..] {
-        let is_near = comp.iter().any(|&(x, y)| {
-            main_comp.iter().any(|&(mx, my)| {
-                let dx = (x as i32 - mx as i32).abs();
-                let dy = (y as i32 - my as i32).abs();
-                dx * dx + dy * dy <= 900
-            })
-        });
-        if is_near && comp.len() >= 30 {
-            for &(x, y) in comp {
-                body_mask[(y * bw + x) as usize] = true;
-                cb_min_x = cb_min_x.min(x);
-                cb_max_x = cb_max_x.max(x);
-                cb_min_y = cb_min_y.min(y);
-                cb_max_y = cb_max_y.max(y);
+    // Incluir componentes adyacentes de props SOLO si se solicita explícitamente
+    // y NUNCA por encima de la mitad del cuerpo (evita patas flotantes de filas superiores)
+    if include_props {
+        let mid_y = (cb_min_y + cb_max_y) / 2;
+        for comp in &components[1..] {
+            let is_near_bottom = comp.iter().any(|&(x, y)| {
+                y >= mid_y
+                    && main_comp.iter().any(|&(mx, my)| {
+                        let dx = (x as i32 - mx as i32).abs();
+                        let dy = (y as i32 - my as i32).abs();
+                        dx * dx + dy * dy <= 900
+                    })
+            });
+            if is_near_bottom && comp.len() >= 30 {
+                for &(x, y) in comp {
+                    body_mask[(y * bw + x) as usize] = true;
+                    cb_min_x = cb_min_x.min(x);
+                    cb_max_x = cb_max_x.max(x);
+                    cb_min_y = cb_min_y.min(y);
+                    cb_max_y = cb_max_y.max(y);
+                }
             }
         }
     }
@@ -407,38 +413,39 @@ fn main() {
 
     // 1. Poses básicas con escala fija y anclaje al suelo consistente
     println!("Extrayendo poses base limpias (escala fija 0.35, suelo 118)...");
-    let s_idle = extract_clean_character(&raw_img, 45, 20, 278, 325, 0.35, 118);
-    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, 118);
-    let s_eat = extract_clean_character(&raw_img, 375, 680, 300, 325, 0.35, 118);
-    let s_angry = extract_clean_character(&raw_img, 335, 335, 330, 345, 0.35, 118);
+    let s_idle = extract_clean_character(&raw_img, 45, 20, 278, 325, 0.35, 118, false);
+    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, 118, true); // con almohada
+    let s_eat = extract_clean_character(&raw_img, 375, 680, 300, 325, 0.35, 118, true); // con cuenco de comida
+    let s_angry = extract_clean_character(&raw_img, 335, 335, 330, 345, 0.35, 118, false);
 
-    // 2. Caminata de 4 patas auténtica (7 fotogramas secuenciales con escala fija 0.35 y suelo 118)
+    // 2. Caminata de 4 patas auténtica (7 fotogramas secuenciales limpios con cajas exactas)
+    // Coordenadas calculadas para que no capture residuos de filas adyacentes ni patas flotantes
     println!("Extrayendo 7 fotogramas de caminata limpios...");
-    let w0 = extract_clean_character(&raw_walk, 20, 100, 340, 320, 0.35, 118);
-    let w1 = extract_clean_character(&raw_walk, 360, 100, 330, 320, 0.35, 118);
-    let w2 = extract_clean_character(&raw_walk, 690, 100, 320, 320, 0.35, 118);
-    let w3 = extract_clean_character(&raw_walk, 1010, 100, 350, 370, 0.35, 118);
-    let w4 = extract_clean_character(&raw_walk, 110, 380, 360, 320, 0.35, 118);
-    let w5 = extract_clean_character(&raw_walk, 500, 380, 360, 320, 0.35, 118);
-    let w6 = extract_clean_character(&raw_walk, 890, 380, 360, 320, 0.35, 118);
+    let w0 = extract_clean_character(&raw_walk, 15, 150, 350, 275, 0.35, 118, false);
+    let w1 = extract_clean_character(&raw_walk, 375, 150, 310, 275, 0.35, 118, false);
+    let w2 = extract_clean_character(&raw_walk, 680, 150, 320, 275, 0.35, 118, false);
+    let w3 = extract_clean_character(&raw_walk, 975, 150, 380, 275, 0.35, 118, false);
+    let w4 = extract_clean_character(&raw_walk, 85, 425, 375, 250, 0.35, 118, false);
+    let w5 = extract_clean_character(&raw_walk, 520, 425, 340, 250, 0.35, 118, false);
+    let w6 = extract_clean_character(&raw_walk, 900, 425, 360, 250, 0.35, 118, false);
 
     // 3. Salto y caza completa del ratón (6 fotogramas secuenciales con escala fija 0.38)
     println!("Extrayendo 6 fotogramas de caza del ratón...");
-    let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, 118);
-    let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, 118);
-    let p2 = extract_clean_character(&raw_pounce, 470, 240, 240, 210, 0.38, 104);
-    let p3 = extract_clean_character(&raw_pounce, 715, 230, 205, 240, 0.38, 110);
-    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, 118);
-    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, 118);
+    let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, 118, false);
+    let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, 118, false);
+    let p2 = extract_clean_character(&raw_pounce, 470, 240, 240, 210, 0.38, 104, false);
+    let p3 = extract_clean_character(&raw_pounce, 715, 230, 205, 240, 0.38, 110, false);
+    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, 118, true); // ratón atrapado
+    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, 118, true); // ratón en brazos
 
     // 4. Aseo felino auténtico (6 fotogramas secuenciales con escala fija 0.33 y suelo 118)
     println!("Extrayendo 6 fotogramas de aseo felino...");
-    let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, 118);
-    let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, 118);
-    let g2 = extract_clean_character(&raw_groom, 465, 180, 210, 350, 0.33, 118);
-    let g3 = extract_clean_character(&raw_groom, 665, 180, 210, 350, 0.33, 118);
-    let g4 = extract_clean_character(&raw_groom, 895, 180, 205, 350, 0.33, 118);
-    let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, 118);
+    let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, 118, false);
+    let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, 118, false);
+    let g2 = extract_clean_character(&raw_groom, 465, 180, 210, 350, 0.33, 118, false);
+    let g3 = extract_clean_character(&raw_groom, 665, 180, 210, 350, 0.33, 118, false);
+    let g4 = extract_clean_character(&raw_groom, 895, 180, 205, 350, 0.33, 118, false);
+    let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, 118, false);
 
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
