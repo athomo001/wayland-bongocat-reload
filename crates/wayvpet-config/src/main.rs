@@ -179,6 +179,8 @@ impl eframe::App for App {
                     if self.section == Section::Position {
                         screen_map(ui, &mut self.model);
                         ui.add_space(10.0);
+                        monitor_picker(ui, &mut self.model);
+                        ui.add_space(10.0);
                     }
                     for f in FIELDS.iter().filter(|f| f.section == self.section) {
                         field_row(ui, &mut self.model, &mut self.edits, f);
@@ -591,6 +593,43 @@ impl App {
             None => self.model.status = "no sé dónde crear el wayvpet.conf (¿HOME?)".to_owned(),
         }
     }
+}
+
+/// Selector de monitor: una casilla por salida conectada (`OUTPUTS`). El
+/// conjunto marcado forma la clave `monitor` (lista por comas; vacío = todas /
+/// la que elija el compositor). El cambio se aplica **al reiniciar**.
+fn monitor_picker(ui: &mut egui::Ui, model: &mut Model) {
+    if model.outputs.is_empty() {
+        return; // sin instancia no sabemos qué salidas hay; queda el campo de texto
+    }
+    ui.strong("Monitores");
+    let current: std::collections::BTreeSet<String> = model
+        .value("monitor")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut next = current.clone();
+    ui.horizontal_wrapped(|ui| {
+        for name in &model.outputs {
+            let mut on = next.contains(name);
+            if ui.checkbox(&mut on, name).changed() {
+                if on {
+                    next.insert(name.clone());
+                } else {
+                    next.remove(name);
+                }
+            }
+        }
+    });
+    if next != current {
+        let joined = next.iter().cloned().collect::<Vec<_>>().join(",");
+        let _ = model.set("monitor", &joined);
+        model.status = "monitores: se aplica al reiniciar wayvpet".to_owned();
+    }
+    ui.small("Vacío = donde elija el compositor. El cambio surte efecto al reiniciar.");
 }
 
 /// ¿Se acaba de pulsar Enter en este `ui`?

@@ -1533,6 +1533,19 @@ impl State {
             // La usa la ventana `wayvpet-config` (spec 0007) para cargar su
             // modelo de un tirón en vez de `GET` clave por clave.
             "DUMP" => self.config.to_ini(),
+            // Nombres de las salidas conectadas, separados por espacio. La
+            // ventana `wayvpet-config` (spec 0007) rellena con esto el selector
+            // de monitor.
+            "OUTPUTS" => {
+                let mut names: Vec<String> = self
+                    .output_state
+                    .outputs()
+                    .filter_map(|o| self.output_state.info(&o).and_then(|i| i.name))
+                    .collect();
+                names.sort();
+                names.dedup();
+                names.join(" ")
+            }
             "THEME" => match arg1 {
                 "" => "ERR uso: THEME list | next | <nombre>".to_string(),
                 "list" => {

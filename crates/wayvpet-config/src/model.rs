@@ -55,6 +55,8 @@ pub struct Model {
     /// Tamaño lógico de la salida (para el "mapa de pantalla"). Sin instancia,
     /// un valor por defecto razonable.
     pub screen: (i32, i32),
+    /// Nombres de las salidas conectadas (`OUTPUTS`). Vacío si no hay instancia.
+    pub outputs: Vec<String>,
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -74,6 +76,7 @@ impl Model {
                 roaming: instance_roaming(instance.as_deref()),
                 themes: instance_themes(instance.as_deref()),
                 screen: instance_screen(instance.as_deref()),
+                outputs: instance_outputs(instance.as_deref()),
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -91,6 +94,7 @@ impl Model {
                 roaming: false,
                 themes: Vec::new(),
                 screen: (1920, 1080),
+                outputs: Vec::new(),
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -102,6 +106,7 @@ impl Model {
                 roaming: false,
                 themes: Vec::new(),
                 screen: (1920, 1080),
+                outputs: Vec::new(),
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -182,6 +187,7 @@ impl Model {
         self.roaming = fresh.roaming;
         self.themes = fresh.themes;
         self.screen = fresh.screen;
+        self.outputs = fresh.outputs;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
@@ -343,6 +349,14 @@ fn instance_themes(instance: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Nombres de las salidas conectadas (`OUTPUTS`). Vacío si no responde.
+fn instance_outputs(instance: Option<&str>) -> Vec<String> {
+    match ipc::send_request(instance, "OUTPUTS") {
+        Ok(r) if !r.starts_with("ERR") => r.split_whitespace().map(str::to_owned).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Pide `DUMP` a la instancia y parsea la respuesta. `None` si no hay instancia
 /// o la respuesta no es una config.
 fn load_from_instance(instance: Option<&str>) -> Option<(Config, String)> {
@@ -367,6 +381,7 @@ mod tests {
             roaming: false,
             themes: Vec::new(),
             screen: (1920, 1080),
+            outputs: Vec::new(),
             instance: None,
             path: None,
             status: String::new(),
