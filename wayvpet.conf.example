@@ -77,6 +77,19 @@ mouse_move_interval=50
 # monitor=eDP-1
 # monitor=eDP-1,HDMI-A-1
 
+# Ajustes POR MONITOR (spec 0008 §8.4). Todo lo de arriba es la "base"; una
+# sección [monitor:NOMBRE] la pisa solo para esa salida. Las claves válidas son
+# las mismas del fichero. `wayvpetctl set -m NOMBRE clave valor` escribe aquí, y
+# el modo edición persiste la posición en la sección del monitor donde arrastras.
+#
+#   [monitor:eDP-1]
+#   cat_height=90
+#   theme=pink
+#
+#   [monitor:HDMI-A-1]
+#   cat_height=140
+#   cat_x_offset=200
+
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ ANIMACIÓN                                                                   │
 # └─────────────────────────────────────────────────────────────────────────────┘

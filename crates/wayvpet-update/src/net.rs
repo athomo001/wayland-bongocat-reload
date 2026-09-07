@@ -42,6 +42,8 @@ struct GhRelease {
     #[serde(default)]
     html_url: String,
     #[serde(default)]
+    published_at: String,
+    #[serde(default)]
     body: String,
     #[serde(default)]
     assets: Vec<GhAsset>,
@@ -54,7 +56,7 @@ struct GhAsset {
     browser_download_url: String,
 }
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(TIMEOUT)
         .timeout_read(TIMEOUT)
@@ -124,6 +126,7 @@ fn try_check(agent: &ureq::Agent, api_base: &str, installed: &str) -> Result<Upd
         checked_at: String::new(), // lo pone `check`
         installed: Some(installed.to_string()),
         latest: Some(latest),
+        date: (!rel.published_at.is_empty()).then(|| rel.published_at.clone()),
         url: (!rel.html_url.is_empty()).then(|| rel.html_url.clone()),
         notes: (!notes.is_empty()).then_some(notes),
         assets,
@@ -201,7 +204,7 @@ fn strip_v(s: &str) -> &str {
 
 /// Mensaje de error **corto**. `ureq::Error` puede acarrear el cuerpo entero de
 /// la respuesta; aquí solo queremos "HTTP 403" o "transporte: …".
-fn short_err(e: ureq::Error) -> String {
+pub(crate) fn short_err(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, _) => format!("HTTP {code}"),
         ureq::Error::Transport(t) => format!("transporte: {}", t.kind()),

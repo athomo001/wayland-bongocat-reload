@@ -29,10 +29,14 @@ semver = "1"
 # Cliente HTTPS del chequeo real. `rustls` puro Rust (sin OpenSSL del sistema).
 # Solo con `--features net`, y solo lo enlaza el binario `wayvpet-update-check`.
 ureq = { version = "2.10", default-features = false, features = ["tls"], optional = true }
+# SHA-256 para verificar la descarga (M5). `ring` ya está en el árbol vía
+# `rustls`, así que no añade nada nuevo al lock; solo lo hacemos dependencia
+# directa para poder usar `ring::digest`.
+ring = { version = "0.17", optional = true }
 
 [features]
 default = []
-net = ["dep:ureq"]
+net = ["dep:ureq", "dep:ring"]
 
 [[bin]]
 name = "wayvpet-update-check"

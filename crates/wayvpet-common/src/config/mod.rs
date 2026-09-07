@@ -282,17 +282,78 @@ pub fn factory_config() -> Config {
     parse_ini(EXAMPLE_INI).0
 }
 
+/// Overrides de una sección `[monitor:NOMBRE]` del `.conf` (spec 0008 §8.4): los
+/// pares `clave=valor` **sin aplicar**. Cada instancia hija, que conoce su
+/// `--monitor`, los aplica sobre la base con [`apply_monitor_section`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorSection {
+    /// Nombre de la salida (`eDP-1`, `HDMI-A-1`…), tal cual en la cabecera.
+    pub name: String,
+    /// Pares `clave=valor` de la sección, en orden de aparición.
+    pub overrides: Vec<(String, String)>,
+}
+
+/// `[monitor:NOMBRE]` → `Some(Some("NOMBRE"))`; otra cabecera `[...]` cualquiera
+/// → `Some(None)` (se ignora con aviso); no es cabecera de sección → `None`.
+fn section_header(raw: &str) -> Option<Option<&str>> {
+    let inner = raw.trim().strip_prefix('[')?.strip_suffix(']')?;
+    match inner.trim().strip_prefix("monitor:") {
+        Some(name) if !name.trim().is_empty() => Some(Some(name.trim())),
+        _ => Some(None),
+    }
+}
+
 /// Parsea el texto de un `wayvpet.conf`. Las claves inválidas o desconocidas se
 /// **descartan con un aviso**; la configuración resultante siempre es usable.
 /// Equivale a `load_config` sin la parte de fichero/dispositivos.
+///
+/// Las secciones `[monitor:NOMBRE]` (spec 0008 §8.4) se **ignoran** aquí; usa
+/// [`parse_ini_sections`] para recuperarlas.
 #[must_use]
 pub fn parse_ini(input: &str) -> (Config, Vec<String>) {
+    let (cfg, _sections, warnings) = parse_ini_sections(input);
+    (cfg, warnings)
+}
+
+/// Como [`parse_ini`] pero además devuelve las secciones `[monitor:NOMBRE]`. Las
+/// claves **antes** de cualquier cabecera forman la base (la `Config`); las de
+/// una sección se guardan sin aplicar (se validan el tipo, no el rango).
+#[must_use]
+pub fn parse_ini_sections(input: &str) -> (Config, Vec<MonitorSection>, Vec<String>) {
     let mut cfg = Config::default();
     let mut warnings = Vec::new();
+    let mut sections: Vec<MonitorSection> = Vec::new();
+    // `None` = base; `Some(i)` = índice en `sections`.
+    let mut current: Option<usize> = None;
 
     for (n, raw) in input.lines().enumerate() {
         let lineno = n + 1;
         if is_comment_or_blank(raw) {
+            continue;
+        }
+        if let Some(header) = section_header(raw) {
+            match header {
+                Some(mon) => {
+                    let idx = sections
+                        .iter()
+                        .position(|s| s.name == mon)
+                        .unwrap_or_else(|| {
+                            sections.push(MonitorSection {
+                                name: mon.to_string(),
+                                overrides: Vec::new(),
+                            });
+                            sections.len() - 1
+                        });
+                    current = Some(idx);
+                }
+                None => {
+                    warnings.push(format!(
+                        "línea {lineno}: cabecera de sección no reconocida '{}' (solo [monitor:NOMBRE]); las claves siguientes van a la base",
+                        raw.trim()
+                    ));
+                    current = None;
+                }
+            }
             continue;
         }
         let Some(Line { key, value, .. }) = split_line(raw) else {
@@ -303,13 +364,50 @@ pub fn parse_ini(input: &str) -> (Config, Vec<String>) {
             warnings.push(format!("línea {lineno} sin clave: {}", raw.trim()));
             continue;
         }
-        if let Err(msg) = apply_kv(&mut cfg, &key, &value) {
-            warnings.push(format!("línea {lineno}: {msg}"));
+        match current {
+            None => {
+                if let Err(msg) = apply_kv(&mut cfg, &key, &value) {
+                    warnings.push(format!("línea {lineno}: {msg}"));
+                }
+            }
+            Some(i) => {
+                // En una sección solo se valida el tipo; el `clamp` de rango lo
+                // hace `apply_monitor_section` al aplicar en la instancia.
+                if let Err(msg) = check_kv(&key, &value) {
+                    warnings.push(format!(
+                        "línea {lineno} [monitor:{}]: {msg}",
+                        sections[i].name
+                    ));
+                } else {
+                    sections[i].overrides.push((key, value));
+                }
+            }
         }
     }
 
     validate(&mut cfg, &mut warnings);
-    (cfg, warnings)
+    (cfg, sections, warnings)
+}
+
+/// Aplica sobre `cfg` la sección `[monitor:name]` cuyo nombre coincida **exacto**
+/// con la salida. Devuelve los avisos (recortes de rango, claves raras). Si
+/// ninguna sección coincide, no toca nada.
+pub fn apply_monitor_section(
+    cfg: &mut Config,
+    sections: &[MonitorSection],
+    name: &str,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(sec) = sections.iter().find(|s| s.name == name) else {
+        return warnings;
+    };
+    for (k, v) in &sec.overrides {
+        if let Err(msg) = apply_kv(cfg, k, v) {
+            warnings.push(format!("[monitor:{name}] {k}: {msg}"));
+        }
+    }
+    validate(cfg, &mut warnings);
+    warnings
 }
 
 impl std::str::FromStr for Config {

@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "net")]
+pub mod download;
+#[cfg(feature = "net")]
 pub mod net;
 
 /// Tope de tamaño del `update-check.json` al leerlo. Lo escribe el propio hijo y
@@ -60,6 +62,8 @@ pub struct UpdateState {
     pub installed: Option<String>,
     /// `tag_name` del último release estable, sin la `v`.
     pub latest: Option<String>,
+    /// Fecha de publicación del release (`published_at`, ISO-8601), si la trae.
+    pub date: Option<String>,
     /// URL de la página del release (para "Ver en el navegador").
     pub url: Option<String>,
     /// Notas del release en texto plano, ya recortadas por el hijo.
@@ -214,6 +218,38 @@ pub fn state_path(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 #[must_use]
 pub fn state_path_real() -> Option<PathBuf> {
     state_path(|k| std::env::var(k).ok())
+}
+
+/// Ruta del aviso plano (`update-notice`), al lado del JSON de estado. Lo
+/// escribe el helper cuando hay versión nueva; lo lee `wayvpet` para pintar el
+/// ítem del tray **sin parsear JSON ni enlazar este crate** (spec 0015 M4).
+#[must_use]
+pub fn notice_path(state_path: &Path) -> PathBuf {
+    state_path.with_file_name("update-notice")
+}
+
+/// Escribe —o borra— el aviso plano según el estado. Si hay una versión estable
+/// más nueva que `installed`, escribe `latest=…` y `url=…`; si no (al día, o el
+/// chequeo falló), **borra** el fichero para no dejar un aviso viejo colgado.
+///
+/// No es atómico a propósito: un lector que lo pille a medias verá algún campo
+/// ausente → lo trata como "sin aviso", y el helper lo reescribe entero en
+/// milisegundos. Es una pista, no un dato crítico (ese es el JSON).
+///
+/// # Errores
+/// E/S al escribir o borrar el fichero.
+pub fn write_notice(state_path: &Path, state: &UpdateState, installed: &str) -> io::Result<()> {
+    let path = notice_path(state_path);
+    if state.update_available(installed) {
+        let latest = state.latest.as_deref().unwrap_or_default();
+        let url = state.url.as_deref().unwrap_or_default();
+        std::fs::write(&path, format!("latest={latest}\nurl={url}\n"))
+    } else {
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Lee y parsea el fichero de estado.

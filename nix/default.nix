@@ -47,9 +47,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
     # `wayvpet-vpets`, pero Nix no tiene la restricción de tamaño y el canal es
     # `distro` (sin aviso de versión), así que aquí se incluyen. Van al mismo
     # `themes/` (sin el prefijo `vpets/`) para que wayvpet los encuentre por nombre.
-    find vpets -type f | while read -r f; do
-      install -Dm644 "$f" "$out/share/wayvpet/themes/''${f#vpets/}"
-    done
+    if [ -d vpets ]; then
+      find vpets -type f | while read -r f; do
+        install -Dm644 "$f" "$out/share/wayvpet/themes/''${f#vpets/}"
+      done
+    fi
 
     runHook postInstall
   '';

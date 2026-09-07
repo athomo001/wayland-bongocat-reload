@@ -6,7 +6,7 @@
 //! (`src/config/config.c`). El escaneo de `/dev/input` por nombre vive en el
 //! binario `wayvpet` (necesita `evdev`).
 
-use crate::config::{parse_ini, Config};
+use crate::config::{parse_ini_sections, Config, MonitorSection};
 use std::path::{Path, PathBuf};
 
 /// Dispositivo de teclado que usa el C cuando no hay ninguno configurado.
@@ -20,6 +20,10 @@ pub struct Loaded {
     pub warnings: Vec<String>,
     /// Ruta de la que se leyó, o `None` si se usaron solo los valores por defecto.
     pub path: Option<PathBuf>,
+    /// Secciones `[monitor:NOMBRE]` del fichero (spec 0008 §8.4), sin aplicar.
+    /// La instancia que conoce su `--monitor` las aplica con
+    /// [`crate::config::apply_monitor_section`].
+    pub monitor_sections: Vec<MonitorSection>,
 }
 
 /// Busca el `wayvpet.conf` en el orden del C:
@@ -68,33 +72,33 @@ pub fn load(explicit: Option<&Path>) -> std::io::Result<Loaded> {
         None => resolve_config_path_real(),
     };
 
+    let defaults = || Loaded {
+        config: Config::default(),
+        warnings: Vec::new(),
+        path: None,
+        monitor_sections: Vec::new(),
+    };
+
     let Some(path) = path else {
-        return Ok(Loaded {
-            config: Config::default(),
-            warnings: Vec::new(),
-            path: None,
-        });
+        return Ok(defaults());
     };
 
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         // Ruta explícita ausente sí es error; el C también falla ahí.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && explicit.is_none() => {
-            return Ok(Loaded {
-                config: Config::default(),
-                warnings: Vec::new(),
-                path: None,
-            });
+            return Ok(defaults());
         }
         Err(e) => return Err(e),
     };
 
-    let (mut config, warnings) = parse_ini(&text);
+    let (mut config, monitor_sections, warnings) = parse_ini_sections(&text);
     apply_default_keyboard_device(&mut config);
     Ok(Loaded {
         config,
         warnings,
         path: Some(path),
+        monitor_sections,
     })
 }
 
@@ -133,6 +137,76 @@ pub fn save_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+/// Ruta del fichero de estado del aviso de nueva versión (spec 0015):
+/// `$XDG_STATE_HOME/wayvpet/update-check.json`, o
+/// `$HOME/.local/state/wayvpet/update-check.json`. `env` se inyecta en tests.
+/// El helper `wayvpet-update-check` lo escribe; `wayvpet` (disparo, M3) y
+/// `wayvpetctl update` (M6) lo leen.
+pub fn update_state_path<E>(env: E) -> Option<PathBuf>
+where
+    E: Fn(&str) -> Option<String>,
+{
+    if let Some(xdg) = env("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
+        return Some(Path::new(&xdg).join("wayvpet/update-check.json"));
+    }
+    let home = env("HOME").filter(|s| !s.is_empty())?;
+    Some(Path::new(&home).join(".local/state/wayvpet/update-check.json"))
+}
+
+/// [`update_state_path`] con el entorno real.
+#[must_use]
+pub fn update_state_path_real() -> Option<PathBuf> {
+    update_state_path(|k| std::env::var(k).ok())
+}
+
+/// Directorios de datos XDG en orden de prioridad: `$XDG_DATA_HOME` (o
+/// `~/.local/share`), luego cada entrada de `$XDG_DATA_DIRS` (por defecto
+/// `/usr/local/share:/usr/share`). Mismo criterio que la búsqueda de temas.
+fn xdg_data_dirs<E>(env: E) -> Vec<PathBuf>
+where
+    E: Fn(&str) -> Option<String>,
+{
+    let mut dirs = Vec::new();
+    if let Some(h) = env("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(h));
+    } else if let Some(home) = env("HOME").filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(home).join(".local/share"));
+    }
+    let list = env("XDG_DATA_DIRS")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    for d in list.split(':').filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(d));
+    }
+    dirs
+}
+
+/// Marca del canal de instalación (spec 0015 §"Marca del canal"): el contenido
+/// de `<datadir>/wayvpet/install-channel` (`source` / `deb` / `rpm` / `arch` /
+/// `distro`), o `None` si no hay fichero. Con `distro`, el aviso de nueva
+/// versión se calla: actualizar es cosa del gestor de paquetes.
+pub fn install_channel<E>(env: E) -> Option<String>
+where
+    E: Fn(&str) -> Option<String>,
+{
+    for dir in xdg_data_dirs(&env) {
+        let p = dir.join("wayvpet/install-channel");
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            let word = s.trim();
+            if !word.is_empty() {
+                return Some(word.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// [`install_channel`] con el entorno real.
+#[must_use]
+pub fn install_channel_real() -> Option<String> {
+    install_channel(|k| std::env::var(k).ok())
 }
 
 /// Si no se configuró ningún teclado (ni por ruta ni por nombre), añade
@@ -215,6 +289,51 @@ mod tests {
         assert_eq!(loaded.config.cat_height, 90);
         assert_eq!(loaded.config.keyboard_devices, [DEFAULT_KEYBOARD_DEVICE]);
         assert_eq!(loaded.path.as_deref(), Some(p.as_path()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_state_path_prefiere_xdg_state_home() {
+        let env = |k: &str| match k {
+            "XDG_STATE_HOME" => Some("/st".to_string()),
+            "HOME" => Some("/home/u".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            update_state_path(env),
+            Some(PathBuf::from("/st/wayvpet/update-check.json"))
+        );
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        assert_eq!(
+            update_state_path(env),
+            Some(PathBuf::from(
+                "/home/u/.local/state/wayvpet/update-check.json"
+            ))
+        );
+        assert_eq!(update_state_path(no_env), None);
+    }
+
+    #[test]
+    fn install_channel_lee_la_primera_coincidencia() {
+        let dir = std::env::temp_dir().join(format!("wayvpet-ch-{}", std::process::id()));
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(a.join("wayvpet")).unwrap();
+        std::fs::create_dir_all(b.join("wayvpet")).unwrap();
+        std::fs::write(b.join("wayvpet/install-channel"), "deb\n").unwrap();
+
+        // `a` (XDG_DATA_HOME) no tiene el fichero → cae a `b` (XDG_DATA_DIRS).
+        let env = |k: &str| match k {
+            "XDG_DATA_HOME" => Some(a.to_string_lossy().into_owned()),
+            "XDG_DATA_DIRS" => Some(b.to_string_lossy().into_owned()),
+            _ => None,
+        };
+        assert_eq!(install_channel(env), Some("deb".to_string()));
+
+        // Sin fichero en ningún lado → None.
+        let env = |k: &str| (k == "XDG_DATA_HOME").then(|| a.to_string_lossy().into_owned());
+        assert_eq!(install_channel(env), None);
 
         std::fs::remove_dir_all(&dir).ok();
     }

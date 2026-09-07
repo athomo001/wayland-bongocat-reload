@@ -75,7 +75,7 @@ use crate::cosmic::{
     zcosmic_toplevel_handle_v1::{self as cosmic_handle, ZcosmicToplevelHandleV1},
     zcosmic_toplevel_info_v1::{self as cosmic_info, ZcosmicToplevelInfoV1},
 };
-use crate::{input, input_child, ipc, theme, tray, watch};
+use crate::{input, input_child, ipc, theme, tray, update_check, watch};
 
 /// Valores del enum `state` de `zwlr_foreign_toplevel_handle_v1` (y del enum
 /// homónimo de `zcosmic_toplevel_handle_v1`: mismos números).
@@ -435,6 +435,7 @@ pub fn run_overlay(
         _fs_mgr: fs_mgr,
         _fs_obj: fs_obj,
         _target_output: target_output,
+        target_output_name: target_output_name.clone(),
         ipc_dirty: std::collections::HashSet::new(),
         manual_hidden: None,
         exit: false,
@@ -516,6 +517,12 @@ pub fn run_overlay(
         state.tray = tray::spawn(trtx, theme::list(), config.theme.clone());
         state.sync_tray_status();
     }
+
+    // Aviso de nueva versión (spec 0015 M3): tras montar el tray, si
+    // `check_updates=1`, lanzar UNA vez el helper `wayvpet-update-check` y
+    // olvidarlo. Silencioso si está apagado, si el canal es `distro`, si ya se
+    // comprobó hace poco, o si el helper no está instalado.
+    update_check::maybe_spawn(config.check_updates);
 
     // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
     let _ipc_guard = if config.enable_ipc {
@@ -659,6 +666,10 @@ struct State {
     _fs_obj: Option<WpFractionalScaleV1>,
     /// Salida fijada con `--monitor` (se guarda para mantener viva la proxy).
     _target_output: Option<wl_output::WlOutput>,
+    /// Nombre de esa salida (`eDP-1`…), o `None` si no se fijó ninguna. Con él,
+    /// la recarga aplica `[monitor:NOMBRE]` y `SAVE` dirige la escritura a esa
+    /// sección (spec 0008 §8.4).
+    target_output_name: Option<String>,
     /// Claves cambiadas por `SET` de IPC y aún sin `SAVE` al fichero.
     ipc_dirty: std::collections::HashSet<String>,
     /// Anulación manual del ocultado (IPC `SHOW`/`HIDE`/`TOGGLE`): `Some` fuerza
@@ -1165,7 +1176,7 @@ impl State {
         let Some(path) = self.config_path.clone() else {
             return;
         };
-        let loaded = match wayvpet_common::io::load(Some(&path)) {
+        let mut loaded = match wayvpet_common::io::load(Some(&path)) {
             Ok(l) => l,
             Err(e) => {
                 eprintln!("wayvpet: recarga falló ({e}); se mantiene la configuración");
@@ -1174,6 +1185,17 @@ impl State {
         };
         for w in &loaded.warnings {
             eprintln!("wayvpet: aviso: {w}");
+        }
+        // Config por monitor (spec 0008 §8.4): re-aplicar la sección de esta
+        // salida sobre la base recién leída.
+        if let Some(name) = self.target_output_name.as_deref() {
+            for w in wayvpet_common::config::apply_monitor_section(
+                &mut loaded.config,
+                &loaded.monitor_sections,
+                name,
+            ) {
+                eprintln!("wayvpet: aviso [monitor:{name}]: {w}");
+            }
         }
 
         let old = std::mem::replace(&mut self.config, loaded.config);
@@ -1276,6 +1298,11 @@ impl State {
                 "wayvpet {} — https://github.com/athomo001/wayvpet",
                 env!("CARGO_PKG_VERSION")
             ),
+            C::OpenUpdate => {
+                if let Some(n) = update_check::pending_notice() {
+                    update_check::open_notice(&n.url);
+                }
+            }
             C::Quit => self.exit = true,
         }
     }
@@ -1770,9 +1797,15 @@ impl State {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let mut doc = wayvpet_common::config::ConfDoc::parse(&text);
         let ini = wayvpet_common::config::ConfDoc::parse(&self.config.to_ini());
+        // Multi-monitor (spec 0008 §8.4): si esta instancia está fijada a una
+        // salida, la escritura va a su sección `[monitor:NOMBRE]`, no a la base.
+        let section = self.target_output_name.as_deref();
         for key in &self.ipc_dirty {
             if let Some(v) = ini.get(key) {
-                doc.set(key, v);
+                match section {
+                    Some(name) => doc.set_section(name, key, v),
+                    None => doc.set(key, v),
+                }
             }
         }
         match wayvpet_common::io::save_atomic(&path, &doc.render()) {

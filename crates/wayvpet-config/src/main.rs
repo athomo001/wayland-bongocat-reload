@@ -13,6 +13,7 @@
 
 mod expert;
 mod model;
+mod update_dialog;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -38,10 +39,20 @@ const SECTIONS: [Section; 8] = [
 const PING_EVERY: Duration = Duration::from_millis(1000);
 
 fn main() -> eframe::Result {
+    let argv: Vec<String> = std::env::args().collect();
+
+    // `--update-dialog` (spec 0015 M4/M5): ventana pequeña e independiente con el
+    // aviso de nueva versión. La abre el ítem "🔔 Versión nueva" del tray.
+    if argv.iter().any(|a| a == "--update-dialog") {
+        return update_dialog::run();
+    }
+
     // `--instance <NOMBRE>` preselecciona la instancia de esa salida.
-    let instance = std::env::args()
-        .skip_while(|a| a != "--instance")
+    let instance = argv
+        .iter()
+        .skip_while(|a| *a != "--instance")
         .nth(1)
+        .cloned()
         .unwrap_or_default();
 
     let options = eframe::NativeOptions {

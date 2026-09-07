@@ -67,6 +67,12 @@ jobs:
           cargo test --locked --all-targets --features net
       - name: Build del binario
         run: cargo build --release --locked --features net
+      # `wayvpet-update` tiene su propio lock y `deny.toml`; se comprueba aquí,
+      # con todas las features (incluye el árbol de `ureq`+`rustls`+`ring`).
+      - name: cargo-deny (todas las features)
+        run: |
+          cargo install --locked cargo-deny
+          cargo deny --all-features check
 
   deny:
     runs-on: ubuntu-latest
@@ -75,9 +81,3 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-      # `wayvpet-update` tiene su propio lock y política; se comprueba aparte,
-      # con todas las features (incluye el árbol de `ureq`+`rustls`).
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check --all-features
-          manifest-path: crates/wayvpet-update/Cargo.toml

@@ -188,6 +188,53 @@ fn write_state_atomic_crea_directorio_y_da_la_vuelta() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn write_notice_escribe_si_hay_version_nueva_y_borra_si_no() {
+    let dir = std::env::temp_dir().join(format!("wayvpet-notice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state_p = dir.join("update-check.json");
+    let notice_p = notice_path(&state_p);
+
+    // El JSON dice latest=0.6.0, installed=0.5.0 → se escribe el aviso plano.
+    // (El campo `installed` del propio estado manda sobre el fallback.)
+    let st = parse_state(RELEASE_JSON.as_bytes()).unwrap();
+    write_notice(&state_p, &st, "0.0.0").unwrap();
+    let body = std::fs::read_to_string(&notice_p).unwrap();
+    assert!(body.contains("latest=0.6.0"), "{body}");
+    assert!(
+        body.contains("url=https://github.com/athomo001/wayvpet/releases/tag/v0.6.0"),
+        "{body}"
+    );
+
+    // Estado "al día" (installed == latest) → el aviso se borra, no queda colgado.
+    let al_dia = UpdateState {
+        checked_at: "x".into(),
+        installed: Some("0.6.0".into()),
+        latest: Some("0.6.0".into()),
+        ..Default::default()
+    };
+    write_notice(&state_p, &al_dia, "0.0.0").unwrap();
+    assert!(
+        !notice_p.exists(),
+        "el aviso debe desaparecer si estoy al día"
+    );
+
+    // Borrar cuando no existe no es error.
+    write_notice(&state_p, &al_dia, "9.9.9").unwrap();
+
+    // Un estado de error tampoco deja aviso.
+    let err = UpdateState {
+        checked_at: "x".into(),
+        error: Some("sin red".into()),
+        ..Default::default()
+    };
+    std::fs::write(&notice_p, "latest=1.2.3\n").unwrap();
+    write_notice(&state_p, &err, "0.1.0").unwrap();
+    assert!(!notice_p.exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Ruta XDG y lectura de disco ─────────────────────────────────────────────
 
 #[test]

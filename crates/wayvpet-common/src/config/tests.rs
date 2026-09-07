@@ -193,6 +193,87 @@ fn factory_config_es_el_example_y_no_avisa() {
     assert_ne!(f, Config::default(), "fábrica ≠ default del parser");
 }
 
+// ── Secciones [monitor:NOMBRE] (spec 0008 §8.4) — T-0008-4-sections ─────────
+
+#[test]
+fn parsea_secciones_de_monitor_sin_aplicarlas() {
+    let src = "\
+cat_height=100
+fps=60
+
+[monitor:eDP-1]
+cat_height=140
+theme = miku
+
+[monitor:HDMI-A-1]
+cat_x_offset=300
+";
+    let (base, sections, w) = parse_ini_sections(src);
+    assert!(w.is_empty(), "sin avisos: {w:?}");
+    // La base NO se ve afectada por las secciones.
+    assert_eq!(base.cat_height, 100);
+    assert_eq!(base.fps, 60);
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].name, "eDP-1");
+    assert_eq!(
+        sections[0].overrides,
+        vec![
+            ("cat_height".to_string(), "140".to_string()),
+            ("theme".to_string(), "miku".to_string())
+        ]
+    );
+    assert_eq!(sections[1].name, "HDMI-A-1");
+
+    // `parse_ini` (sin secciones) da la misma base y no avisa de las cabeceras.
+    let (b2, w2) = parse_ini(src);
+    assert_eq!(b2, base);
+    assert!(w2.is_empty(), "{w2:?}");
+}
+
+#[test]
+fn aplica_base_mas_seccion_del_monitor() {
+    let src = "cat_height=100\nfps=60\n[monitor:eDP-1]\ncat_height=140\n";
+    let (mut cfg, sections, _) = parse_ini_sections(src);
+    let w = apply_monitor_section(&mut cfg, &sections, "eDP-1");
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(cfg.cat_height, 140, "la sección pisa la base");
+    assert_eq!(cfg.fps, 60, "lo no-tocado por la sección queda de la base");
+
+    // Un monitor sin sección: la config queda tal cual la base.
+    let (mut cfg2, sections2, _) = parse_ini_sections(src);
+    assert!(apply_monitor_section(&mut cfg2, &sections2, "DP-3").is_empty());
+    assert_eq!(cfg2.cat_height, 100);
+}
+
+#[test]
+fn seccion_valida_tipos_y_recorta_rango_al_aplicar() {
+    // Tipo malo en la sección → aviso al parsear, no se guarda.
+    let (_b, sections, w) = parse_ini_sections("[monitor:X]\ncat_height=alto\n");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(sections[0].overrides.is_empty());
+
+    // Fuera de rango → se guarda tal cual y se recorta al aplicar.
+    let (mut cfg, sections, w) = parse_ini_sections("[monitor:X]\ncat_height=9999\n");
+    assert!(
+        w.is_empty(),
+        "el rango no se valida al parsear la sección: {w:?}"
+    );
+    let wa = apply_monitor_section(&mut cfg, &sections, "X");
+    assert_eq!(cfg.cat_height, 512, "recortado al máximo");
+    assert_eq!(wa.len(), 1, "un aviso de recorte: {wa:?}");
+}
+
+#[test]
+fn cabecera_de_seccion_rara_avisa_y_vuelve_a_la_base() {
+    let (cfg, sections, w) = parse_ini_sections("[algo]\nfps=30\n");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(sections.is_empty());
+    assert_eq!(
+        cfg.fps, 30,
+        "las claves tras una cabecera rara van a la base"
+    );
+}
+
 #[test]
 fn comentarios_y_espacios_en_blanco() {
     let src = "# esto es un comentario\n  fps = 30  # comentario en línea\n\n   \t  \n; comentario con punto y coma\ncat_height = 100\n";

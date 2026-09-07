@@ -20,8 +20,10 @@ Uso: wayvpetctl [-c FICHERO] <orden> [args]
 
 Órdenes (fichero):
   get CLAVE          Imprime el valor efectivo de CLAVE del fichero
+                     (con -m NOMBRE: el de la sección [monitor:NOMBRE], si tiene)
   set CLAVE VALOR    Fija CLAVE=VALOR (valida el tipo; escritura atómica;
                      conserva comentarios y orden)
+                     (con -m NOMBRE: escribe en la sección [monitor:NOMBRE])
   dump              Imprime la configuración efectiva (ya validada) como INI
   default           Imprime la configuración por defecto como INI
 
@@ -44,6 +46,10 @@ Uso: wayvpetctl [-c FICHERO] <orden> [args]
   reload            Relee el .conf en la instancia
   snapshot [RUTA]   Guarda el fotograma actual en un PNG (alias: screenshot)
   stop              Le pide a la instancia que se cierre
+
+Órdenes (aviso de nueva versión, spec 0015; necesita el paquete wayvpet-update):
+  update            Imprime el estado guardado sin tocar la red
+  update --check    Fuerza una consulta a GitHub ahora y luego imprime el estado
 
 Opciones:
   -c, --config FICHERO   Ruta del wayvpet.conf (por defecto: autodetección XDG)
@@ -120,8 +126,8 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        ["get", key] => cmd_get(args.config, key),
-        ["set", key, value] => cmd_set(args.config, key, value),
+        ["get", key] => cmd_get(args.config, key, args.monitor.as_deref()),
+        ["set", key, value] => cmd_set(args.config, key, value, args.monitor.as_deref()),
         ["ping"] => cmd_ipc(args.monitor.as_deref(), "PING", "PONG"),
         ["state"] => cmd_ipc(args.monitor.as_deref(), "STATE", ""),
         ["stop"] => cmd_ipc(args.monitor.as_deref(), "QUIT", "OK"),
@@ -160,6 +166,8 @@ fn main() -> ExitCode {
             );
             ExitCode::from(2)
         }
+        ["update"] => cmd_update(&[]),
+        ["update", "--check"] | ["update", "check"] => cmd_update(&["--check"]),
         ["reload"] => cmd_ipc(args.monitor.as_deref(), "RELOAD", "OK"),
         ["snapshot"] | ["screenshot"] => cmd_ipc(args.monitor.as_deref(), "SNAPSHOT", "OK"),
         ["snapshot", path] | ["screenshot", path] => {
@@ -181,6 +189,43 @@ fn main() -> ExitCode {
         _ => {
             eprintln!("wayvpetctl: orden desconocida (prueba --help)");
             ExitCode::from(2)
+        }
+    }
+}
+
+/// `wayvpetctl update [--check]` (spec 0015 M6). Sin red: delega en el helper
+/// `wayvpet-update-check`, que lee el `update-check.json` guardado. `--check`
+/// fuerza una consulta nueva a GitHub (proceso hijo corto). Si el helper no
+/// está instalado (paquete `wayvpet-update`), lo dice y sale con código 1.
+fn cmd_update(extra: &[&str]) -> ExitCode {
+    let helper = "wayvpet-update-check";
+    let mut cmd = std::process::Command::new(helper);
+    if extra.contains(&"--check") {
+        // Lanza el chequeo (escribe el estado) y luego imprime cómo quedó.
+        match cmd.status() {
+            Ok(s) if s.success() => {}
+            Ok(_) | Err(_) => {
+                eprintln!("wayvpetctl: no pude ejecutar «{helper}» (¿instalado el paquete wayvpet-update?)");
+                return ExitCode::from(1);
+            }
+        }
+        return cmd_update(&[]);
+    }
+    match std::process::Command::new(helper).arg("--status").output() {
+        Ok(out) => {
+            print!("{}", String::from_utf8_lossy(&out.stdout));
+            if out.status.success() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(_) => {
+            eprintln!(
+                "wayvpetctl: «{helper}» no está instalado; el aviso de nueva versión \
+                 viene en el paquete «wayvpet-update»"
+            );
+            ExitCode::from(1)
         }
     }
 }
@@ -213,7 +258,7 @@ fn resolve_path(explicit: Option<PathBuf>) -> Result<PathBuf, ()> {
         .ok_or_else(|| eprintln!("wayvpetctl: no encuentro wayvpet.conf; usa -c FICHERO"))
 }
 
-fn cmd_get(explicit: Option<PathBuf>, key: &str) -> ExitCode {
+fn cmd_get(explicit: Option<PathBuf>, key: &str, monitor: Option<&str>) -> ExitCode {
     let Ok(path) = resolve_path(explicit) else {
         return ExitCode::from(1);
     };
@@ -224,7 +269,13 @@ fn cmd_get(explicit: Option<PathBuf>, key: &str) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match ConfDoc::parse(&text).get(key) {
+    let doc = ConfDoc::parse(&text);
+    // `-m NOMBRE`: valor efectivo para esa salida = sección si la tiene, si no la
+    // base (spec 0008 §8.4).
+    let value = monitor
+        .and_then(|m| doc.get_section(m, key))
+        .or_else(|| doc.get(key));
+    match value {
         Some(v) => {
             println!("{v}");
             ExitCode::SUCCESS
@@ -236,7 +287,7 @@ fn cmd_get(explicit: Option<PathBuf>, key: &str) -> ExitCode {
     }
 }
 
-fn cmd_set(explicit: Option<PathBuf>, key: &str, value: &str) -> ExitCode {
+fn cmd_set(explicit: Option<PathBuf>, key: &str, value: &str, monitor: Option<&str>) -> ExitCode {
     // 1. validar tipo **y rango** antes de tocar el disco (misma tabla
     //    `field_meta` que usa la ventana `wayvpet-config`, spec 0007).
     if let Err(msg) = wayvpet_common::field_meta::validate_value(key, value) {
@@ -257,12 +308,18 @@ fn cmd_set(explicit: Option<PathBuf>, key: &str, value: &str) -> ExitCode {
         }
     };
     let mut doc = ConfDoc::parse(&text);
-    doc.set(key, value);
+    // `-m NOMBRE` dirige la escritura a la sección `[monitor:NOMBRE]` (spec 0008
+    // §8.4); sin `-m`, a la base.
+    match monitor {
+        Some(name) => doc.set_section(name, key, value),
+        None => doc.set(key, value),
+    }
 
     if let Err(e) = io::save_atomic(&path, &doc.render()) {
         eprintln!("wayvpetctl: no se pudo escribir {}: {e}", path.display());
         return ExitCode::from(1);
     }
-    eprintln!("wayvpetctl: {key}={value}  →  {}", path.display());
+    let dest = monitor.map_or_else(String::new, |m| format!(" [monitor:{m}]"));
+    eprintln!("wayvpetctl: {key}={value}{dest}  →  {}", path.display());
     ExitCode::SUCCESS
 }

@@ -213,6 +213,39 @@ Quita los binarios y la unidad de ejemplo instalados; **no toca** tu
 `~/.config/wayvpet/wayvpet.conf`. Si instalaste el servicio systemd, quítalo
 antes con `wayvpet --uninstall-service`.
 
+## Actualizaciones
+
+wayvpet **no comprueba si hay versiones nuevas** salvo que lo actives tú
+(`check_updates=1` en el `.conf`, o la casilla "Avisar de nuevas versiones" en la
+ventana de configuración). Con `check_updates=0` (por defecto) **nunca abre un
+socket de red**.
+
+Cuando lo activas: al **arrancar** wayvpet, un proceso hijo corto hace **una**
+consulta HTTPS a la API de releases de GitHub (con un suelo de 1 h para no
+repetir si reinicias en bucle) y termina. No hay timer, ni demonio, ni polling.
+La consulta lleva solo `User-Agent: wayvpet/<versión>` — ningún identificador.
+
+Si hay una versión más nueva, aparece **🔔 Versión nueva** en el icono de la
+bandeja. Al pulsarlo se abre un diálogo (versión, fecha, notas) con:
+
+- **Descargar** — baja el paquete que corresponde a tu instalación a
+  `~/Descargas`, **verifica su SHA-256** y abre la carpeta. **No instala nada**:
+  lo instalas tú con tu gestor.
+- **Ver en el navegador** — abre la página del release.
+
+El chequeo lo hace el binario **`wayvpet-update-check`**, que viene en el paquete
+opcional `wayvpet-update` (`Recommends:` del paquete base; `make update-helper`
++ `make install-update-helper` desde fuente). Sin él, `check_updates=1` no hace
+nada.
+
+| Instalación | Cómo se actualiza | ¿Aviso? |
+|---|---|---|
+| `.deb` / `.rpm` sueltos, `install.sh`, AUR | descargas el paquete nuevo y lo instalas | sí (opt-in) |
+| repositorios de la distro (`install-channel=distro`) | tu gestor de paquetes | **no** (lo gestiona la distro) |
+
+Para scripts: `wayvpetctl update` imprime el estado sin tocar la red;
+`wayvpetctl update --check` fuerza una consulta.
+
 ## Privacidad
 
 El teclado (y el ratón) se leen en un **proceso aparte** con `seccomp`

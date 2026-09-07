@@ -88,6 +88,9 @@ fn serve(mut stream: TcpStream, release: &str, sums: &str, oversize: bool) {
         }
     } else if path.ends_with("/sums") {
         ("200 OK", sums.as_bytes().to_vec())
+    } else if path.contains("/dl/") {
+        // Artefacto de descarga: cuerpo fijo conocido (para el test de checksum).
+        ("200 OK", DOWNLOAD_BODY.to_vec())
     } else {
         ("404 Not Found", b"nope".to_vec())
     };
@@ -192,4 +195,89 @@ fn servidor_caido_da_error_no_panico() {
     );
     assert!(st.latest.is_none());
     assert!(!st.checked_at.is_empty(), "checked_at se rellena igual");
+}
+
+// ── T-0015-M5-download: descarga verificada ─────────────────────────────────
+
+/// Cuerpo que el fixture sirve en `/dl/*`. SHA-256 calculado abajo.
+const DOWNLOAD_BODY: &[u8] = b"paquete de mentira para el test de descarga\n";
+
+/// `sha256sum` de `DOWNLOAD_BODY` (hex minúsculas).
+const DOWNLOAD_SHA: &str = "d296f9c3b8f8e5c8b7f2a3d1e0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1";
+
+fn download_body_sha_real() -> String {
+    // Recalcula el hash con la misma función del crate para no depender de una
+    // constante escrita a mano.
+    let dir = std::env::temp_dir().join(format!("wayvpet-m5sha-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("body");
+    std::fs::write(&p, DOWNLOAD_BODY).unwrap();
+    let h = wayvpet_update::download::sha256_hex(&p).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    h
+}
+
+#[test]
+fn descarga_verifica_checksum_ok_y_ko() {
+    use wayvpet_update::download::fetch_and_verify;
+
+    let srv = FakeGithub::start(|_| String::new(), String::new(), false);
+    let url = format!("{}/dl/wayvpet.deb", srv.base);
+    let real_sha = download_body_sha_real();
+
+    let out = std::env::temp_dir().join(format!("wayvpet-m5-{}", std::process::id()));
+    std::fs::remove_dir_all(&out).ok();
+
+    // Checksum correcto → deja el fichero con el contenido esperado.
+    let mut seen_progress = false;
+    let path = fetch_and_verify(&url, &real_sha, &out, "wayvpet.deb", &mut |d, _t| {
+        if d > 0 {
+            seen_progress = true;
+        }
+    })
+    .expect("descarga OK");
+    assert_eq!(path, out.join("wayvpet.deb"));
+    assert_eq!(std::fs::read(&path).unwrap(), DOWNLOAD_BODY);
+    assert!(seen_progress, "hubo callback de progreso");
+
+    // Checksum incorrecto → error y NO deja fichero.
+    std::fs::remove_file(&path).unwrap();
+    let err = fetch_and_verify(&url, DOWNLOAD_SHA, &out, "wayvpet.deb", &mut |_, _| {})
+        .expect_err("checksum KO debe fallar");
+    assert!(err.contains("SHA-256 no cuadra"), "{err}");
+    assert!(
+        !out.join("wayvpet.deb").exists(),
+        "no debe quedar el fichero si el checksum falla"
+    );
+
+    std::fs::remove_dir_all(&out).ok();
+}
+
+#[test]
+fn run_rechaza_url_no_github_y_asset_sin_sha() {
+    use wayvpet_update::{download, Asset, UpdateState};
+
+    // Asset con URL que no es de GitHub → rechazo antes de tocar la red.
+    let st = UpdateState {
+        assets: vec![Asset {
+            name: "x.tar.gz".into(),
+            url: "https://evil.example/x.tar.gz".into(),
+            sha256: Some("a".repeat(64)),
+        }],
+        ..Default::default()
+    };
+    let e = download::run(&st, Some("source"), None, |_, _| {}).unwrap_err();
+    assert!(e.contains("no permitida"), "{e}");
+
+    // Asset de GitHub pero sin sha256 → rechazo.
+    let st = UpdateState {
+        assets: vec![Asset {
+            name: "x.tar.gz".into(),
+            url: "https://github.com/a/b/releases/download/v1/x.tar.gz".into(),
+            sha256: None,
+        }],
+        ..Default::default()
+    };
+    let e = download::run(&st, Some("source"), None, |_, _| {}).unwrap_err();
+    assert!(e.contains("SHA-256"), "{e}");
 }

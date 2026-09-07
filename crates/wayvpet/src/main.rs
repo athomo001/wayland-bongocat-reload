@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use wayvpet_common::config::Config;
+use wayvpet_common::config::{self, Config};
 use wayvpet_common::io;
 
 mod anim;
@@ -26,6 +26,7 @@ mod sheet_anim;
 mod theme;
 mod toggle;
 mod tray;
+mod update_check;
 mod watch;
 mod wl;
 
@@ -315,6 +316,14 @@ fn main() -> ExitCode {
         .monitor
         .clone()
         .or_else(|| loaded.config.output_name.clone());
+
+    // Config por monitor (spec 0008 §8.4): esta instancia conoce su salida, así
+    // que aplica `base + [monitor:SU_NOMBRE]` encima.
+    if let Some(name) = target.as_deref() {
+        for w in config::apply_monitor_section(&mut loaded.config, &loaded.monitor_sections, name) {
+            eprintln!("wayvpet: aviso [monitor:{name}]: {w}");
+        }
+    }
 
     // --toggle: si hay una instancia (para este monitor), la para y salimos.
     if args.toggle {

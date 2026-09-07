@@ -53,6 +53,9 @@ pub enum TrayCommand {
     Reload,
     /// Versión + enlace al repo.
     About,
+    /// Ítem "🔔 Versión nueva" (spec 0015 M4): abre la página del release (M5:
+    /// el diálogo de `wayvpet-config` con "Descargar").
+    OpenUpdate,
     /// Salida limpia de todo.
     Quit,
 }
@@ -70,6 +73,7 @@ impl TrayCommand {
             "configure" => Self::LaunchConfig,
             "reload" => Self::Reload,
             "about" => Self::About,
+            "update" => Self::OpenUpdate,
             "quit" => Self::Quit,
             other => match other.strip_prefix("theme:") {
                 Some(name) if !name.is_empty() => Self::SetTheme(name.to_string()),
@@ -270,7 +274,18 @@ impl ksni::Tray for SniTray {
             ..Default::default()
         });
 
-        let mut items = vec![item("Mostrar / Ocultar", TrayCommand::ToggleVisibility)];
+        let mut items = Vec::new();
+        // "🔔 Versión nueva" va arriba del todo, solo si hay aviso pendiente
+        // (spec 0015 M4). Se relee en cada apertura del menú: aparece en cuanto
+        // el helper escribe el aviso, sin reiniciar wayvpet.
+        if let Some(n) = crate::update_check::pending_notice() {
+            items.push(item(
+                &format!("🔔 Versión nueva v{}", n.version),
+                TrayCommand::OpenUpdate,
+            ));
+            items.push(MenuItem::Separator);
+        }
+        items.push(item("Mostrar / Ocultar", TrayCommand::ToggleVisibility));
         // "Configurar…" solo si la ventana gráfica está instalada (nunca se cae
         // a una terminal, spec 0007 / [[feedback-visual-no-comandos]]).
         if config_gui_available() {
