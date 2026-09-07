@@ -79,6 +79,7 @@ pub const KEYS: &[&str] = &[
     "enable_debug",
     "enable_ipc",
     "enable_tray",
+    "check_updates",
 ];
 
 /// Opciones válidas de cada enum del `.conf`, en la grafía del fichero. Las usa
@@ -214,6 +215,12 @@ pub struct Config {
     /// `--no-tray` lo fuerza a 0 para esa ejecución. Sin host SNI en el
     /// escritorio, no molesta (aviso por stderr).
     pub enable_tray: bool,
+    /// Aviso pasivo de nueva versión (spec 0015). Por defecto **desactivado**:
+    /// con `0` wayvpet no abre ni un socket de red en toda su vida. Con `1`, al
+    /// arrancar lanza un proceso hijo corto que hace **una** consulta HTTPS a la
+    /// API de releases de GitHub y termina; si hay versión mayor, aparece un
+    /// aviso en el tray. Nunca instala nada.
+    pub check_updates: bool,
 }
 
 impl Default for Config {
@@ -258,6 +265,7 @@ impl Default for Config {
             enable_debug: false,
             enable_ipc: true,
             enable_tray: true,
+            check_updates: false,
         }
     }
 }
@@ -419,6 +427,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "enable_debug" => c.enable_debug = boolean()?,
         "enable_ipc" => c.enable_ipc = boolean()?,
         "enable_tray" => c.enable_tray = boolean()?,
+        "check_updates" => c.check_updates = boolean()?,
         "enable_scheduled_sleep" => c.enable_scheduled_sleep = boolean()?,
         "disable_fullscreen_hide" => c.disable_fullscreen_hide = boolean()?,
 
@@ -690,6 +699,7 @@ impl Config {
         w("enable_debug", &b(self.enable_debug));
         w("enable_ipc", &b(self.enable_ipc));
         w("enable_tray", &b(self.enable_tray));
+        w("check_updates", &b(self.check_updates));
         for dev in &self.keyboard_devices {
             w("keyboard_device", dev);
         }

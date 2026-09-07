@@ -462,6 +462,12 @@ pub const FIELDS: &[FieldMeta] = &[
         Section::Advanced,
         "Muestra el icono del sistema con el menú (mostrar/ocultar, tema, modo edición…).",
     ),
+    boolean(
+        "check_updates",
+        "Avisar de nuevas versiones",
+        Section::Advanced,
+        "Al arrancar hace UNA consulta a GitHub para ver si hay versión nueva y lo avisa en la bandeja. No instala nada. Desactivado = wayvpet nunca abre la red.",
+    ),
 ];
 
 /// Metadatos de una clave, o `None` si no es un campo conocido.

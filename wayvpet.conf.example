@@ -150,6 +150,19 @@ enable_ipc=1
 enable_tray=1
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ ACTUALIZACIONES                                                             │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# Aviso pasivo de nueva versión (spec 0015). Con 1, al ARRANCAR wayvpet lanza un
+# proceso hijo corto que hace UNA consulta HTTPS a la API de releases de GitHub
+# y termina; si hay una versión más nueva, aparece "🔔 Versión nueva" en el
+# icono de la bandeja. No hay timer, ni demonio, ni polling. No instala nada:
+# como mucho descarga el paquete a ~/Descargas y lo verificas/instalas tú. La
+# consulta no lleva ningún identificador (solo User-Agent). Con 0 (por defecto)
+# wayvpet no abre ni un socket de red en toda su vida.
+check_updates=0
+
+# ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ DEPURACIÓN                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
