@@ -1,0 +1,14 @@
+#!/bin/sh
+# postrm del .deb de wayvpet: refresca los índices de escritorio tras quitar los
+# ficheros. No toca la configuración del usuario (~/.config/wayvpet).
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+	command -v update-desktop-database >/dev/null 2>&1 && \
+		update-desktop-database -q /usr/share/applications || true
+	command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+		gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
+fi
+
+#DEBHELPER#
+exit 0

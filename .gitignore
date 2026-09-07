@@ -58,8 +58,12 @@ Thumbs.db
 # Rust build output
 /target/
 
-# Config local de pruebas (plantilla: bongocat.conf.example)
+# Config local de pruebas (plantilla: wayvpet.conf.example)
+/wayvpet.conf
+
+# Config local de pruebas (plantilla: wayvpet.conf.example)
+/wayvpet.conf
 /bongocat.conf
 
-# Config local de pruebas (plantilla: bongocat.conf.example)
-/bongocat.conf
+# Artefactos de release (make pkg / scripts/release.sh)
+/dist/

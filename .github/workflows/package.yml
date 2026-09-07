@@ -1,0 +1,115 @@
+name: Package
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "install.sh"
+      - "uninstall.sh"
+      - "Makefile"
+      - "packaging/**"
+      - "crates/wayvpet/Cargo.toml"
+      - ".github/workflows/package.yml"
+
+permissions:
+  contents: write # el job `release` adjunta artefactos a la release
+
+jobs:
+  # T-0002-M3-shellcheck: los scripts POSIX sin hallazgos.
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck (POSIX sh)
+        run: shellcheck -s sh install.sh uninstall.sh scripts/release.sh
+
+  # T-0002-M5-installtest: install.sh corre en las 3 familias objetivo y deja
+  # binarios que responden. Se prueba con /bin/sh real de cada distro (dash en
+  # Debian/Ubuntu) — la prueba de portabilidad de verdad.
+  install-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: arch,   image: "archlinux:latest",     deps: "pacman -Sy --noconfirm --needed wayland libxkbcommon pkgconf make gcc rustup && rustup default stable" }
+          - { name: ubuntu, image: "ubuntu:24.04",         deps: "apt-get update && apt-get install -y libwayland-dev libxkbcommon-dev pkg-config make gcc curl ca-certificates && curl -sSf https://sh.rustup.rs | sh -s -- -y" }
+          - { name: fedora, image: "fedora:latest",        deps: "dnf install -y wayland-devel libxkbcommon-devel pkgconf make gcc rustup && rustup-init -y" }
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias del sistema + toolchain
+        run: |
+          set -eux
+          ${{ matrix.deps }}
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install.sh (sin deps, sin servicio, sin grupo input)
+        run: |
+          set -eux
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          ./install.sh --yes --no-service --no-input-group --no-deps --prefix /usr/local
+      - name: Humo
+        run: |
+          set -eux
+          /usr/local/bin/wayvpet --version
+          /usr/local/bin/wayvpetctl --help
+          test -f /usr/local/share/applications/wayvpet.desktop
+          test -f /usr/local/share/icons/hicolor/64x64/apps/wayvpet.png
+          test -f /usr/local/lib/systemd/user/wayvpet.service
+          grep -qx source /usr/local/share/wayvpet/install-channel
+      - name: uninstall.sh deja limpio
+        run: |
+          set -eux
+          ./uninstall.sh --prefix /usr/local --keep-service
+          ! test -e /usr/local/bin/wayvpet
+          ! test -e /usr/local/share/wayvpet
+
+  # T-0002-M5-pkg: .deb y .rpm se construyen y listan los ficheros esperados.
+  build-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain + libs
+        run: |
+          rustup toolchain install stable --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config rpm
+      - uses: Swatinem/rust-cache@v2
+      - name: Herramientas de empaquetado
+        run: cargo install --locked cargo-deb cargo-generate-rpm
+      - name: make pkg
+        run: make pkg
+      - name: Contenido del .deb
+        run: |
+          set -eux
+          dpkg -c dist/*.deb | tee /tmp/deb.list
+          grep -q 'usr/bin/wayvpet$'              /tmp/deb.list
+          grep -q 'usr/share/applications/wayvpet.desktop' /tmp/deb.list
+          grep -q 'usr/share/wayvpet/install-channel'      /tmp/deb.list
+          grep -q 'usr/lib/systemd/user/wayvpet.service'   /tmp/deb.list
+      - name: Contenido del .rpm
+        run: rpm -qlp dist/*.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wayvpet-packages
+          path: dist/*
+
+  # En un tag v*: adjunta tarball + .deb + .rpm + SHA256SUMS a la release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [shellcheck, install-test, build-packages]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wayvpet-packages
+          path: dist
+      - name: Publicar en la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true

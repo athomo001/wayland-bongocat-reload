@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 publish = false
-description = "Overlay de gato bongo para Wayland (reescritura en Rust, en curso)."
+description = "Mascota animada sobre Wayland que reacciona al teclado y al ratón."
 
 [lints.rust]
 unsafe_code = "deny" # se permitirá solo en los puntos de FFI de Wayland, documentados
@@ -69,4 +69,74 @@ seccompiler = "0.5.0"
 
 [dev-dependencies]
 image = "0.25"
+
+# ---------------------------------------------------------------------------
+# Empaquetado nativo (spec 0002 M5). Se construye con `make deb` / `make rpm`
+# (necesitan `cargo install cargo-deb cargo-generate-rpm`). El árbol de ficheros
+# es el mismo que instala el Makefile; el marcador `install-channel` distingue
+# el canal para el aviso de nueva versión (spec 0015).
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+name = "wayvpet"
+maintainer = "Athan Espinoza <espinozathan@gmail.com>"
+copyright = "2026, Athan Espinoza y colaboradores de wayvpet"
+license-file = ["../../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+wayvpet dibuja una mascota animada sobre el escritorio en compositores Wayland.
+Reacciona al teclado y al raton, admite varios monitores, temas cargados de
+disco e icono en la bandeja del sistema. Por privacidad no registra que teclas
+se pulsan: el lector de entrada corre aislado con seccomp."""
+maintainer-scripts = "../../packaging/deb/"
+assets = [
+    ["target/release/wayvpet",        "usr/bin/",                                       "755"],
+    ["target/release/wayvpetctl",     "usr/bin/",                                       "755"],
+    ["target/release/wayvpet-config", "usr/bin/",                                       "755"],
+    ["../../scripts/find_input_devices.sh", "usr/bin/wayvpet-find-devices",             "755"],
+    ["../../wayvpet.conf.example",     "usr/share/wayvpet/wayvpet.conf.example",         "644"],
+    ["../../man/wayvpet.1",            "usr/share/man/man1/wayvpet.1",                   "644"],
+    ["../../presets/*.conf",           "usr/share/wayvpet/presets/",                     "644"],
+    ["../../themes/**/*",              "usr/share/wayvpet/themes/",                      "644"],
+    ["../../packaging/wayvpet.desktop",        "usr/share/applications/",                "644"],
+    ["../../packaging/wayvpet-config.desktop", "usr/share/applications/",                "644"],
+    ["../../assets/tray/wayvpet-icon.png", "usr/share/icons/hicolor/64x64/apps/wayvpet.png", "644"],
+    ["../../packaging/systemd/wayvpet.service", "usr/lib/systemd/user/wayvpet.service",  "644"],
+    ["../../packaging/channel/deb",    "usr/share/wayvpet/install-channel",              "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "wayvpet"
+summary = "Mascota animada sobre Wayland"
+license = "MIT"
+assets = [
+    { source = "target/release/wayvpet",        dest = "/usr/bin/wayvpet",        mode = "755" },
+    { source = "target/release/wayvpetctl",     dest = "/usr/bin/wayvpetctl",     mode = "755" },
+    { source = "target/release/wayvpet-config", dest = "/usr/bin/wayvpet-config", mode = "755" },
+    { source = "scripts/find_input_devices.sh", dest = "/usr/bin/wayvpet-find-devices", mode = "755" },
+    { source = "wayvpet.conf.example", dest = "/usr/share/wayvpet/wayvpet.conf.example", mode = "644" },
+    { source = "man/wayvpet.1", dest = "/usr/share/man/man1/wayvpet.1", mode = "644", doc = true },
+    { source = "presets/*.conf", dest = "/usr/share/wayvpet/presets/", mode = "644" },
+    { source = "themes/**/*", dest = "/usr/share/wayvpet/themes/", mode = "644" },
+    { source = "packaging/wayvpet.desktop", dest = "/usr/share/applications/wayvpet.desktop", mode = "644" },
+    { source = "packaging/wayvpet-config.desktop", dest = "/usr/share/applications/wayvpet-config.desktop", mode = "644" },
+    { source = "assets/tray/wayvpet-icon.png", dest = "/usr/share/icons/hicolor/64x64/apps/wayvpet.png", mode = "644" },
+    { source = "packaging/systemd/wayvpet.service", dest = "/usr/lib/systemd/user/wayvpet.service", mode = "644" },
+    { source = "packaging/channel/rpm", dest = "/usr/share/wayvpet/install-channel", mode = "644" },
+]
+post_install_script = """
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || :
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -qtf /usr/share/icons/hicolor || :
+echo "wayvpet: anadete al grupo 'input' (sudo usermod -aG input \\$USER) y reinicia sesion."
+echo "wayvpet: autoarranque:  systemctl --user enable --now wayvpet.service"
+"""
+post_uninstall_script = """
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || :
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -qtf /usr/share/icons/hicolor || :
+"""
+
+[package.metadata.generate-rpm.requires]
+# Runtime: solo libc/wayland del sistema; el resto va estático en el binario.
 

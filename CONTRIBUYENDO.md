@@ -21,7 +21,7 @@ compilan desde el propio crate.
 
 ```bash
 git clone <este-repo>
-cd wayland-wayvpet-reload
+cd wayvpet
 
 cargo build            # debug
 cargo build --release  # release (optimizado, LTO, panic=abort)
@@ -46,6 +46,13 @@ cargo build --release
 
 `cargo fmt` aplica el formato. `scripts/check_comment_lang.sh` ayuda a detectar
 comentarios en inglés residuales (no bloquea).
+
+## Instaladores y publicación
+
+Generar los paquetes (`.deb`, `.rpm`, tarball) y publicar una release está
+documentado en [`packaging/README.md`](packaging/README.md). En resumen:
+`make pkg` deja todo en `dist/`; `scripts/release.sh 3.1.0 --publish` fija la
+versión, genera los artefactos y crea la release en GitHub.
 
 ## Estilo de código
 

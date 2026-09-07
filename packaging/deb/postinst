@@ -1,0 +1,21 @@
+#!/bin/sh
+# postinst del .deb de wayvpet (spec 0002 M5). Refresca los índices de escritorio
+# y recuerda los dos pasos que un paquete no puede hacer por el usuario: el grupo
+# `input` y activar la unidad systemd de usuario.
+set -e
+
+if [ "$1" = "configure" ]; then
+	command -v update-desktop-database >/dev/null 2>&1 && \
+		update-desktop-database -q /usr/share/applications || true
+	command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+		gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
+
+	echo "wayvpet: para leer el teclado, añádete al grupo 'input':"
+	echo "         sudo usermod -aG input \"\$USER\"   (y vuelve a iniciar sesión)"
+	echo "wayvpet: autoarranque con la sesión gráfica:"
+	echo "         systemctl --user enable --now wayvpet.service"
+	echo "wayvpet: o búscalo como «wayvpet» en el menú de aplicaciones."
+fi
+
+#DEBHELPER#
+exit 0
