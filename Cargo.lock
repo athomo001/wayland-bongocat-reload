@@ -3745,6 +3745,7 @@ version = "3.0.0-dev"
 dependencies = [
  "eframe",
  "egui",
+ "png 0.17.16",
  "wayvpet-common",
 ]
 

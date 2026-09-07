@@ -6,9 +6,10 @@
 //!
 //! Cada campo de `field_meta` se renderiza según su `FieldKind` y se aplica **en
 //! vivo** por IPC `SET`; Guardar / Deshacer / Valores de fábrica; se cierra sola
-//! si la instancia que la abrió desaparece; galería de temas y "mapa de
-//! pantalla" para colocar el vpet (M4); modo experto para editar los `.ini`.
-//! Falta de la fase: asistente de primer uso y presets/perfiles.
+//! si la instancia que la abrió desaparece. Secciones especiales: galería de
+//! temas con miniaturas (`THUMB`) + "mapa de pantalla" + selector de monitor
+//! (Posición), modo experto (editar los `.ini`), Presets y perfiles, asistente
+//! de primer uso. Falta de la fase: solo la matriz manual GNOME/KDE/Sway.
 
 mod expert;
 mod model;
@@ -75,6 +76,10 @@ struct App {
     raw: Vec<expert::RawFile>,
     /// Asistente de primer uso: `Some` mientras no haya `wayvpet.conf`.
     wizard: Option<Wizard>,
+    /// Búfer del nombre para "Guardar como perfil".
+    profile_name: String,
+    /// Miniaturas de temas ya cargadas (`None` = se intentó y no hubo).
+    thumbs: HashMap<String, Option<egui::TextureHandle>>,
 }
 
 /// Estado del asistente de primer uso (spec 0007 M5).
@@ -102,6 +107,8 @@ impl App {
             ping_fails: 0,
             raw: Vec::new(),
             wizard,
+            profile_name: String::new(),
+            thumbs: HashMap::new(),
         }
     }
 
@@ -111,6 +118,7 @@ impl App {
         self.ping_fails = 0;
         self.edits.clear();
         self.raw.clear();
+        self.thumbs.clear();
     }
 
     /// Si la ventana está atada a una instancia, comprueba que sigue respondiendo;
@@ -382,6 +390,75 @@ impl App {
             self.model.apply_preset(&n);
             self.edits.clear();
         }
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.heading("Perfiles");
+        ui.label(
+            "Un perfil es una configuración **completa** con nombre              (trabajo / juego / streaming…). Cambiar de perfil reemplaza tu              wayvpet.conf por el suyo.",
+        );
+        ui.add_space(8.0);
+
+        if !self.model.profiles.is_empty() {
+            let active = self.model.active_profile.clone();
+            let mut switch: Option<String> = None;
+            ui.horizontal_wrapped(|ui| {
+                for name in &self.model.profiles {
+                    let is_active = active.as_deref() == Some(name.as_str());
+                    if ui.selectable_label(is_active, name).clicked() && !is_active {
+                        switch = Some(name.clone());
+                    }
+                }
+            });
+            if let Some(n) = switch {
+                self.model.switch_profile(&n);
+                self.edits.clear();
+            }
+            ui.add_space(6.0);
+        } else {
+            ui.small("No hay perfiles guardados todavía.");
+            ui.add_space(6.0);
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Guardar la config actual como:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.profile_name)
+                    .hint_text("nombre")
+                    .desired_width(140.0),
+            );
+            let ok = self
+                .profile_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && !self.profile_name.is_empty();
+            if ui
+                .add_enabled(ok, egui::Button::new("Guardar perfil"))
+                .clicked()
+            {
+                let n = self.profile_name.clone();
+                self.model.save_profile(&n);
+                self.profile_name.clear();
+            }
+        });
+    }
+
+    /// Miniatura de un tema (lazy + cacheada). Pide `THUMB <name>` a la
+    /// instancia, que rasteriza un fotograma a PNG; se decodifica y se sube como
+    /// textura. `None` si no hay instancia o algo falla.
+    fn thumb(
+        &mut self,
+        ctx: &egui::Context,
+        instance: Option<&str>,
+        name: &str,
+    ) -> Option<egui::TextureHandle> {
+        if let Some(cached) = self.thumbs.get(name) {
+            return cached.clone();
+        }
+        let tex = load_thumb(ctx, instance, name);
+        self.thumbs.insert(name.to_owned(), tex.clone());
+        tex
     }
 
     fn theme_panel(&mut self, ui: &mut egui::Ui) {
@@ -396,17 +473,39 @@ impl App {
             ui.label("Clic en un tema para activarlo (se aplica al instante):");
             ui.add_space(6.0);
             let mut pick: Option<String> = None;
+            let names = self.model.themes.clone();
+            let instance = opt(&self.instance).map(str::to_owned);
+            let ctx = ui.ctx().clone();
             ui.horizontal_wrapped(|ui| {
-                for name in &self.model.themes {
+                for name in &names {
                     let is_active = *name == active;
                     let label = if name == "embedded" {
-                        "vpet embebido".to_owned()
+                        "vpet embebido"
                     } else {
-                        name.clone()
+                        name.as_str()
                     };
-                    if ui.selectable_label(is_active, label).clicked() && !is_active {
-                        pick = Some(name.clone());
-                    }
+                    ui.allocate_ui(egui::vec2(96.0, 116.0), |ui| {
+                        ui.vertical_centered(|ui| {
+                            let tex = self.thumb(&ctx, instance.as_deref(), name);
+                            if let Some(t) = tex {
+                                let img =
+                                    egui::Image::from_texture((t.id(), egui::vec2(72.0, 72.0)))
+                                        .maintain_aspect_ratio(true)
+                                        .max_size(egui::vec2(72.0, 72.0));
+                                if ui
+                                    .add(egui::ImageButton::new(img).selected(is_active))
+                                    .clicked()
+                                    && !is_active
+                                {
+                                    pick = Some(name.clone());
+                                }
+                            } else if ui.selectable_label(is_active, "▢").clicked() && !is_active
+                            {
+                                pick = Some(name.clone());
+                            }
+                            ui.small(label);
+                        });
+                    });
                 }
             });
             if let Some(name) = pick {
@@ -659,6 +758,29 @@ fn monitor_picker(ui: &mut egui::Ui, model: &mut Model) {
         model.status = "monitores: se aplica al reiniciar wayvpet".to_owned();
     }
     ui.small("Vacío = donde elija el compositor. El cambio surte efecto al reiniciar.");
+}
+
+/// Pide `THUMB <name>`, lee el PNG que deja la instancia y lo sube como textura.
+fn load_thumb(
+    ctx: &egui::Context,
+    instance: Option<&str>,
+    name: &str,
+) -> Option<egui::TextureHandle> {
+    let reply = ipc::send_request(instance, &format!("THUMB {name}")).ok()?;
+    let path = reply.strip_prefix("OK ")?.trim();
+    let file = std::fs::File::open(path).ok()?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    let img = egui::ColorImage::from_rgba_unmultiplied(
+        [info.width as usize, info.height as usize],
+        &buf[..info.buffer_size()],
+    );
+    Some(ctx.load_texture(format!("thumb-{name}"), img, egui::TextureOptions::LINEAR))
 }
 
 /// ¿Se acaba de pulsar Enter en este `ui`?

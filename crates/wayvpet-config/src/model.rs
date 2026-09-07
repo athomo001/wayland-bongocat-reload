@@ -59,6 +59,9 @@ pub struct Model {
     pub outputs: Vec<String>,
     /// Presets disponibles (`PRESET list`). Vacío si no hay instancia.
     pub presets: Vec<String>,
+    /// Perfiles guardados (`PROFILE list`) y cuál está activo.
+    pub profiles: Vec<String>,
+    pub active_profile: Option<String>,
     /// Aviso de la última acción (rango recortado, error de E/S…).
     pub status: String,
 }
@@ -80,6 +83,8 @@ impl Model {
                 screen: instance_screen(instance.as_deref()),
                 outputs: instance_outputs(instance.as_deref()),
                 presets: instance_presets(instance.as_deref()),
+                profiles: instance_profiles(instance.as_deref()).0,
+                active_profile: instance_profiles(instance.as_deref()).1,
                 instance,
                 path: io::resolve_config_path_real(),
                 status,
@@ -99,6 +104,8 @@ impl Model {
                 screen: (1920, 1080),
                 outputs: Vec::new(),
                 presets: Vec::new(),
+                profiles: Vec::new(),
+                active_profile: None,
                 instance,
                 path: l.path.or_else(io::resolve_config_path_real),
                 status: l.warnings.join("; "),
@@ -112,6 +119,8 @@ impl Model {
                 screen: (1920, 1080),
                 outputs: Vec::new(),
                 presets: Vec::new(),
+                profiles: Vec::new(),
+                active_profile: None,
                 instance,
                 path: io::resolve_config_path_real(),
                 status: format!("no se pudo leer la config: {e}"),
@@ -194,6 +203,8 @@ impl Model {
         self.screen = fresh.screen;
         self.outputs = fresh.outputs;
         self.presets = fresh.presets;
+        self.profiles = fresh.profiles;
+        self.active_profile = fresh.active_profile;
         self.path = fresh.path;
         self.dirty.clear();
         self.status = "restablecido".to_owned();
@@ -263,6 +274,49 @@ impl Model {
         // Marca todas las claves del preset como sucias comparando con el .conf
         // de disco no es trivial aquí; basta con marcar que hay cambios.
         self.dirty.insert("__preset__".to_owned());
+    }
+
+    /// Cambia al perfil `name` (el demonio copia su `.conf` y recarga). Recarga
+    /// el modelo entero: la config cambió de arriba a abajo.
+    pub fn switch_profile(&mut self, name: &str) {
+        if !self.source.connected() {
+            self.status = "los perfiles necesitan una instancia en marcha".to_owned();
+            return;
+        }
+        match ipc::send_request(self.instance.as_deref(), &format!("PROFILE switch {name}")) {
+            Ok(r) if r.starts_with("ERR") => {
+                self.status = format!("no se pudo cambiar a {name}: {r}");
+                return;
+            }
+            Err(e) => {
+                self.status = format!("no respondió la instancia: {e}");
+                return;
+            }
+            Ok(_) => {}
+        }
+        let fresh = Model::load(self.instance.as_deref());
+        *self = fresh;
+        self.status = format!("perfil: {name}");
+    }
+
+    /// Guarda la config actual como perfil `name`.
+    pub fn save_profile(&mut self, name: &str) {
+        if !self.source.connected() {
+            self.status = "los perfiles necesitan una instancia en marcha".to_owned();
+            return;
+        }
+        match ipc::send_request(self.instance.as_deref(), &format!("PROFILE save {name}")) {
+            Ok(r) if r.starts_with("ERR") => {
+                self.status = format!("no se pudo guardar {name}: {r}")
+            }
+            Err(e) => self.status = format!("no respondió la instancia: {e}"),
+            Ok(r) => {
+                self.status = r;
+                let (p, a) = instance_profiles(self.instance.as_deref());
+                self.profiles = p;
+                self.active_profile = a;
+            }
+        }
     }
 
     /// Vuelve a los **valores de fábrica** (los del `wayvpet.conf.example`
@@ -400,6 +454,28 @@ fn instance_presets(instance: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Perfiles (`PROFILE list`, el activo llega con prefijo `*`) → `(nombres, activo)`.
+fn instance_profiles(instance: Option<&str>) -> (Vec<String>, Option<String>) {
+    let Ok(r) = ipc::send_request(instance, "PROFILE list") else {
+        return (Vec::new(), None);
+    };
+    if r.starts_with("ERR") {
+        return (Vec::new(), None);
+    }
+    let mut active = None;
+    let names = r
+        .split_whitespace()
+        .map(|w| match w.strip_prefix('*') {
+            Some(n) => {
+                active = Some(n.to_owned());
+                n.to_owned()
+            }
+            None => w.to_owned(),
+        })
+        .collect();
+    (names, active)
+}
+
 /// Pide `DUMP` a la instancia y parsea la respuesta. `None` si no hay instancia
 /// o la respuesta no es una config.
 fn load_from_instance(instance: Option<&str>) -> Option<(Config, String)> {
@@ -426,6 +502,8 @@ mod tests {
             screen: (1920, 1080),
             outputs: Vec::new(),
             presets: Vec::new(),
+            profiles: Vec::new(),
+            active_profile: None,
             instance: None,
             path: None,
             status: String::new(),

@@ -46,7 +46,7 @@ impl Section {
             Section::Theme => "Tema",
             Section::Advanced => "Avanzado",
             Section::Expert => "Modo experto",
-            Section::Presets => "Presets",
+            Section::Presets => "Presets y perfiles",
         }
     }
 }

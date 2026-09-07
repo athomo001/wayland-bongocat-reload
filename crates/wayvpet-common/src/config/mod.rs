@@ -10,6 +10,7 @@
 mod doc;
 mod line;
 pub mod presets;
+pub mod profiles;
 
 pub use doc::ConfDoc;
 pub use line::{split_line, Line};

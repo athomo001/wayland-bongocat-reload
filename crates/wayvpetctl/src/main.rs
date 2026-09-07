@@ -35,6 +35,9 @@ Uso: wayvpetctl [-c FICHERO] <orden> [args]
   theme set NOMBRE       Cambia de tema en caliente (NOMBRE o 'embedded')
   preset [list]          Lista los presets disponibles
   preset apply NOMBRE    Aplica un preset (.conf parcial) sobre la config activa
+  profile [list]         Lista los perfiles guardados (marca el activo con *)
+  profile save NOMBRE    Guarda la config actual como perfil NOMBRE
+  profile switch NOMBRE  Cambia a ese perfil (copia su .conf y recarga)
   get-live CLAVE    Lee un valor de la instancia (config viva)
   set-live CLAVE V  Cambia un valor en caliente (no toca el fichero)
   save              Persiste al .conf lo cambiado con set-live (conserva formato)
@@ -142,6 +145,19 @@ fn main() -> ExitCode {
         }
         ["preset", ..] => {
             eprintln!("wayvpetctl: uso: preset [list] | preset apply NOMBRE");
+            ExitCode::from(2)
+        }
+        ["profile"] | ["profile", "list"] => cmd_ipc(args.monitor.as_deref(), "PROFILE list", ""),
+        ["profile", "active"] => cmd_ipc(args.monitor.as_deref(), "PROFILE active", ""),
+        ["profile", sub @ ("save" | "switch"), name] => cmd_ipc(
+            args.monitor.as_deref(),
+            &format!("PROFILE {sub} {name}"),
+            "",
+        ),
+        ["profile", ..] => {
+            eprintln!(
+                "wayvpetctl: uso: profile [list] | profile save NOMBRE | profile switch NOMBRE"
+            );
             ExitCode::from(2)
         }
         ["reload"] => cmd_ipc(args.monitor.as_deref(), "RELOAD", "OK"),
