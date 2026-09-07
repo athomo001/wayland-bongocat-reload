@@ -14,6 +14,7 @@
 #   --no-service       No instalar la unidad systemd de usuario
 #   --no-input-group   No tocar la pertenencia al grupo `input`
 #   --no-deps          No intentar instalar dependencias de compilación
+#   --no-vpets         No instalar el pack de vpets pesados (miku/umbreon/gabumon)
 #   --uninstall        Desinstalar (llama a uninstall.sh)
 #
 # POSIX sh a propósito (sin bashismos): funciona con dash/busybox.
@@ -24,6 +25,7 @@ ASSUME_YES=0
 WANT_SERVICE=1
 WANT_INPUT_GROUP=1
 WANT_DEPS=1
+WANT_VPETS=1
 PREFIX=""
 
 say()  { printf '\033[1;36m>>\033[0m %s\n' "$*"; }
@@ -54,6 +56,7 @@ while [ $# -gt 0 ]; do
 		--no-service) WANT_SERVICE=0; shift ;;
 		--no-input-group) WANT_INPUT_GROUP=0; shift ;;
 		--no-deps) WANT_DEPS=0; shift ;;
+		--no-vpets) WANT_VPETS=0; shift ;;
 		-h|--help) sed -n '2,19p' "$0"; exit 0 ;;
 		*) die "opción desconocida: $1 (prueba --help)" ;;
 	esac
@@ -151,6 +154,14 @@ fi
 # CHANNEL=source: el aviso de nueva versión (spec 0015) sabrá que actualizar es
 # re-ejecutar este script, no `apt`/`dnf`/`pacman`.
 $MAKE_SUDO make install PREFIX="$PREFIX" CHANNEL=source
+
+# Pack de vpets pesados (miku/umbreon/gabumon, ~13 MB). En los .deb/.rpm es un
+# paquete aparte; en una instalación desde fuente se incluye salvo --no-vpets.
+if [ "$WANT_VPETS" = 1 ] && [ -d "$SRC/vpets" ]; then
+	say "Instalo el pack de vpets (miku, umbreon, gabumon)"
+	# shellcheck disable=SC2086
+	$MAKE_SUDO make install-vpets PREFIX="$PREFIX"
+fi
 
 BINDIR="$PREFIX/bin"
 

@@ -64,9 +64,15 @@ jobs:
           test -f /usr/local/share/icons/hicolor/64x64/apps/wayvpet.png
           test -f /usr/local/lib/systemd/user/wayvpet.service
           grep -qx source /usr/local/share/wayvpet/install-channel
-          # Split themes/vpets: la instalación base trae los ligeros, no los packs.
+          # install.sh (fuente) SÍ trae los vpets pesados (a diferencia del .deb).
           test -d /usr/local/share/wayvpet/themes/classic
-          ! test -e /usr/local/share/wayvpet/themes/miku
+          test -d /usr/local/share/wayvpet/themes/miku
+      - name: Lanzadores .desktop válidos (T-0002-M6-desktop)
+        run: |
+          set -eux
+          sudo apt-get install -y desktop-file-utils
+          desktop-file-validate /usr/local/share/applications/wayvpet.desktop
+          desktop-file-validate /usr/local/share/applications/wayvpet-config.desktop
       - name: uninstall.sh deja limpio
         run: |
           set -eux

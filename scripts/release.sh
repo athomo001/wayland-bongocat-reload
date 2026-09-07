@@ -34,11 +34,18 @@ done
 if [ "$NEWVER" != "KEEP" ]; then
 	[ -z "$(git status --porcelain)" ] || die "el árbol de trabajo tiene cambios sin confirmar."
 	say "Fijo la versión a $NEWVER"
-	for f in crates/wayvpet/Cargo.toml crates/wayvpetctl/Cargo.toml crates/wayvpet-config/Cargo.toml; do
+	# Los 3 crates del workspace + los 2 de fuera del workspace (helper de
+	# actualización y pack de vpets, spec 0015 / 0008 §8.4).
+	for f in crates/wayvpet/Cargo.toml crates/wayvpetctl/Cargo.toml \
+		crates/wayvpet-config/Cargo.toml crates/wayvpet-update/Cargo.toml \
+		crates/wayvpet-vpets/Cargo.toml; do
 		sed -i "s/^version = \".*\"/version = \"$NEWVER\"/" "$f"
 	done
-	$(command -v cargo) update -p wayvpet -p wayvpetctl -p wayvpet-config --offline >/dev/null 2>&1 || true
-	git add crates/*/Cargo.toml Cargo.lock
+	CARGO=$(command -v cargo)
+	"$CARGO" update -p wayvpet -p wayvpetctl -p wayvpet-config --offline >/dev/null 2>&1 || true
+	( cd crates/wayvpet-update && "$CARGO" update --offline >/dev/null 2>&1 ) || true
+	( cd crates/wayvpet-vpets  && "$CARGO" update --offline >/dev/null 2>&1 ) || true
+	git add crates/*/Cargo.toml Cargo.lock crates/wayvpet-update/Cargo.lock crates/wayvpet-vpets/Cargo.lock
 	git commit -m "release: v$NEWVER"
 	VER="$NEWVER"
 else
@@ -46,9 +53,10 @@ else
 	say "Versión actual: $VER"
 fi
 
-# 2. compilar y generar artefactos
-say "make pkg"
+# 2. compilar y generar artefactos: base + extras (vpets, helper de actualización)
+say "make pkg && make pkg-extras"
 make pkg
+make pkg-extras
 
 # 3. publicar (opcional)
 if [ "$PUBLISH" = 1 ]; then

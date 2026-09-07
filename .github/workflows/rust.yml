@@ -42,6 +42,15 @@ jobs:
         run: cargo clippy --workspace --lib --bins --tests -- -D warnings
       - name: Tests
         run: cargo test --workspace --all-targets
+      - name: Sin cliente HTTP en el núcleo (spec 0015 §Seguridad, T-0015-net-off)
+        # El chequeo de versión vive en `wayvpet-update` (fuera del workspace).
+        # El núcleo NO debe enlazar nunca un cliente de red.
+        run: |
+          if cargo tree --workspace --edges normal --prefix none \
+             | grep -Eiw 'ureq|rustls|hyper|reqwest|native-tls|isahc|surf|attohttpc'; then
+            echo "::error::el núcleo enlaza un cliente HTTP; debe quedarse en wayvpet-update"
+            exit 1
+          fi
 
   update-helper:
     runs-on: ubuntu-latest
