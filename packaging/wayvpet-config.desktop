@@ -7,6 +7,6 @@ Comment[en]=Tune the vpet: position, size, appearance, theme
 Exec=wayvpet-config
 Icon=wayvpet
 Terminal=false
-Categories=Settings;Utility;
+Categories=Settings;
 Keywords=wayvpet;vpet;overlay;cat;
 StartupNotify=true

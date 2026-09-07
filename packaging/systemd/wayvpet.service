@@ -1,0 +1,36 @@
+# Unidad systemd **de usuario** para wayvpet (spec 0002 M2).
+#
+# La instalan `make install` y los paquetes nativos en
+# $PREFIX/lib/systemd/user/. El usuario la activa con:
+#
+#     systemctl --user enable --now wayvpet.service
+#
+# `wayvpet --install-service` escribe una copia equivalente en
+# ~/.config/systemd/user/ con la ruta absoluta del binario (útil cuando wayvpet
+# se instaló fuera del PATH del gestor de servicios).
+[Unit]
+Description=wayvpet — overlay animado para Wayland
+Documentation=https://github.com/athomo001/wayvpet
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# `make install` reescribe esta línea a la ruta absoluta ($BINDIR/wayvpet) para
+# que funcione también con PREFIX=~/.local (systemd --user no tiene ~/.local/bin
+# en el PATH). `wayvpet --install-service` hace lo mismo hacia ~/.config.
+ExecStart=wayvpet --supervise
+Restart=on-failure
+RestartSec=2
+
+# Endurecimiento básico (0013 M9 lo amplía con systemd-analyze security):
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+
+[Install]
+WantedBy=graphical-session.target

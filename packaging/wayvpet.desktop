@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=wayvpet
+GenericName=Mascota de escritorio
+GenericName[en]=Desktop pet
+Comment=Mascota animada sobre Wayland que reacciona al teclado y al ratón
+Comment[en]=Animated Wayland overlay pet that reacts to your keyboard and mouse
+Exec=wayvpet -w
+Icon=wayvpet
+Terminal=false
+Categories=Utility;Amusement;
+Keywords=vpet;overlay;cat;gato;mascota;bongo;pet;wayland;
+StartupNotify=false
+StartupWMClass=wayvpet

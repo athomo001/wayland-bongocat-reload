@@ -1,0 +1,113 @@
+.TH WAYVPET 1 "septiembre 2026" "wayvpet" "Órdenes de usuario"
+.SH NOMBRE
+wayvpet \- mascota animada sobre Wayland que reacciona al teclado y al ratón
+.SH SINOPSIS
+.B wayvpet
+[OPCIONES]
+.SH DESCRIPCIÓN
+.B wayvpet
+dibuja una mascota (\fIvpet\fR) sobre el escritorio en un compositor Wayland.
+La mascota se anima al pulsar el teclado y al mover o clicar el ratón. Admite
+varios monitores, recarga en caliente de la configuración, animación de reposo,
+auto\-ocultado a pantalla completa, temas cargados de disco (SVG o \fIsprite
+sheet\fR) e icono en la bandeja del sistema.
+.PP
+Por privacidad, wayvpet reduce cada tecla a un solo bit y descarta su identidad:
+.B nunca
+registra qué teclas se pulsan.
+.SH OPCIONES
+.TP
+.BR \-c ", " \-\-config " \fIFICHERO\fR"
+Ruta del \fBwayvpet.conf\fR. Si se omite, se busca en
+\fI$XDG_CONFIG_HOME\fR/wayvpet/wayvpet.conf, luego
+\fI$HOME\fR/.config/wayvpet/wayvpet.conf y por último ./wayvpet.conf.
+.TP
+.BR \-T ", " \-\-theme " \fINOMBRE\fR"
+Fuerza el tema a cargar (por ejemplo \fBgabumon\fR o \fBmiku\fR), por encima de
+la clave \fBtheme\fR del fichero.
+.TP
+.BR \-m ", " \-\-monitor " \fINOMBRE\fR"
+Fuerza la salida donde se dibuja (por ejemplo \fBeDP\-1\fR). Anula la clave
+\fBmonitor\fR de la configuración.
+.TP
+.BR \-w ", " \-\-watch\-config
+Vigila el fichero de configuración y recarga sin reiniciar (usa inotify).
+.TP
+.BR \-t ", " \-\-toggle
+Si hay una instancia en marcha, la para; si no, arranca una nueva.
+.TP
+.BR \-S ", " \-\-supervise
+Relanza el overlay si termina con error. Es el modo que usa la unidad systemd.
+.TP
+.B \-\-no\-tray
+No arranca el icono de la bandeja.
+.TP
+.B \-\-no\-toplevel
+No usa los protocolos de \fItoplevels\fR (desactiva el auto\-ocultado a pantalla
+completa).
+.TP
+.B \-\-validate
+Valida la configuración y sale.
+.TP
+.B \-\-print\-default\-config
+Escribe la configuración por defecto como INI y sale.
+.TP
+.B \-\-dry\-run
+Resuelve la configuración y el tema sin abrir Wayland, y sale. Útil para CI.
+.TP
+.B \-\-install\-service
+Instala la unidad systemd de usuario (apuntando al binario actual) y sale.
+.TP
+.B \-\-uninstall\-service
+Quita la unidad systemd de usuario y sale.
+.TP
+.BR \-h ", " \-\-help
+Muestra la ayuda y sale.
+.TP
+.BR \-v ", " \-\-version
+Muestra la versión y sale.
+.SH CONFIGURACIÓN
+El fichero por defecto es \fB~/.config/wayvpet/wayvpet.conf\fR. Se instala un
+ejemplo autoexplicativo en \fB$PREFIX/share/wayvpet/wayvpet.conf.example\fR.
+Claves habituales:
+.TP
+.B monitor
+Uno o varios nombres de salida (\fBeDP\-1\fR, o \fBeDP\-1,HDMI\-A\-1\fR). Una
+lista separada por comas lanza una instancia por monitor.
+.TP
+.B keyboard_device
+Ruta del dispositivo de entrada (por ejemplo \fB/dev/input/event4\fR). Usa
+\fBwayvpet\-find\-devices\fR(1) para localizarlo; si se deja vacío, wayvpet lo
+autodetecta.
+.TP
+.B theme
+Nombre de un tema instalado en \fB$PREFIX/share/wayvpet/themes/\fR o en
+\fB~/.local/share/wayvpet/themes/\fR, o \fBembedded\fR para el gato incluido.
+.SH CONFIGURAR
+.TP
+.B wayvpet\-config
+Ventana gráfica para ajustar posición, tamaño, apariencia y tema, con vista
+previa en vivo. También accesible desde el icono de la bandeja → «Configurar…».
+.TP
+.B wayvpetctl
+Cliente de línea de órdenes sobre el socket de control (para scripts).
+.SH PRIVACIDAD
+wayvpet no puede leer qué teclas se pulsan: el lector de entrada corre en un
+proceso aparte con \fBseccomp\fR y solo comunica «se pulsó algo». No hay opción
+de registrar pulsaciones.
+.SH FICHEROS
+.TP
+.B ~/.config/wayvpet/wayvpet.conf
+Configuración del usuario.
+.TP
+.B $XDG_RUNTIME_DIR/wayvpet.sock
+Socket de control (IPC).
+.TP
+.B $XDG_RUNTIME_DIR/wayvpet.pid
+Fichero PID con \fBflock\fR (instancia única).
+.SH VÉASE TAMBIÉN
+.BR wayvpetctl (1),
+.BR wayvpet-find-devices (1)
+.SH AUTOR
+Proyecto wayvpet — https://github.com/athomo001/wayvpet
+Basado en wayland\-bongocat de Saatvik Sharma.
