@@ -8,9 +8,22 @@ suéltala en una ruta de temas y actívala con `theme = <nombre>` en el
 
 1. `$XDG_DATA_HOME/wayvpet/themes/` (por defecto `~/.local/share/wayvpet/themes/`)
 2. `$XDG_DATA_DIRS/*/wayvpet/themes/` (típico: `/usr/local/share`, `/usr/share`)
-3. `./themes/` del repositorio (solo en desarrollo)
+3. `./themes/` y `./vpets/` del repositorio (solo en desarrollo)
 
 `theme = /ruta/absoluta/a/mi-tema` también vale.
+
+### `themes/` vs `vpets/` en el repo
+
+- **`themes/`** — temas **ligeros** integrados (SVG de trazos: `classic`, `pink`,
+  `demo`). Los empaqueta el `.deb`/`.rpm` **base**.
+- **`vpets/`** — packs **pesados** (sprite sheets HD: `miku`, `umbreon`,
+  `gabumon`…). Los empaqueta `wayvpet-vpets` aparte, para que el paquete base no
+  cargue ~13 MB que la mayoría no usa. En una instalación normal se instalan al
+  mismo `wayvpet/themes/`, así que se activan igual (`theme = miku`).
+
+Añadir un vpet pesado nuevo = crear `vpets/<nombre>/` y nada más: los globs del
+empaquetado lo recogen solos. Ver [`packaging/README.md`](../packaging/README.md)
+§"Añadir un vpet".
 
 ## Estructura
 

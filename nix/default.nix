@@ -41,7 +41,15 @@ rustPlatform.buildRustPackage (finalAttrs: {
     for preset in presets/*.conf; do
       install -Dm644 "$preset" "$out/share/wayvpet/$preset"
     done
+    # Temas ligeros integrados.
     find themes -type f -exec install -Dm644 {} "$out/share/wayvpet/{}" \;
+    # Vpets pesados: en una instalación normal son el paquete aparte
+    # `wayvpet-vpets`, pero Nix no tiene la restricción de tamaño y el canal es
+    # `distro` (sin aviso de versión), así que aquí se incluyen. Van al mismo
+    # `themes/` (sin el prefijo `vpets/`) para que wayvpet los encuentre por nombre.
+    find vpets -type f | while read -r f; do
+      install -Dm644 "$f" "$out/share/wayvpet/themes/''${f#vpets/}"
+    done
 
     runHook postInstall
   '';

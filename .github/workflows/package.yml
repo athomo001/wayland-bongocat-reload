@@ -10,6 +10,10 @@ on:
       - "Makefile"
       - "packaging/**"
       - "crates/wayvpet/Cargo.toml"
+      - "crates/wayvpet-update/Cargo.toml"
+      - "crates/wayvpet-vpets/Cargo.toml"
+      - "themes/**"
+      - "vpets/**"
       - ".github/workflows/package.yml"
 
 permissions:
@@ -60,6 +64,9 @@ jobs:
           test -f /usr/local/share/icons/hicolor/64x64/apps/wayvpet.png
           test -f /usr/local/lib/systemd/user/wayvpet.service
           grep -qx source /usr/local/share/wayvpet/install-channel
+          # Split themes/vpets: la instalación base trae los ligeros, no los packs.
+          test -d /usr/local/share/wayvpet/themes/classic
+          ! test -e /usr/local/share/wayvpet/themes/miku
       - name: uninstall.sh deja limpio
         run: |
           set -eux
@@ -80,18 +87,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Herramientas de empaquetado
         run: cargo install --locked cargo-deb cargo-generate-rpm
-      - name: make pkg
-        run: make pkg
-      - name: Contenido del .deb
+      - name: make pkg + pkg-extras
+        run: |
+          make pkg
+          make pkg-extras
+      - name: Contenido del .deb base
         run: |
           set -eux
-          dpkg -c dist/*.deb | tee /tmp/deb.list
-          grep -q 'usr/bin/wayvpet$'              /tmp/deb.list
+          dpkg -c dist/wayvpet_*.deb | tee /tmp/deb.list
+          grep -q 'usr/bin/wayvpet$'                       /tmp/deb.list
           grep -q 'usr/share/applications/wayvpet.desktop' /tmp/deb.list
           grep -q 'usr/share/wayvpet/install-channel'      /tmp/deb.list
           grep -q 'usr/lib/systemd/user/wayvpet.service'   /tmp/deb.list
-      - name: Contenido del .rpm
-        run: rpm -qlp dist/*.rpm
+          grep -q 'usr/share/wayvpet/themes/classic/'      /tmp/deb.list
+          # El base NO debe traer los vpets pesados: eso es wayvpet-vpets.
+          ! grep -q 'themes/miku/' /tmp/deb.list
+      - name: Contenido de los .deb extra
+        run: |
+          set -eux
+          dpkg -c dist/wayvpet-vpets_*.deb | tee /tmp/vpets.list
+          grep -q 'usr/share/wayvpet/themes/miku/'    /tmp/vpets.list
+          grep -q 'usr/share/wayvpet/themes/umbreon/' /tmp/vpets.list
+          ! grep -q 'themes/classic/' /tmp/vpets.list
+          dpkg -c dist/wayvpet-update_*.deb | grep -q 'usr/bin/wayvpet-update-check$'
+      - name: Contenido de los .rpm
+        run: |
+          set -eux
+          rpm -qlp dist/wayvpet-3*.rpm
+          rpm -qlp dist/wayvpet-vpets-*.rpm | grep -q '/usr/share/wayvpet/themes/miku/'
+          rpm -qlp dist/wayvpet-update-*.rpm | grep -q '/usr/bin/wayvpet-update-check'
       - uses: actions/upload-artifact@v4
         with:
           name: wayvpet-packages

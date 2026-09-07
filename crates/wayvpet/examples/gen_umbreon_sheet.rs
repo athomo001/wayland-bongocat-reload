@@ -852,8 +852,8 @@ fn main() {
     }
 
     // Guardar sheet.png
-    let out_dir = Path::new("themes/umbreon");
-    std::fs::create_dir_all(out_dir).expect("crea directorio themes/umbreon");
+    let out_dir = Path::new("vpets/umbreon");
+    std::fs::create_dir_all(out_dir).expect("crea directorio vpets/umbreon");
     let sheet_path = out_dir.join("sheet.png");
     println!(
         "Guardando sprite sheet ({sheet_w}x{sheet_h}, {ROWS} filas) en: {}",

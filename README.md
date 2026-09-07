@@ -265,6 +265,55 @@ cargo build --release   # binarios en target/release/
 cargo test               # toda la batería de tests
 ```
 
+## Empaquetado (`.deb`, `.rpm`, tarball, AUR)
+
+Todo sale a `dist/` (ignorado por git). Necesitas las dos herramientas de cargo
+para los paquetes nativos: `cargo install --locked cargo-deb cargo-generate-rpm`.
+
+Hay **tres** paquetes: `wayvpet` (base, ~3 MB), `wayvpet-vpets` (vpets pesados,
+~9 MB) y `wayvpet-update` (helper del aviso, ~0,7 MB). Los dos últimos son
+opcionales (`Recommends:` del base).
+
+| Quiero… | Comando |
+|---|---|
+| Base (tarball + `.deb` + `.rpm`) + `SHA256SUMS` | `make pkg` |
+| Solo el tarball reproducible (fuente / AUR) | `make dist` |
+| Solo el `.deb` base (Debian/Ubuntu) | `make deb` |
+| Solo el `.rpm` base (Fedora) | `make rpm` |
+| El pack de vpets pesados | `make deb-vpets` / `make rpm-vpets` |
+| El helper de actualización | `make deb-update` / `make rpm-update` |
+| **Los cuatro extras** de golpe | `make pkg-extras` |
+| Publicar una versión nueva en GitHub | `scripts/release.sh X.Y.Z --publish` |
+
+`make pkg` encadena `release → dist → deb → rpm → checksums`; cada objetivo
+intermedio funciona por separado. Release completa: `make pkg && make pkg-extras`.
+El paquete de Arch se construye a partir de
+[`packaging/PKGBUILD`](packaging/PKGBUILD) (`makepkg`), y el workflow de release
+lo sube al AUR.
+
+**Añadir un vpet pesado nuevo:** crea `vpets/<nombre>/` y ya está — los globs del
+empaquetado y las rutas de búsqueda lo recogen solos, sin tocar `Cargo.toml` ni
+el `Makefile`. Detalles en [`packaging/README.md`](packaging/README.md).
+
+Comprobar el contenido de un paquete: `dpkg -c dist/*.deb` · `rpm -qlp dist/*.rpm`.
+
+Detalles (metadatos, canales de instalación, flujo de release):
+[`packaging/README.md`](packaging/README.md).
+
+### Aviso de nueva versión (opcional)
+
+El chequeo de actualizaciones (spec 0015) es un binario **aparte**,
+`wayvpet-update-check`, que solo se compila cuando lo pides — así el núcleo no
+enlaza el cliente HTTPS (`rustls`) ni pesa de más:
+
+```bash
+make update-helper           # compila crates/wayvpet-update con la feature 'net'
+make install-update-helper   # lo instala junto a wayvpet
+```
+
+Sin él, `check_updates=1` en la config no hace nada (queda apagado en silencio).
+Nunca instala una actualización: como mucho descarga el paquete y lo verificas tú.
+
 ## Estado
 
 El núcleo ya está reescrito en Rust con paridad funcional y endurecimiento de

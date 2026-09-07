@@ -149,8 +149,12 @@ pub fn search_dirs() -> Vec<PathBuf> {
     for base in data_dirs.split(':').filter(|s| !s.is_empty()) {
         dirs.push(PathBuf::from(base).join("wayvpet/themes"));
     }
-    // Árbol del repo (desarrollo): `./themes/`.
+    // Árbol del repo (desarrollo): `./themes/` (temas ligeros integrados) y
+    // `./vpets/` (packs pesados; en una instalación van a `wayvpet/themes/` vía
+    // el paquete `wayvpet-vpets`, aquí están sin mover para no inflar el repo
+    // base). Ver `packaging/README.md` §"Añadir un vpet".
     dirs.push(PathBuf::from("themes"));
+    dirs.push(PathBuf::from("vpets"));
     dirs
 }
 

@@ -57,6 +57,9 @@ Thumbs.db
 
 # Rust build output
 /target/
+# Crates fuera del workspace (lock propio); su target aparte.
+/crates/wayvpet-update/target/
+/crates/wayvpet-vpets/target/
 
 # Config local de pruebas (plantilla: wayvpet.conf.example)
 /wayvpet.conf

@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "net")]
+pub mod net;
+
 /// Tope de tamaño del `update-check.json` al leerlo. Lo escribe el propio hijo y
 /// nunca pasa de unos cientos de bytes; un fichero mayor es corrupción o
 /// manipulación y se rechaza **antes** de parsear (spec 0015 §Seguridad:
@@ -152,12 +155,48 @@ pub fn parse_state(bytes: &[u8]) -> Result<UpdateState, StateError> {
 }
 
 /// Serializa el estado como lo escribe el hijo: JSON compacto y un `\n` final.
-/// La escritura atómica al disco (temporal + `rename`) es cosa del hijo (M2).
 #[must_use]
 pub fn to_json(state: &UpdateState) -> String {
     let mut s = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_string());
     s.push('\n');
     s
+}
+
+/// Escribe el estado en `path` de forma **atómica**: temporal en el mismo
+/// directorio + `fsync` + `rename` (spec 0015 §Seguridad: "se escribe atómico").
+/// Un fallo a media escritura no deja `path` corrupto; el lector siempre ve o el
+/// contenido viejo entero o el nuevo entero. Crea el directorio padre si falta.
+///
+/// # Errores
+/// E/S al crear el directorio, el temporal, escribir, sincronizar o renombrar.
+pub fn write_state_atomic(path: &Path, state: &UpdateState) -> io::Result<()> {
+    use std::io::Write;
+
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("update-check.json");
+    let tmp = dir.join(format!(".{name}.tmp.{}", std::process::id()));
+
+    let body = to_json(state);
+    let write = || -> io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Ruta del fichero de estado: `$XDG_STATE_HOME/wayvpet/update-check.json`, o

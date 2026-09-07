@@ -7,8 +7,14 @@ members = [
     "crates/wayvpet",
     "crates/wayvpetctl",
     "crates/wayvpet-config",
-    "crates/wayvpet-update",
 ]
+# `wayvpet-update` (aviso de nueva versión, spec 0015) queda FUERA del workspace
+# a propósito: su cliente HTTPS (`ureq`+`rustls` tras la feature `net`) arrastra
+# `ring`, `icu_*`, `webpki-roots`… y Cargo los anota en `Cargo.lock` aunque la
+# feature esté apagada. Nix (`cargoLock.lockFile`) vendoriza TODO el lock, así
+# que tenerlo aquí engordaría el build del núcleo. El helper tiene su propio
+# `Cargo.lock` y lo compila el empaquetado (`make update-helper`, `.deb`/`.rpm`).
+exclude = ["crates/wayvpet-update", "crates/wayvpet-vpets"]
 
 [workspace.package]
 edition = "2021"

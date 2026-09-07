@@ -1,6 +1,6 @@
 //! Generador del sprite sheet HD de Gabumon (Digimon) a partir del set de stickers
 //! con 7 poses genuinas (idle, walk1, walk2, walk3, sleep, eat_meat, happy).
-//! Produce `themes/gabumon/sheet.png` (2048x2304 px) y `themes/gabumon/writing.apng`.
+//! Produce `vpets/gabumon/sheet.png` (2048x2304 px) y `vpets/gabumon/writing.apng`.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
@@ -602,9 +602,9 @@ fn main() {
         image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (17 * FH) as i64);
     }
 
-    // Guardar themes/gabumon/sheet.png
-    let out_dir = Path::new("themes/gabumon");
-    std::fs::create_dir_all(out_dir).expect("no se pudo crear directorio themes/gabumon");
+    // Guardar vpets/gabumon/sheet.png
+    let out_dir = Path::new("vpets/gabumon");
+    std::fs::create_dir_all(out_dir).expect("no se pudo crear directorio vpets/gabumon");
 
     let sheet_path = out_dir.join("sheet.png");
     sheet
@@ -612,7 +612,7 @@ fn main() {
         .expect("no se pudo guardar sheet.png");
     println!("Guardado exitosamente: {}", sheet_path.display());
 
-    // Generar themes/gabumon/writing.apng
+    // Generar vpets/gabumon/writing.apng
     let apng_path = out_dir.join("writing.apng");
     let apng_file = File::create(&apng_path).expect("no se pudo crear writing.apng");
     let mut writer = BufWriter::new(apng_file);

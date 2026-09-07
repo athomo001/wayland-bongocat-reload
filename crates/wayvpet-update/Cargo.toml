@@ -1,17 +1,21 @@
-# Aviso pasivo de nueva versión (spec 0015). Crate aparte —y no un módulo de
-# `wayvpet-common`— por **peso**: el cliente HTTPS (`ureq`+`rustls`, feature
-# `net`, hito M2) se enlaza SOLO en el binario `wayvpet-update-check`, nunca en
-# el supervisor ni en `wayvpetctl`. La parte sin feature (este M1) es solo el
-# formato del `update-check.json` y la comparación semver.
+# Aviso pasivo de nueva versión (spec 0015). Crate **fuera del workspace
+# principal**, con su propio `Cargo.lock`: así `ureq`+`rustls` (feature `net`) y
+# su árbol (`ring`, `icu_*`, `webpki-roots`, `url`…) NO entran nunca en el lock
+# del núcleo ni en el build de Nix. Lo compila el empaquetado como helper
+# opcional (`Recommends:` en el `.deb`/`.rpm`), y `wayvpet` lo lanza al arrancar
+# solo si `check_updates=1` y el binario está presente.
 [package]
 name = "wayvpet-update"
 version = "3.0.0-dev"
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/athomo001/wayvpet"
 publish = false
-description = "Aviso pasivo de nueva versión de wayvpet: modelo del estado y comparación semver (spec 0015)."
+description = "Aviso pasivo de nueva versión de wayvpet: modelo del estado y, tras la feature `net`, el chequeo HTTPS (spec 0015)."
+
+# Workspace propio: no hereda del de arriba y mantiene su `Cargo.lock` aparte.
+[workspace]
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -19,9 +23,65 @@ unsafe_code = "forbid"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Solo `Version` + su `Ord`; sin features extra.
+# Solo `Version` + su `Ord`.
 semver = "1"
+
+# Cliente HTTPS del chequeo real. `rustls` puro Rust (sin OpenSSL del sistema).
+# Solo con `--features net`, y solo lo enlaza el binario `wayvpet-update-check`.
+ureq = { version = "2.10", default-features = false, features = ["tls"], optional = true }
 
 [features]
 default = []
-# net = ["dep:ureq"]  # M2: el chequeo HTTPS real, tras esta feature.
+net = ["dep:ureq"]
+
+[[bin]]
+name = "wayvpet-update-check"
+path = "src/bin/wayvpet-update-check.rs"
+required-features = ["net"]
+
+# Mismo perfil de release endurecido que el workspace principal.
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "s"
+overflow-checks = true
+
+# ---------------------------------------------------------------------------
+# Empaquetado del helper opcional (spec 0015 M6). Se construye con
+#   cargo deb          --manifest-path crates/wayvpet-update/Cargo.toml
+#   cargo generate-rpm --manifest-path crates/wayvpet-update/Cargo.toml
+# (o `make deb-update` / `make rpm-update`). `cargo deb` compila él mismo con la
+# feature `net`; para el `.rpm` hay que hacer antes `make update-helper`.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+name = "wayvpet-update"
+maintainer = "Athan Espinoza <espinozathan@gmail.com>"
+copyright = "2026, Athan Espinoza y colaboradores de wayvpet"
+license-file = ["../../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+depends = ""
+# El binario que se distribuye lleva el cliente HTTPS: build con `net`.
+features = ["net"]
+extended-description = """\
+Complemento opcional de wayvpet: comprueba al arrancar si hay una version nueva
+publicada en GitHub y lo avisa en el icono de la bandeja. Nunca instala nada;
+como mucho descarga el paquete y verifica su SHA-256. Sin este binario, la
+opcion check_updates no hace nada. La consulta no lleva ningun identificador."""
+assets = [
+    ["target/release/wayvpet-update-check", "usr/bin/", "755"],
+]
+
+[package.metadata.generate-rpm]
+name = "wayvpet-update"
+summary = "Aviso de nueva version para wayvpet (opcional)"
+license = "MIT"
+assets = [
+    { source = "target/release/wayvpet-update-check", dest = "/usr/bin/wayvpet-update-check", mode = "755" },
+]
+
+[package.metadata.generate-rpm.requires]
+# Sin dependencias de runtime: rustls va estático en el binario.

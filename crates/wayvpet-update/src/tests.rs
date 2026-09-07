@@ -157,6 +157,37 @@ fn to_json_da_una_vuelta_completa() {
     assert_eq!(st, again);
 }
 
+#[test]
+fn write_state_atomic_crea_directorio_y_da_la_vuelta() {
+    let dir = std::env::temp_dir().join(format!("wayvpet-atomic-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    // El padre no existe todavía: write_state_atomic lo crea.
+    let p = dir.join("sub/update-check.json");
+
+    let st = parse_state(RELEASE_JSON.as_bytes()).unwrap();
+    write_state_atomic(&p, &st).unwrap();
+
+    assert_eq!(read_state(&p).unwrap().as_ref(), Some(&st));
+    // No queda ningún temporal al lado.
+    let sobras: Vec<_> = std::fs::read_dir(p.parent().unwrap())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+        .collect();
+    assert!(sobras.is_empty(), "temporales sin limpiar: {sobras:?}");
+
+    // Sobrescribir en el sitio también funciona.
+    let st2 = UpdateState {
+        checked_at: "2026-09-07T00:00:00Z".into(),
+        error: Some("sin red".into()),
+        ..Default::default()
+    };
+    write_state_atomic(&p, &st2).unwrap();
+    assert_eq!(read_state(&p).unwrap(), Some(st2));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Ruta XDG y lectura de disco ─────────────────────────────────────────────
 
 #[test]

@@ -1,0 +1,64 @@
+# Pack de vpets pesados (miku, umbreon, gabumon…): SOLO datos, sin código. Es un
+# crate para poder empaquetarlo con las mismas herramientas (`cargo-deb` /
+# `cargo-generate-rpm`) que el resto. Vive fuera del workspace principal para no
+# añadir una entrada al `Cargo.lock` del núcleo (y no tocar el build de Nix).
+#
+# El contenido se toma de `vpets/` en la raíz del repo. **Añadir un vpet nuevo a
+# `vpets/` NO requiere tocar este fichero**: el glob `vpets/**/*` lo recoge.
+[package]
+name = "wayvpet-vpets"
+version = "3.0.0-dev"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/athomo001/wayvpet"
+publish = false
+description = "Pack de vpets pesados para wayvpet (sprite sheets HD: miku, umbreon, gabumon…)."
+
+# Workspace propio: no entra en el lock del núcleo.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+# ---------------------------------------------------------------------------
+# Empaquetado (spec 0002 M5). `make deb-vpets` / `make rpm-vpets`.
+#   cargo deb          --manifest-path crates/wayvpet-vpets/Cargo.toml
+#   cargo generate-rpm --manifest-path crates/wayvpet-vpets/Cargo.toml
+# Los ficheros van al MISMO sitio que los temas del paquete base
+# (`/usr/share/wayvpet/themes/`), así que wayvpet los encuentra igual.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+name = "wayvpet-vpets"
+maintainer = "Athan Espinoza <espinozathan@gmail.com>"
+copyright = "2026, Athan Espinoza y colaboradores de wayvpet"
+license-file = ["../../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+depends = ""
+# Recomienda el motor pero no lo exige: los ficheros son inertes sin `wayvpet`.
+recommends = "wayvpet"
+extended-description = """\
+Vpets HD para wayvpet en formato sprite sheet (miku, umbreon, gabumon y demas
+packs pesados). Se instalan en /usr/share/wayvpet/themes/ y quedan disponibles
+por nombre (theme = miku, etc.). Sin el paquete wayvpet no hacen nada."""
+assets = [
+    ["../../vpets/**/*", "usr/share/wayvpet/themes/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "wayvpet-vpets"
+summary = "Pack de vpets HD para wayvpet"
+license = "MIT"
+# `cargo generate-rpm` se ejecuta DENTRO de este directorio (el crate está fuera
+# del workspace), así que `source` es relativo a él: `../../vpets/`.
+assets = [
+    { source = "../../vpets/**/*", dest = "/usr/share/wayvpet/themes/", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+# Solo datos: sin dependencias.
+
+[package.metadata.generate-rpm.recommends]
+wayvpet = "*"

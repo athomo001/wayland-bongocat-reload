@@ -1,0 +1,35 @@
+# cargo-deny para `wayvpet-update` (spec 0013 §7). Este crate está fuera del
+# workspace principal, así que necesita su propia política: la del `deny.toml`
+# raíz más lo que arrastra `ureq`+`rustls` con la feature `net`.
+#   cargo deny --all-features check
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "MPL-2.0",
+    # Mozilla CA bundle empaquetado por `webpki-roots` (raíces de confianza para
+    # `rustls`): la CDLA-Permissive-2.0 es permisiva, sin copyleft, permite
+    # redistribución. Solo cubre datos (certificados), no código.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

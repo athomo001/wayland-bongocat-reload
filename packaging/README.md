@@ -16,15 +16,51 @@ secretos.
 
 ## Resumen
 
+Hay **tres** paquetes: `wayvpet` (base), `wayvpet-vpets` (vpets pesados) y
+`wayvpet-update` (helper del aviso de nueva versión). Los dos últimos son
+**opcionales** (`Recommends:` del base).
+
 | Quiero… | Comando |
 |---|---|
 | Un tarball de fuentes reproducible | `make dist` |
-| El `.deb` (Debian/Ubuntu) | `make deb` |
-| El `.rpm` (Fedora) | `make rpm` |
-| Todo + checksums en `dist/` | `make pkg` |
+| El `.deb` **base** (Debian/Ubuntu) | `make deb` |
+| El `.rpm` **base** (Fedora) | `make rpm` |
+| Base + tarball + checksums en `dist/` | `make pkg` |
+| Solo el `.deb`/`.rpm` del **pack de vpets** | `make deb-vpets` / `make rpm-vpets` |
+| Solo el `.deb`/`.rpm` del **helper de actualización** | `make deb-update` / `make rpm-update` |
+| **Los cuatro extras** de golpe | `make pkg-extras` |
 | Publicar una versión nueva en GitHub | `scripts/release.sh 3.1.0 --publish` |
 
-Todo sale a `dist/` (ignorado por git).
+Todo sale a `dist/` (ignorado por git). Un flujo de release completo es
+`make pkg && make pkg-extras`.
+
+### Por qué tres paquetes
+
+- **`wayvpet`** (~3 MB): motor + `wayvpetctl` + `wayvpet-config` + temas ligeros
+  (`themes/`: `demo`, `classic`, `pink`). Metadata en
+  `crates/wayvpet/Cargo.toml`.
+- **`wayvpet-vpets`** (~9 MB comprimido): los sprite sheets HD de `vpets/`
+  (`miku`, `umbreon`, `gabumon`…). Solo datos, se instalan al mismo
+  `/usr/share/wayvpet/themes/`. Metadata en `crates/wayvpet-vpets/Cargo.toml`.
+- **`wayvpet-update`** (~0,7 MB): el binario `wayvpet-update-check` con el
+  cliente HTTPS (`rustls`). Fuera del workspace para no meter ese árbol en el
+  `Cargo.lock` del núcleo. Metadata en `crates/wayvpet-update/Cargo.toml`.
+
+`wayvpet-vpets` y `wayvpet-update` tienen su **propio `Cargo.toml` y `Cargo.lock`**
+y se empaquetan con `--manifest-path` (`.deb`) o entrando a su carpeta (`.rpm`,
+porque `cargo-generate-rpm` no acepta `--manifest-path`).
+
+## Añadir un vpet
+
+Un vpet pesado nuevo (sprite sheet) va en **`vpets/<nombre>/`** en la raíz del
+repo. **Eso es todo**: no hay que tocar ningún `Cargo.toml` ni el `Makefile`.
+
+- `make deb-vpets` / `make rpm-vpets` lo recogen (glob `vpets/**/*`).
+- `make install-vpets` y el `installPhase` de Nix lo instalan.
+- En desarrollo, `cargo run -p wayvpet` lo encuentra vía `./vpets/`.
+
+Un tema **ligero** (SVG de trazos) va en `themes/` y entra en el paquete base
+igual de solo. Ver [`../themes/README.md`](../themes/README.md) para el formato.
 
 ## Requisitos
 
@@ -90,6 +126,22 @@ makepkg -si
 Al publicar una release, `.github/workflows/aur-publish.yml` toma
 `packaging/PKGBUILD`, actualiza `pkgver` y `sha256sums`, y lo sube al AUR. Ese
 workflow requiere `AUR_USERNAME`, `AUR_EMAIL` y `AUR_SSH_PRIVATE_KEY`.
+
+## Helper del aviso de nueva versión (`wayvpet-update-check`)
+
+El chequeo de actualizaciones (spec 0015) vive en `crates/wayvpet-update`, **fuera
+del workspace principal** y con su propio `Cargo.lock`. Motivo: su cliente HTTPS
+(`ureq`+`rustls`) arrastra `ring`, `icu_*`, `webpki-roots`… y Cargo los anota en
+el lock aunque la feature esté apagada; tenerlo en el workspace engordaría el
+lock del núcleo y el build de Nix.
+
+```bash
+make update-helper           # compila el binario (feature 'net' = ureq+rustls)
+make install-update-helper   # lo instala en $PREFIX/bin/wayvpet-update-check
+```
+
+Es un **paquete recomendado, no una dependencia**: sin el binario, `check_updates=1`
+no hace nada. El `.deb`/`.rpm` lo declararán `Recommends:` cuando se empaquete.
 
 ## Banderas de instalación y del programa
 

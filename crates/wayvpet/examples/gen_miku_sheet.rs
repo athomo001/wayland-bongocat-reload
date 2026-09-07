@@ -1,6 +1,6 @@
 //! Procesa y ensambla el sprite sheet HD de Hatsune Miku en el estilo sticker chibi
 //! con borde blanco limpio (die-cut sticker) y animaciones relajadas, suaves y naturales
-//! (`themes/miku/sheet.png` y `writing.apng`).
+//! (`vpets/miku/sheet.png` y `writing.apng`).
 
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
@@ -800,7 +800,7 @@ fn main() {
         place(col, 17, &transform_sprite(sprite, 0.0, bounce, 1.01));
     }
 
-    let out_dir = Path::new("themes/miku");
+    let out_dir = Path::new("vpets/miku");
     std::fs::create_dir_all(out_dir).expect("create_dir_all");
 
     let png_bytes = encode_png(sheet_w, sheet_h, final_sheet.as_raw());

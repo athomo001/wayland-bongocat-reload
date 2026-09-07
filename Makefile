@@ -37,6 +37,10 @@ INSTALL_PROGRAM ?= $(INSTALL) -Dm755
 INSTALL_DATA    ?= $(INSTALL) -Dm644
 
 REL_DIR := target/release
+# `wayvpet-update` (aviso de nueva versión, spec 0015) vive fuera del workspace
+# principal, con su propio Cargo.lock, para no meter `ureq`/`rustls` en el lock
+# del núcleo ni en el build de Nix. Se compila aparte, como helper opcional.
+UPDATE_DIR := crates/wayvpet-update
 # Canal de instalación para el aviso de nueva versión (spec 0015): los paquetes
 # nativos lo fijan a deb/rpm/arch; los repos de distro, a `distro`.
 CHANNEL ?= source
@@ -46,7 +50,8 @@ RPMVER  := $(subst -,~,$(VERSION))
 DIST    := dist
 
 .PHONY: all build release debug test clippy fmt fmt-check install uninstall \
-        dist deb rpm pkg checksums clean
+        dist deb rpm pkg checksums clean update-helper install-update-helper \
+        install-vpets deb-update rpm-update deb-vpets rpm-vpets pkg-extras
 
 all: release
 
@@ -56,17 +61,27 @@ build release:
 debug:
 	$(CARGO) build --workspace
 
+# El helper de red del aviso de nueva versión (spec 0015 M2). `--features net`
+# enlaza `ureq`+`rustls`; sin la feature ni siquiera se compila ese binario.
+update-helper:
+	cd $(UPDATE_DIR) && $(CARGO) build --release --locked --features net
+
 test:
 	$(CARGO) test --workspace
+	cd $(UPDATE_DIR) && $(CARGO) test --locked
+	cd $(UPDATE_DIR) && $(CARGO) test --locked --features net
 
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	cd $(UPDATE_DIR) && $(CARGO) clippy --all-targets --features net -- -D warnings
 
 fmt:
 	$(CARGO) fmt --all
+	cd $(UPDATE_DIR) && $(CARGO) fmt --all
 
 fmt-check:
 	$(CARGO) fmt --all --check
+	cd $(UPDATE_DIR) && $(CARGO) fmt --all --check
 
 install: release
 	$(INSTALL_PROGRAM) $(REL_DIR)/wayvpet            $(DESTDIR)$(BINDIR)/wayvpet
@@ -105,8 +120,27 @@ install: release
 	@echo "wayvpet $(VERSION) instalado en $(DESTDIR)$(PREFIX)."
 	@echo "Autoarranque:  systemctl --user enable --now wayvpet.service"
 
+# Instala el helper de red aparte (paquete "Recommends", no parte de la base).
+# Requiere `make update-helper` antes. Sin él, el aviso queda apagado en
+# silencio aunque `check_updates=1`.
+install-update-helper: update-helper
+	$(INSTALL_PROGRAM) $(UPDATE_DIR)/target/release/wayvpet-update-check \
+	  $(DESTDIR)$(BINDIR)/wayvpet-update-check
+	@echo "wayvpet-update-check instalado. El aviso se activa con check_updates=1."
+
+# Instala el pack de vpets pesados (`vpets/`) en el MISMO sitio que los temas de
+# la base (`.../wayvpet/themes/`), así wayvpet los encuentra por nombre. No
+# necesita compilar nada.
+install-vpets:
+	@find vpets -type f | while read -r f; do \
+	  dest="$(DESTDIR)$(PKGDATADIR)/themes/$${f#vpets/}"; \
+	  $(INSTALL_DATA) "$$f" "$$dest"; \
+	done
+	@echo "Pack de vpets instalado en $(DESTDIR)$(PKGDATADIR)/themes/."
+
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/wayvpet $(DESTDIR)$(BINDIR)/wayvpetctl \
+	      $(DESTDIR)$(BINDIR)/wayvpet-update-check \
 	      $(DESTDIR)$(BINDIR)/wayvpet-config $(DESTDIR)$(BINDIR)/wayvpet-find-devices \
 	      $(DESTDIR)$(MANDIR)/wayvpet.1 \
 	      $(DESTDIR)$(APPDIR)/wayvpet.desktop $(DESTDIR)$(APPDIR)/wayvpet-config.desktop \
@@ -150,6 +184,48 @@ checksums:
 	@cd $(DIST) && sha256sum wayvpet* > SHA256SUMS && cat SHA256SUMS
 
 pkg: release dist deb rpm checksums
+	@echo; ls -1 $(DIST)
+
+# --- paquetes EXTRA (opcionales) ---------------------------------------------
+# `wayvpet-update` (helper del aviso) y `wayvpet-vpets` (vpets pesados). Cada
+# uno tiene su Cargo.toml fuera del workspace; se empaquetan con --manifest-path.
+# Van a `dist/` como el resto. `make pkg-extras` hace los cuatro + checksums.
+
+UPDATE_TOML := $(UPDATE_DIR)/Cargo.toml
+VPETS_TOML  := crates/wayvpet-vpets/Cargo.toml
+
+# `cargo-deb` acepta --manifest-path; `cargo-generate-rpm` no, así que para el
+# .rpm se entra al directorio del crate (por eso los `source` de su metadata
+# generate-rpm llevan `../../`).
+ABS_DIST := $(abspath $(DIST))
+
+deb-update:
+	@command -v cargo-deb >/dev/null 2>&1 || { echo "falta cargo-deb"; exit 1; }
+	@mkdir -p $(DIST)
+	$(CARGO) deb --manifest-path $(UPDATE_TOML) --output $(DIST)
+	@echo "$(DIST)/wayvpet-update_*.deb"
+
+rpm-update: update-helper
+	@command -v cargo-generate-rpm >/dev/null 2>&1 || { echo "falta cargo-generate-rpm"; exit 1; }
+	@mkdir -p $(DIST)
+	cd $(UPDATE_DIR) && $(CARGO) generate-rpm -s 'version = "$(RPMVER)"' -o "$(ABS_DIST)"
+	@echo "$(DIST)/wayvpet-update-*.rpm"
+
+deb-vpets:
+	@command -v cargo-deb >/dev/null 2>&1 || { echo "falta cargo-deb"; exit 1; }
+	@mkdir -p $(DIST)
+	$(CARGO) deb --manifest-path $(VPETS_TOML) --output $(DIST)
+	@echo "$(DIST)/wayvpet-vpets_*.deb"
+
+rpm-vpets:
+	@command -v cargo-generate-rpm >/dev/null 2>&1 || { echo "falta cargo-generate-rpm"; exit 1; }
+	@mkdir -p $(DIST)
+	cd crates/wayvpet-vpets && $(CARGO) build --release
+	cd crates/wayvpet-vpets && $(CARGO) generate-rpm -s 'version = "$(RPMVER)"' -o "$(ABS_DIST)"
+	@echo "$(DIST)/wayvpet-vpets-*.rpm"
+
+pkg-extras: deb-update rpm-update deb-vpets rpm-vpets
+	@cd $(DIST) && sha256sum wayvpet-update* wayvpet-vpets* >> SHA256SUMS 2>/dev/null || true
 	@echo; ls -1 $(DIST)
 
 clean:

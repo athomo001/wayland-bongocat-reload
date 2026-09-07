@@ -85,12 +85,19 @@ license-file = ["../../LICENSE", "0"]
 section = "x11"
 priority = "optional"
 depends = "$auto"
+# Extras opcionales (no dependencias duras): el pack de vpets pesados y el
+# helper del aviso de nueva versión. Un `apt install wayvpet` los sugiere;
+# `dpkg -i` los ignora sin quejarse.
+recommends = "wayvpet-vpets, wayvpet-update"
 extended-description = """\
 wayvpet dibuja una mascota animada sobre el escritorio en compositores Wayland.
 Reacciona al teclado y al raton, admite varios monitores, temas cargados de
 disco e icono en la bandeja del sistema. Por privacidad no registra que teclas
 se pulsan: el lector de entrada corre aislado con seccomp."""
 maintainer-scripts = "../../packaging/deb/"
+# `themes/**/*` = solo los temas ligeros integrados (demo, classic, pink). Los
+# vpets pesados (miku, umbreon, gabumon…) viven en `vpets/` y los empaqueta
+# `wayvpet-vpets`. Añadir un vpet nuevo a `vpets/` no toca este fichero.
 assets = [
     ["target/release/wayvpet",        "usr/bin/",                                       "755"],
     ["target/release/wayvpetctl",     "usr/bin/",                                       "755"],
@@ -111,6 +118,8 @@ assets = [
 name = "wayvpet"
 summary = "Mascota animada sobre Wayland"
 license = "MIT"
+# `themes/**/*` = solo los ligeros (demo, classic, pink); los pesados van en el
+# paquete `wayvpet-vpets` desde `vpets/`.
 assets = [
     { source = "target/release/wayvpet",        dest = "/usr/bin/wayvpet",        mode = "755" },
     { source = "target/release/wayvpetctl",     dest = "/usr/bin/wayvpetctl",     mode = "755" },
@@ -139,4 +148,9 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -qtf /
 
 [package.metadata.generate-rpm.requires]
 # Runtime: solo libc/wayland del sistema; el resto va estático en el binario.
+
+[package.metadata.generate-rpm.recommends]
+# Extras opcionales (dependencias débiles): `dnf` los ofrece, no fallan si faltan.
+wayvpet-vpets = "*"
+wayvpet-update = "*"
 

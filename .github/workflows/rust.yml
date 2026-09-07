@@ -17,6 +17,10 @@ on:
       - "deny.toml"
       - ".github/workflows/rust.yml"
 
+# `crates/wayvpet-update` está fuera del workspace (lock propio, spec 0015): el
+# job `check` cubre el núcleo; `update-helper` lo compila y prueba aparte, con
+# y sin la feature `net` (que enlaza `ureq`+`rustls`).
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -39,6 +43,31 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets
 
+  update-helper:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/wayvpet-update
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/wayvpet-update
+      - name: Formato
+        run: cargo fmt --all --check
+      - name: Clippy (con y sin net)
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features net -- -D warnings
+      - name: Tests (con y sin net)
+        run: |
+          cargo test --locked --all-targets
+          cargo test --locked --all-targets --features net
+      - name: Build del binario
+        run: cargo build --release --locked --features net
+
   deny:
     runs-on: ubuntu-latest
     steps:
@@ -46,3 +75,9 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      # `wayvpet-update` tiene su propio lock y política; se comprueba aparte,
+      # con todas las features (incluye el árbol de `ureq`+`rustls`).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check --all-features
+          manifest-path: crates/wayvpet-update/Cargo.toml
