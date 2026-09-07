@@ -1,13 +1,26 @@
 //! Generador del sprite sheet HD de Umbreon (Gato Negro) con animación genuina fotograma a fotograma:
-//! - Cada estado tiene fotogramas de animación REALMENTE DIBUJADOS (articulación de patas, lamerse, comer, bufido).
-//! - CERO escalados artificiales, CERO estiramientos: cada dibujo mantiene su escala anatómica fija.
-//! - Contorno blanco die-cut limpio y nítido de 3.2px.
-//! - Caminata lateral auténtica de 4 patas (w0 a w5): ciclo completo a escala uniforme de 1 pixel de tolerancia.
-//! - Comida auténtica (e0 a e5): acercarse al cuenco -> morder comida -> masticar con migajas -> segundo mordisco -> masticar feliz -> lamerse el hocico con plato vacío.
-//! - Enojado auténtico (a0 a a5): tensión -> orejas aplastadas y colmillos -> bufido arqueando lomo con cola erizada -> hissing agresivo -> gruñido -> acecho agazapado.
-//! - Caza del ratón (p0 a p5): acecho -> agazapado -> salto en el aire -> zambullida -> captura -> celebración.
-//! - Aseo felino (g0 a g5): sentado -> alzar pata -> lamer con lengua -> lavarse cara y oreja -> sacudir pata -> presumir.
-//! - Tecleo Bongo Cat (writing): postura sentada adorable alternando patitas sobre el teclado con chispas doradas.
+//! - 19 filas de animación REAL y ESPECÍFICA de gato:
+//!   1. Idle: movimiento amplio de cola de lado a lado, giro de cabeza, orejas y parpadeo.
+//!   2. Start writing: transición de reposo a patas en teclado.
+//!   3. Writing: patitas delanteras alternando toques sobre el teclado con chispas doradas y orejas dinámicas.
+//!   4. End writing: transición de vuelta a reposo.
+//!   5. Sleep: durmiendo hecho un ovillo con Zzz ascendentes.
+//!   6. Happy: caza acrobática del ratón con captura y salto.
+//!   7. Boring: acicalamiento felino y lamido de pata y bigotes.
+//!   8. Wake up: despertar estirando lomo y patas.
+//!   9. Walk: caminata articulada a 4 patas paso a paso.
+//!   10. Run: sprint / carrera veloz con galope felino auténtico.
+//!   11. Scratch: apoyado en patas traseras rascando la pared / cristal de la pantalla al llegar al borde.
+//!   12. Eat: comiendo de su plato con croquetas crujientes.
+//!   13. Angry: lomo arqueado, cola erizada y bufido.
+//!   14. Knead: amasando pan / haciendo galletitas rítmicamente con patitas y ronroneo.
+//!   15. Box: dentro de su cajita de cartón asomando cabeza y patitas curioso.
+//!   16. CatchBug: cazando moscas en el aire dando manotazos y saltos.
+//!   17. Roll: rodando panza arriba por el suelo moviendo las 4 patas al aire.
+//!   18. ButtWiggle: agazapado meneando el trasero con pupilas dilatadas antes de saltar.
+//!   19. Stretch: estiramiento yoga felino con pecho al suelo y arqueo de lomo bostezando.
+//! - CERO deformaciones inflables ni cambios bruscos de escala.
+//! - Contorno blanco die-cut limpio de 3.2px.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
@@ -15,8 +28,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-const FW: u32 = 128;
-const FH: u32 = 128;
+const FW: u32 = 192;
+const FH: u32 = 160;
+const FLOOR_Y: u32 = 144;
 const COLS: u32 = 16;
 const ROWS: u32 = 19;
 
@@ -82,7 +96,7 @@ fn render_die_cut_border(canvas: &RgbaImage) -> RgbaImage {
     out
 }
 
-/// Extrae limpiamente el personaje eliminando fondos y sombras JPEG con escala fija y anclaje al suelo
+/// Extrae limpiamente el personaje con escala fija y anclaje constante
 fn extract_clean_character(
     raw_img: &DynamicImage,
     rx: u32,
@@ -93,7 +107,42 @@ fn extract_clean_character(
     floor_y: u32,
     include_props: bool,
 ) -> RgbaImage {
-    let sub = image::imageops::crop_imm(raw_img, rx, ry, rw, rh).to_image();
+    let mut sub = image::imageops::crop_imm(raw_img, rx, ry, rw, rh).to_image();
+
+    // Eliminar líneas divisorias o de suelo horizontales delgadas de la cuadrícula
+    for y in 0..rh {
+        let mut dark_count = 0;
+        for x in 0..rw {
+            let p = sub.get_pixel(x, y);
+            if (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0 < 200.0 {
+                dark_count += 1;
+            }
+        }
+        if dark_count > (rw * 3 / 4) {
+            let y_above = y.saturating_sub(4);
+            let y_below = (y + 4).min(rh - 1);
+            let check_empty = |cy: u32| -> bool {
+                let mut c = 0;
+                for x in 0..rw {
+                    let p = sub.get_pixel(x, cy);
+                    if (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0 < 200.0 {
+                        c += 1;
+                    }
+                }
+                c < (rw / 5)
+            };
+            if check_empty(y_above) || check_empty(y_below) {
+                for dy in 0..=2 {
+                    let cy = y + dy;
+                    if cy < rh {
+                        for x in 0..rw {
+                            sub.put_pixel(x, cy, Rgba([255, 255, 255, 255]));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let mut is_char = vec![false; (rw * rh) as usize];
     for y in 0..rh {
@@ -165,18 +214,23 @@ fn extract_clean_character(
         cb_max_y = cb_max_y.max(y);
     }
 
-    if include_props {
-        let mid_y = (cb_min_y + cb_max_y) / 2;
-        for comp in &components[1..] {
-            let is_near_bottom = comp.iter().any(|&(x, y)| {
-                y >= mid_y
-                    && main_comp.iter().any(|&(mx, my)| {
-                        let dx = (x as i32 - mx as i32).abs();
-                        let dy = (y as i32 - my as i32).abs();
-                        dx * dx + dy * dy <= 1600
-                    })
-            });
-            if is_near_bottom && comp.len() >= 25 {
+    // Incluir partes satélites (como cola u orejas separadas por pocos píxeles)
+    for comp in &components[1..] {
+        if comp.len() > 60 {
+            let mut close = false;
+            for &(cx, cy) in comp {
+                for &(mx, my) in main_comp {
+                    let d2 = (cx as i32 - mx as i32).pow(2) + (cy as i32 - my as i32).pow(2);
+                    if d2 <= 25 * 25 {
+                        close = true;
+                        break;
+                    }
+                }
+                if close {
+                    break;
+                }
+            }
+            if close {
                 for &(x, y) in comp {
                     body_mask[(y * rw + x) as usize] = true;
                     cb_min_x = cb_min_x.min(x);
@@ -188,71 +242,138 @@ fn extract_clean_character(
         }
     }
 
-    let clean_w = cb_max_x - cb_min_x + 1;
-    let clean_h = cb_max_y - cb_min_y + 1;
-    let mut char_img: RgbaImage = ImageBuffer::new(clean_w, clean_h);
-
-    for y in 0..clean_h {
-        for x in 0..clean_w {
-            let bx = cb_min_x + x;
-            let by = cb_min_y + y;
-            if body_mask[(by * rw + bx) as usize] {
-                let p = sub.get_pixel(bx, by);
-                char_img.put_pixel(x, y, Rgba([p[0], p[1], p[2], 255]));
+    // Si include_props está activo (caja de cartón, plato de comida, mosca)
+    if include_props {
+        for comp in &components[1..] {
+            if comp.len() > 80 {
+                let mut is_prop = false;
+                for &(_cx, cy) in comp {
+                    if cy >= cb_max_y.saturating_sub(70) || cy <= cb_min_y.saturating_add(50) {
+                        is_prop = true;
+                        break;
+                    }
+                }
+                if is_prop {
+                    for &(x, y) in comp {
+                        body_mask[(y * rw + x) as usize] = true;
+                        cb_min_x = cb_min_x.min(x);
+                        cb_max_x = cb_max_x.max(x);
+                        cb_min_y = cb_min_y.min(y);
+                        cb_max_y = cb_max_y.max(y);
+                    }
+                }
             }
         }
     }
 
-    let nw = ((clean_w as f32 * scale).round() as u32).max(1);
-    let nh = ((clean_h as f32 * scale).round() as u32).max(1);
-    let resized = image::imageops::resize(&char_img, nw, nh, image::imageops::FilterType::Lanczos3);
+    let char_center_x = (cb_min_x + cb_max_x) as f32 / 2.0;
+    let char_bottom_y = cb_max_y as f32;
 
-    let ox = (FW.saturating_sub(nw) / 2) as i64;
-    let oy = (floor_y.saturating_sub(nh)) as i64;
+    let target_center_x = (FW / 2) as f32;
+    let target_bottom_y = floor_y as f32;
 
-    let mut canvas: RgbaImage = ImageBuffer::new(FW, FH);
-    image::imageops::overlay(&mut canvas, &resized, ox, oy);
+    let mut clean_char = ImageBuffer::new(FW, FH);
 
-    render_die_cut_border(&canvas)
+    for y in 0..FH {
+        for x in 0..FW {
+            let src_x = char_center_x + (x as f32 - target_center_x) / scale;
+            let src_y = char_bottom_y + (y as f32 - target_bottom_y) / scale;
+
+            let px = src_x.round() as i32;
+            let py = src_y.round() as i32;
+
+            if px >= 0 && px < rw as i32 && py >= 0 && py < rh as i32 {
+                let idx = (py as u32 * rw + px as u32) as usize;
+                if body_mask[idx] {
+                    let c = sample_bilinear(&sub, src_x, src_y);
+                    clean_char.put_pixel(x, y, c);
+                }
+            }
+        }
+    }
+
+    render_die_cut_border(&clean_char)
 }
 
-fn sample_bilinear(src: &RgbaImage, sx: f32, sy: f32) -> Rgba<u8> {
-    let (w, h) = src.dimensions();
-    if sx < -0.5 || sx > w as f32 - 0.5 || sy < -0.5 || sy > h as f32 - 0.5 {
-        return Rgba([0, 0, 0, 0]);
-    }
-    let x0 = sx.floor() as i32;
-    let y0 = sy.floor() as i32;
+fn sample_bilinear(img: &RgbaImage, x: f32, y: f32) -> Rgba<u8> {
+    let (w, h) = img.dimensions();
+    let x0 = x.floor() as i32;
+    let y0 = y.floor() as i32;
     let x1 = x0 + 1;
     let y1 = y0 + 1;
-    let fx = (sx - x0 as f32).clamp(0.0, 1.0);
-    let fy = (sy - y0 as f32).clamp(0.0, 1.0);
 
-    let get = |x: i32, y: i32| -> [f32; 4] {
-        if x >= 0 && x < w as i32 && y >= 0 && y < h as i32 {
-            let p = src.get_pixel(x as u32, y as u32);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+
+    let get_p = |px: i32, py: i32| -> [f32; 4] {
+        if px >= 0 && px < w as i32 && py >= 0 && py < h as i32 {
+            let p = img.get_pixel(px as u32, py as u32);
             [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
         } else {
             [0.0, 0.0, 0.0, 0.0]
         }
     };
 
-    let p00 = get(x0, y0);
-    let p10 = get(x1, y0);
-    let p01 = get(x0, y1);
-    let p11 = get(x1, y1);
+    let p00 = get_p(x0, y0);
+    let p10 = get_p(x1, y0);
+    let p01 = get_p(x0, y1);
+    let p11 = get_p(x1, y1);
 
     let mut out = [0u8; 4];
     for c in 0..4 {
         let top = p00[c] * (1.0 - fx) + p10[c] * fx;
         let bot = p01[c] * (1.0 - fx) + p11[c] * fx;
-        let v = (top * (1.0 - fy) + bot * fy).round().clamp(0.0, 255.0);
-        out[c] = v as u8;
+        let val = top * (1.0 - fy) + bot * fy;
+        out[c] = val.round().clamp(0.0, 255.0) as u8;
     }
     Rgba(out)
 }
 
-/// Desplaza el sprite manteniendo estrictamente su escala real 1.0 a 1
+/// Extrae automáticamente una secuencia de 6 poses distribuidas en 4 columnas x 2 filas
+fn extract_sequence_4x2(
+    raw: &DynamicImage,
+    scale: f32,
+    floor_y: u32,
+    include_props: bool,
+) -> Vec<RgbaImage> {
+    let mut frames = Vec::new();
+    let col_w = raw.width() / 4;
+    let row_h = raw.height() / 2;
+    for r in 0..2 {
+        for c in 0..4 {
+            if frames.len() >= 6 {
+                break;
+            }
+            let rx = c * col_w;
+            let ry = r * row_h;
+            let f =
+                extract_clean_character(raw, rx, ry, col_w, row_h, scale, floor_y, include_props);
+            frames.push(f);
+        }
+    }
+    frames
+}
+
+/// Extrae automáticamente una secuencia de 6 poses distribuidas horizontalmente en 1 fila
+fn extract_sequence_6x1(
+    raw: &DynamicImage,
+    scale: f32,
+    floor_y: u32,
+    include_props: bool,
+) -> Vec<RgbaImage> {
+    let mut frames = Vec::new();
+    let col_w = raw.width() / 6;
+    let row_h = raw.height();
+    for c in 0..6 {
+        let rx = c * col_w;
+        let ry = 0;
+        let f = extract_clean_character(raw, rx, ry, col_w, row_h, scale, floor_y, include_props);
+        frames.push(f);
+    }
+    frames
+}
+
+/// Desplaza el sprite manteniendo estrictamente su escala real 1.0
 fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
     let mut out = ImageBuffer::new(FW, FH);
     for y in 0..FH {
@@ -265,50 +386,6 @@ fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
             }
         }
     }
-    out
-}
-
-/// Anima `idle` con pestañeo tierno natural sin deformar el cuerpo
-fn animate_idle(src: &RgbaImage, blink_state: u8) -> RgbaImage {
-    let mut out = src.clone();
-
-    if blink_state == 1 {
-        // Punto intermedio: párpados bajando hasta la mitad
-        for dx in -3i32..=3i32 {
-            let px_l = 46 + dx;
-            let px_r = 71 + dx;
-            let py = 52 + (dx.abs() / 2);
-            if py >= 0 && py < FH as i32 {
-                if px_l >= 0 && px_l < FW as i32 {
-                    out.put_pixel(px_l as u32, py as u32, Rgba([40, 36, 38, 255]));
-                }
-                if px_r >= 0 && px_r < FW as i32 {
-                    out.put_pixel(px_r as u32, py as u32, Rgba([40, 36, 38, 255]));
-                }
-            }
-        }
-    } else if blink_state == 2 {
-        // Ojos completamente cerrados en curvatura tierna
-        for dx in -3i32..=3i32 {
-            let px_l = 46 + dx;
-            let px_r = 71 + dx;
-            let py = 54 + (dx.abs() / 2);
-            if py >= 0 && py < FH as i32 {
-                for dy in 0..=1 {
-                    let y_curr = py + dy;
-                    if y_curr >= 0 && y_curr < FH as i32 {
-                        if px_l >= 0 && px_l < FW as i32 {
-                            out.put_pixel(px_l as u32, y_curr as u32, Rgba([30, 26, 28, 255]));
-                        }
-                        if px_r >= 0 && px_r < FW as i32 {
-                            out.put_pixel(px_r as u32, y_curr as u32, Rgba([30, 26, 28, 255]));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     out
 }
 
@@ -368,128 +445,280 @@ fn draw_sparkle(img: &mut RgbaImage, cx: i32, cy: i32, rad: i32, color: Rgba<u8>
 }
 
 fn main() {
-    let sheet_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_cat_sheet_1788633569390.jpg";
-    let walk_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_walk_seq_1788730357359.jpg";
-    let pounce_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_pounce_seq_1788637088867.jpg";
-    let groom_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_groom_seq_1788637133036.jpg";
-    let eat_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_eat_seq_1788730463393.jpg";
-    let angry_src = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e/umbreon_angry_seq_1788730506231.jpg";
+    let base = "/home/tilde/.gemini/antigravity-ide/brain/e52cd317-a43b-4ab2-8720-cbdd49fe048e";
+    let sheet_src = format!("{}/umbreon_cat_sheet_1788633569390.jpg", base);
+    let idle_src = format!("{}/umbreon_idle_seq_1788736399430.jpg", base);
+    let scratch_src = format!("{}/umbreon_scratch_seq_1788736169472.jpg", base);
+    let run_src = format!("{}/umbreon_run_seq_1788736281281.jpg", base);
+    let walk_src = format!("{}/umbreon_walk_seq_1788730357359.jpg", base);
+    let pounce_src = format!("{}/umbreon_pounce_seq_1788637088867.jpg", base);
+    let groom_src = format!("{}/umbreon_groom_seq_1788637133036.jpg", base);
+    let eat_src = format!("{}/umbreon_eat_seq_1788730463393.jpg", base);
+    let angry_src = format!("{}/umbreon_angry_seq_1788730506231.jpg", base);
+
+    // 6 Nuevas secuencias genuinas de gato:
+    let knead_src = format!("{}/umbreon_knead_seq_1788737871628.jpg", base);
+    let box_src = format!("{}/umbreon_box_seq_1788737917340.jpg", base);
+    let fly_src = format!("{}/umbreon_fly_seq_1788737963737.jpg", base);
+    let roll_src = format!("{}/umbreon_roll_seq_1788738014524.jpg", base);
+    let wiggle_src = format!("{}/umbreon_wiggle_seq_1788738087774.jpg", base);
+    let stretch_src = format!("{}/umbreon_stretch_seq_1788738172015.jpg", base);
 
     println!("Cargando hojas de sprites limpias de Umbreon...");
-    let raw_img = image::open(sheet_src).expect("abre umbreon_cat_sheet.jpg");
-    let raw_walk = image::open(walk_src).expect("abre umbreon_walk_seq.jpg");
-    let raw_pounce = image::open(pounce_src).expect("abre umbreon_pounce_seq.jpg");
-    let raw_groom = image::open(groom_src).expect("abre umbreon_groom_seq.jpg");
-    let raw_eat = image::open(eat_src).expect("abre umbreon_eat_seq.jpg");
-    let raw_angry = image::open(angry_src).expect("abre umbreon_angry_seq.jpg");
+    let raw_img = image::open(&sheet_src).expect("abre sheet_src");
+    let raw_idle = image::open(&idle_src).expect("abre idle_src");
+    let raw_scratch = image::open(&scratch_src).expect("abre scratch_src");
+    let raw_run = image::open(&run_src).expect("abre run_src");
+    let raw_walk = image::open(&walk_src).expect("abre walk_src");
+    let raw_pounce = image::open(&pounce_src).expect("abre pounce_src");
+    let raw_groom = image::open(&groom_src).expect("abre groom_src");
+    let raw_eat = image::open(&eat_src).expect("abre eat_src");
+    let raw_angry = image::open(&angry_src).expect("abre angry_src");
 
-    // 1. Poses básicas (Idle y Sleep)
-    println!("Extrayendo poses base (Idle y Sleep)...");
-    let s_idle = extract_clean_character(&raw_img, 45, 20, 278, 325, 0.35, 118, false);
-    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, 118, true);
+    let raw_knead = image::open(&knead_src).expect("abre knead_src");
+    let raw_box = image::open(&box_src).expect("abre box_src");
+    let raw_fly = image::open(&fly_src).expect("abre fly_src");
+    let raw_roll = image::open(&roll_src).expect("abre roll_src");
+    let raw_wiggle = image::open(&wiggle_src).expect("abre wiggle_src");
+    let raw_stretch = image::open(&stretch_src).expect("abre stretch_src");
 
-    // 2. Caminata genuina de 4 patas (6 fotogramas secuenciales exactos a escala uniforme 0.38)
-    println!("Extrayendo 6 fotogramas de caminata genuina de 4 patas...");
-    let w0 = extract_clean_character(&raw_walk, 10, 145, 226, 260, 0.38, 118, false);
-    let w1 = extract_clean_character(&raw_walk, 236, 145, 223, 260, 0.38, 118, false);
-    let w2 = extract_clean_character(&raw_walk, 459, 145, 222, 260, 0.38, 118, false);
-    let w3 = extract_clean_character(&raw_walk, 681, 145, 221, 260, 0.38, 118, false);
-    let w4 = extract_clean_character(&raw_walk, 902, 145, 223, 260, 0.38, 118, false);
-    let w5 = extract_clean_character(&raw_walk, 1125, 145, 235, 260, 0.38, 118, false);
+    // 1. Pose Sleep
+    println!("Extrayendo pose base Sleep...");
+    let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, FLOOR_Y, true);
+
+    // 2. IDLE GENUINO: 8 poses con movimiento de cola de izquierda a derecha, orejas y cabeza
+    println!("Extrayendo 8 fotogramas genuinos de IDLE (cola batiendo de lado a lado)...");
+    let idle_boxes = [
+        (40, 30, 280, 330),
+        (370, 30, 270, 330),
+        (720, 30, 310, 330),
+        (1050, 30, 280, 330),
+        (40, 400, 260, 340),
+        (360, 390, 260, 350),
+        (690, 400, 300, 340),
+        (1050, 400, 290, 340),
+    ];
+    let mut idle_frames = Vec::new();
+    for &(bx, by, bw, bh) in &idle_boxes {
+        let f = extract_clean_character(&raw_idle, bx, by, bw, bh, 0.35, FLOOR_Y, false);
+        idle_frames.push(f);
+    }
+
+    // 3. SCRATCH GENUINO: 6 poses apoyado en 2 patas rascando la pared
+    println!(
+        "Extrayendo 6 fotogramas genuinos de SCRATCH (rascar la pantalla al llegar al borde)..."
+    );
+    let scratch_boxes = [
+        (60, 45, 390, 295),
+        (490, 45, 390, 295),
+        (910, 45, 390, 295),
+        (60, 410, 390, 290),
+        (490, 410, 390, 290),
+        (910, 410, 390, 290),
+    ];
+    let mut scratch_frames = Vec::new();
+    for &(bx, by, bw, bh) in &scratch_boxes {
+        let f = extract_clean_character(&raw_scratch, bx, by, bw, bh, 0.33, FLOOR_Y, false);
+        scratch_frames.push(f);
+    }
+
+    // 4. RUN GENUINO: 6 poses de sprint y galope felino veloz
+    println!("Extrayendo 6 fotogramas genuinos de RUN (carrera felina veloz)...");
+    let run_boxes = [
+        (40, 80, 410, 250),
+        (470, 80, 430, 250),
+        (920, 80, 410, 250),
+        (40, 395, 410, 255),
+        (470, 395, 430, 255),
+        (920, 395, 410, 255),
+    ];
+    let mut run_frames = Vec::new();
+    for &(bx, by, bw, bh) in &run_boxes {
+        let f = extract_clean_character(&raw_run, bx, by, bw, bh, 0.33, FLOOR_Y, false);
+        run_frames.push(f);
+    }
+
+    // 5. WALK GENUINO: 6 poses de caminata a 4 patas a escala fija 0.38
+    println!("Extrayendo 6 fotogramas de WALK (caminata a 4 patas)...");
+    let w0 = extract_clean_character(&raw_walk, 10, 145, 226, 260, 0.38, FLOOR_Y, false);
+    let w1 = extract_clean_character(&raw_walk, 236, 145, 223, 260, 0.38, FLOOR_Y, false);
+    let w2 = extract_clean_character(&raw_walk, 459, 145, 222, 260, 0.38, FLOOR_Y, false);
+    let w3 = extract_clean_character(&raw_walk, 681, 145, 221, 260, 0.38, FLOOR_Y, false);
+    let w4 = extract_clean_character(&raw_walk, 902, 145, 223, 260, 0.38, FLOOR_Y, false);
+    let w5 = extract_clean_character(&raw_walk, 1125, 145, 235, 260, 0.38, FLOOR_Y, false);
     let walk_frames = [w0, w1, w2, w3, w4, w5];
 
-    // 3. Caza del ratón (6 fotogramas secuenciales a escala fija 0.38)
+    // 6. CAZA DEL RATÓN (HAPPY): 6 poses acrobáticas a escala fija 0.38
     println!("Extrayendo 6 fotogramas de caza del ratón...");
-    let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, 118, false);
-    let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, 118, false);
-    let p2 = extract_clean_character(&raw_pounce, 470, 240, 240, 210, 0.38, 104, false);
-    let p3 = extract_clean_character(&raw_pounce, 715, 230, 205, 240, 0.38, 110, false);
-    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, 118, true);
-    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, 118, true);
+    let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, FLOOR_Y, false);
+    let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, FLOOR_Y, false);
+    let p2 = extract_clean_character(
+        &raw_pounce,
+        470,
+        240,
+        240,
+        210,
+        0.38,
+        FLOOR_Y.saturating_sub(14),
+        false,
+    );
+    let p3 = extract_clean_character(
+        &raw_pounce,
+        715,
+        230,
+        205,
+        240,
+        0.38,
+        FLOOR_Y.saturating_sub(8),
+        false,
+    );
+    let p4 = extract_clean_character(&raw_pounce, 930, 265, 195, 235, 0.38, FLOOR_Y, true);
+    let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, FLOOR_Y, true);
     let pounce_frames = [p0, p1, p2, p3, p4, p5];
 
-    // 4. Aseo felino (6 fotogramas secuenciales a escala fija 0.33)
+    // 7. ASEO FELINO (BORING): 6 poses a escala fija 0.33
     println!("Extrayendo 6 fotogramas de aseo felino...");
-    let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, 118, false);
-    let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, 118, false);
-    let g2 = extract_clean_character(&raw_groom, 465, 180, 210, 350, 0.33, 118, false);
-    let g3 = extract_clean_character(&raw_groom, 665, 180, 210, 350, 0.33, 118, false);
-    let g4 = extract_clean_character(&raw_groom, 895, 180, 205, 350, 0.33, 118, false);
-    let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, 118, false);
+    let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, FLOOR_Y, false);
+    let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, FLOOR_Y, false);
+    let g2 = extract_clean_character(&raw_groom, 465, 180, 210, 350, 0.33, FLOOR_Y, false);
+    let g3 = extract_clean_character(&raw_groom, 665, 180, 210, 350, 0.33, FLOOR_Y, false);
+    let g4 = extract_clean_character(&raw_groom, 895, 180, 205, 350, 0.33, FLOOR_Y, false);
+    let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, FLOOR_Y, false);
     let groom_frames = [g0, g1, g2, g3, g4, g5];
 
-    // 5. Comida genuina (6 fotogramas secuenciales a escala fija 0.28 con cuenco de comida)
-    println!("Extrayendo 6 fotogramas de comida genuina...");
-    let e0 = extract_clean_character(&raw_eat, 25, 20, 440, 365, 0.28, 118, true);
-    let e1 = extract_clean_character(&raw_eat, 465, 60, 440, 325, 0.28, 118, true);
-    let e2 = extract_clean_character(&raw_eat, 905, 50, 450, 335, 0.28, 118, true);
-    let e3 = extract_clean_character(&raw_eat, 20, 420, 450, 340, 0.28, 118, true);
-    let e4 = extract_clean_character(&raw_eat, 470, 390, 455, 370, 0.28, 118, true);
-    let e5 = extract_clean_character(&raw_eat, 925, 385, 440, 375, 0.28, 118, true);
+    // 8. COMIDA GENUINA (EAT): 6 poses con cuenco
+    println!("Extrayendo 6 fotogramas de comida con cuenco...");
+    let e0 = extract_clean_character(&raw_eat, 25, 20, 440, 365, 0.28, FLOOR_Y, true);
+    let e1 = extract_clean_character(&raw_eat, 465, 60, 440, 325, 0.28, FLOOR_Y, true);
+    let e2 = extract_clean_character(&raw_eat, 905, 50, 450, 335, 0.28, FLOOR_Y, true);
+    let e3 = extract_clean_character(&raw_eat, 20, 420, 450, 340, 0.28, FLOOR_Y, true);
+    let e4 = extract_clean_character(&raw_eat, 470, 390, 455, 370, 0.28, FLOOR_Y, true);
+    let e5 = extract_clean_character(&raw_eat, 925, 385, 440, 375, 0.28, FLOOR_Y, true);
     let eat_frames = [e0, e1, e2, e3, e4, e5];
 
-    // 6. Enojado genuino (6 fotogramas secuenciales a escala fija 0.34)
-    println!("Extrayendo 6 fotogramas de enojado genuino...");
-    let a0 = extract_clean_character(&raw_angry, 20, 205, 240, 320, 0.34, 118, false);
-    let a1 = extract_clean_character(&raw_angry, 260, 205, 228, 320, 0.34, 118, false);
-    let a2 = extract_clean_character(&raw_angry, 488, 205, 214, 320, 0.34, 118, false);
-    let a3 = extract_clean_character(&raw_angry, 702, 205, 229, 320, 0.34, 118, false);
-    let a4 = extract_clean_character(&raw_angry, 931, 205, 208, 320, 0.34, 118, false);
-    let a5 = extract_clean_character(&raw_angry, 1139, 205, 226, 320, 0.34, 118, false);
+    // 9. ENOJADO GENUINO (ANGRY): 6 poses con bufido y cola erizada
+    println!("Extrayendo 6 fotogramas de bufido y erizado...");
+    let a0 = extract_clean_character(&raw_angry, 20, 205, 240, 320, 0.34, FLOOR_Y, false);
+    let a1 = extract_clean_character(&raw_angry, 260, 205, 228, 320, 0.34, FLOOR_Y, false);
+    let a2 = extract_clean_character(&raw_angry, 488, 205, 214, 320, 0.34, FLOOR_Y, false);
+    let a3 = extract_clean_character(&raw_angry, 702, 205, 229, 320, 0.34, FLOOR_Y, false);
+    let a4 = extract_clean_character(&raw_angry, 931, 205, 208, 320, 0.34, FLOOR_Y, false);
+    let a5 = extract_clean_character(&raw_angry, 1139, 205, 226, 320, 0.34, FLOOR_Y, false);
     let angry_frames = [a0, a1, a2, a3, a4, a5];
+
+    // 10. AMASAR PAN / GALLETITAS (KNEAD): 6 poses
+    println!("Extrayendo 6 fotogramas de amasar pan (knead)...");
+    let knead_frames = extract_sequence_4x2(&raw_knead, 0.33, FLOOR_Y, false);
+
+    // 11. EN LA CAJA DE CARTÓN (BOX): 6 poses
+    println!("Extrayendo 6 fotogramas de caja de cartón (box)...");
+    let box_frames = extract_sequence_4x2(&raw_box, 0.31, FLOOR_Y, true);
+
+    // 12. CAZAR MOSCAS (CATCH BUG): 6 poses
+    println!("Extrayendo 6 fotogramas de cazar moscas (catch_bug)...");
+    let fly_frames = extract_sequence_4x2(&raw_fly, 0.33, FLOOR_Y, true);
+
+    // 13. RODAR PANZA ARRIBA (ROLL): 6 poses
+    println!("Extrayendo 6 fotogramas de rodar panza arriba (roll)...");
+    let roll_frames = extract_sequence_4x2(&raw_roll, 0.33, FLOOR_Y, false);
+
+    // 14. MENEO DE TRASERO EN ACECHO (BUTT WIGGLE): 6 poses
+    println!("Extrayendo 6 fotogramas de butt wiggle...");
+    let wiggle_frames = extract_sequence_6x1(&raw_wiggle, 0.33, FLOOR_Y, false);
+
+    // 15. ESTIRAMIENTO YOGA FELINO (STRETCH): 6 poses
+    println!("Extrayendo 6 fotogramas de estiramiento felino (stretch)...");
+    let stretch_frames = extract_sequence_6x1(&raw_stretch, 0.33, FLOOR_Y, false);
 
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
     let mut sheet: RgbaImage = ImageBuffer::new(sheet_w, sheet_h);
     let tau = std::f32::consts::TAU;
 
-    // 1. IDLE (Fila 1, 16 frames)
+    // Fila 1 (Índice 0): IDLE (16 frames)
     println!("Generando Fila 1: Idle...");
     for i in 0..16 {
-        let blink_state = match i {
-            8 | 11 => 1,
-            9 | 10 => 2,
+        let frame_idx = match i {
+            0..=7 => i,
+            8..=15 => 15 - i,
             _ => 0,
         };
-        let spr = animate_idle(&s_idle, blink_state);
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, 0);
+        let spr = &idle_frames[frame_idx];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, 0);
     }
 
-    // 3. WRITING (Fila 3, 16 frames): Bongo Cat tecleando sentado con destellos dorados
-    println!("Generando Fila 3: Writing (Bongo Cat sentado)...");
+    // Fila 3 (Índice 2): WRITING (16 frames)
+    println!("Generando Fila 3: Writing...");
     let mut writing_frames = Vec::new();
     for i in 0..16 {
         let is_left_tap = (i / 2) % 2 == 0;
+        let base_pose = if is_left_tap {
+            &idle_frames[1]
+        } else {
+            &idle_frames[5]
+        };
         let bob = if i % 2 == 0 { -1.5 } else { 0.5 };
-        let mut spr = shift_sprite(&s_idle, 0.0, bob);
+        let mut spr = shift_sprite(base_pose, 0.0, bob);
 
         if is_left_tap {
-            draw_sparkle(&mut spr, 54, 112, 3, Rgba([255, 220, 0, 255]));
-            draw_sparkle(&mut spr, 50, 108, 1, Rgba([255, 245, 160, 220]));
+            draw_sparkle(
+                &mut spr,
+                (FW / 2 - 12) as i32,
+                (FLOOR_Y - 6) as i32,
+                3,
+                Rgba([255, 220, 0, 255]),
+            );
+            draw_sparkle(
+                &mut spr,
+                (FW / 2 - 16) as i32,
+                (FLOOR_Y - 10) as i32,
+                1,
+                Rgba([255, 245, 160, 220]),
+            );
         } else {
-            draw_sparkle(&mut spr, 74, 112, 3, Rgba([255, 220, 0, 255]));
-            draw_sparkle(&mut spr, 78, 108, 1, Rgba([255, 245, 160, 220]));
+            draw_sparkle(
+                &mut spr,
+                (FW / 2 + 12) as i32,
+                (FLOOR_Y - 6) as i32,
+                3,
+                Rgba([255, 220, 0, 255]),
+            );
+            draw_sparkle(
+                &mut spr,
+                (FW / 2 + 16) as i32,
+                (FLOOR_Y - 10) as i32,
+                1,
+                Rgba([255, 245, 160, 220]),
+            );
         }
 
         writing_frames.push(spr.clone());
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (2 * FH) as i64);
+        image::imageops::overlay(&mut sheet, &spr, (i as u32 * FW) as i64, (2 * FH) as i64);
     }
 
-    // 2. START_WRITING (Fila 2, 8 frames)
+    // Fila 2 (Índice 1): START_WRITING (8 frames)
     println!("Generando Fila 2: Start Writing...");
     for i in 0..8 {
-        let spr = if i < 4 { &s_idle } else { &writing_frames[0] };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (1 * FH) as i64);
+        let spr = if i < 4 {
+            &idle_frames[0]
+        } else {
+            &writing_frames[0]
+        };
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (1 * FH) as i64);
     }
 
-    // 4. END_WRITING (Fila 4, 8 frames)
+    // Fila 4 (Índice 3): END_WRITING (8 frames)
     println!("Generando Fila 4: End Writing...");
     for i in 0..8 {
-        let spr = if i < 4 { &writing_frames[15] } else { &s_idle };
-        image::imageops::overlay(&mut sheet, spr, (i * FW) as i64, (3 * FH) as i64);
+        let spr = if i < 4 {
+            &writing_frames[15]
+        } else {
+            &idle_frames[0]
+        };
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (3 * FH) as i64);
     }
 
-    // 5. SLEEP (Fila 5, 16 frames)
+    // Fila 5 (Índice 4): SLEEP (16 frames)
     println!("Generando Fila 5: Sleep...");
     for i in 0..16 {
         let phase = i as f32 / 16.0;
@@ -499,8 +728,9 @@ fn main() {
             let wave_offset = wave as f32 / 3.0;
             let p_z = (phase + wave_offset) % 1.0;
 
-            let z_x = 78 + (p_z * 20.0) as i32 + ((p_z * tau * 2.0).sin() * 4.0) as i32;
-            let z_y = 52 - (p_z * 36.0) as i32;
+            let z_x =
+                (FW / 2 + 16) as i32 + (p_z * 20.0) as i32 + ((p_z * tau * 2.0).sin() * 4.0) as i32;
+            let z_y = (FLOOR_Y - 66) as i32 - (p_z * 36.0) as i32;
             let size = 3 + (p_z * 6.0) as i32;
             let alpha = if p_z < 0.15 {
                 p_z / 0.15
@@ -516,81 +746,107 @@ fn main() {
         image::imageops::overlay(&mut sheet, &spr, (i as u32 * FW) as i64, (4 * FH) as i64);
     }
 
-    // 6. HAPPY (Fila 6, 6 frames genuinos en columnas 0..5 y repetidos fluidamente)
-    println!("Generando Fila 6: Happy (caza del ratón genuina de 6 poses)...");
+    // Fila 6 (Índice 5): HAPPY (Caza del ratón, 6 poses)
+    println!("Generando Fila 6: Happy...");
     for i in 0..16 {
         let spr = &pounce_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (5 * FH) as i64);
     }
 
-    // 7. BORING / GROOM (Fila 7, 6 frames genuinos)
-    println!("Generando Fila 7: Boring / Groom (aseo felino genuino de 6 poses)...");
+    // Fila 7 (Índice 6): BORING (Aseo felino, 6 poses)
+    println!("Generando Fila 7: Boring...");
     for i in 0..16 {
         let spr = &groom_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (6 * FH) as i64);
     }
 
-    // 8-15. LOOK_* (Filas 8 a 15, 4 frames c/u)
-    println!("Generando Filas 8-15: Look_*...");
-    let look_dirs = [
-        (-3.5f32, 0.0f32),
-        (3.5, 0.0),
-        (0.0, -3.0),
-        (0.0, 3.0),
-        (-2.5, -2.0),
-        (2.5, -2.0),
-        (-2.5, 2.0),
-        (2.5, 2.0),
-    ];
-    for (d_idx, &(look_dx, look_dy)) in look_dirs.iter().enumerate() {
-        let row = 7 + d_idx;
-        for i in 0..4 {
-            let t = i as f32 / 3.0;
-            let dx = look_dx * t;
-            let dy = look_dy * t;
-            let spr = shift_sprite(&s_idle, dx, dy);
-            image::imageops::overlay(
-                &mut sheet,
-                &spr,
-                (i as u32 * FW) as i64,
-                (row as u32 * FH) as i64,
-            );
-        }
-    }
-
-    // 16. WAKE_UP (Fila 16, 8 frames)
-    println!("Generando Fila 16: Wake Up...");
+    // Fila 8 (Índice 7): WAKE_UP (Despertar estirando patas, 8 frames)
+    println!("Generando Fila 8: Wake Up...");
     for i in 0..8 {
         let spr = if i < 3 {
             &s_sleep
         } else if i < 6 {
             &groom_frames[1]
         } else {
-            &s_idle
+            &idle_frames[0]
         };
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (7 * FH) as i64);
+    }
+
+    // Fila 9 (Índice 8): WALK (Caminata genuina de 4 patas, 6 poses)
+    println!("Generando Fila 9: Walk...");
+    for i in 0..16 {
+        let spr = &walk_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (8 * FH) as i64);
+    }
+
+    // Fila 10 (Índice 9): RUN (Galope felino veloz, 6 poses)
+    println!("Generando Fila 10: Run...");
+    for i in 0..16 {
+        let spr = &run_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (9 * FH) as i64);
+    }
+
+    // Fila 11 (Índice 10): SCRATCH (Rascado de pared, 6 poses)
+    println!("Generando Fila 11: Scratch...");
+    for i in 0..16 {
+        let spr = &scratch_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (10 * FH) as i64);
+    }
+
+    // Fila 12 (Índice 11): EAT_RAM (Comida de croquetas, 6 poses)
+    println!("Generando Fila 12: Eat...");
+    for i in 0..16 {
+        let spr = &eat_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (11 * FH) as i64);
+    }
+
+    // Fila 13 (Índice 12): ANGRY (Bufido y cola erizada, 6 poses)
+    println!("Generando Fila 13: Angry...");
+    for i in 0..16 {
+        let spr = &angry_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (12 * FH) as i64);
+    }
+
+    // Fila 14 (Índice 13): KNEAD (Amasar pan / hacer galletitas, 6 poses)
+    println!("Generando Fila 14: Knead...");
+    for i in 0..16 {
+        let spr = &knead_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (13 * FH) as i64);
+    }
+
+    // Fila 15 (Índice 14): BOX (En caja de cartón, 6 poses)
+    println!("Generando Fila 15: Box...");
+    for i in 0..16 {
+        let spr = &box_frames[i % 6];
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (14 * FH) as i64);
+    }
+
+    // Fila 16 (Índice 15): CATCH_BUG (Cazar moscas en el aire, 6 poses)
+    println!("Generando Fila 16: CatchBug...");
+    for i in 0..16 {
+        let spr = &fly_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (15 * FH) as i64);
     }
 
-    // 17. WALK (Fila 17, 6 frames genuinos de caminata de 4 patas)
-    println!("Generando Fila 17: Walk (caminata real de 6 fotogramas articulados)...");
+    // Fila 17 (Índice 16): ROLL (Rodar panza arriba, 6 poses)
+    println!("Generando Fila 17: Roll...");
     for i in 0..16 {
-        let spr = &walk_frames[i % 6];
+        let spr = &roll_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (16 * FH) as i64);
     }
 
-    // 18. EAT_RAM / SNACK (Fila 18, 6 frames genuinos de comida)
-    println!("Generando Fila 18: Eat (comida real de 6 fotogramas con cuenco y mordiscos)...");
+    // Fila 18 (Índice 17): BUTT_WIGGLE (Meneo de trasero en acecho, 6 poses)
+    println!("Generando Fila 18: ButtWiggle...");
     for i in 0..16 {
-        let spr = &eat_frames[i % 6];
+        let spr = &wiggle_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (17 * FH) as i64);
     }
 
-    // 19. ANGRY (Fila 19, 6 frames genuinos de enojo y bufido)
-    println!(
-        "Generando Fila 19: Angry (enojado real de 6 fotogramas con bufido y lomo arqueado)..."
-    );
+    // Fila 19 (Índice 18): STRETCH (Estiramiento yoga felino, 6 poses)
+    println!("Generando Fila 19: Stretch...");
     for i in 0..16 {
-        let spr = &angry_frames[i % 6];
+        let spr = &stretch_frames[i % 6];
         image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (18 * FH) as i64);
     }
 
@@ -599,7 +855,7 @@ fn main() {
     std::fs::create_dir_all(out_dir).expect("crea directorio themes/umbreon");
     let sheet_path = out_dir.join("sheet.png");
     println!(
-        "Guardando sprite sheet ({sheet_w}x{sheet_h}) en: {}",
+        "Guardando sprite sheet ({sheet_w}x{sheet_h}, {ROWS} filas) en: {}",
         sheet_path.display()
     );
     sheet.save(&sheet_path).expect("guarda sheet.png");
@@ -613,9 +869,7 @@ fn main() {
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_animated(16, 0).expect("configura APNG");
-    encoder
-        .set_frame_delay(1, 12)
-        .expect("configura delay APNG");
+    encoder.set_frame_delay(1, 6).expect("configura delay APNG");
 
     let mut writer = encoder.write_header().expect("escribe cabecera APNG");
     for frame in &writing_frames {
@@ -625,7 +879,5 @@ fn main() {
     }
     writer.finish().expect("finaliza APNG");
 
-    println!(
-        "¡Generación de Umbreon completada exitosamente con fotogramas de animación 100% genuinos!"
-    );
+    println!("¡Generación de Umbreon completada: 19 filas de movimientos felinos auténticos!");
 }

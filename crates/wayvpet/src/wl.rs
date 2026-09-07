@@ -413,6 +413,8 @@ pub fn run_overlay(
         last_gaze_at: now,
         roam_x: 0.0,
         roam_dir: 0.0,
+        scratch_until: None,
+        scratch_dir: 0.0,
         last_roam_tick: now,
         kpm: crate::kpm::Kpm::new(),
         last_reload: now,
@@ -603,6 +605,10 @@ struct State {
     roam_x: f32,
     /// Dirección del paseo: 1.0 = derecha, -1.0 = izquierda, 0.0 = quieta.
     roam_dir: f32,
+    /// Si está rascando la pared al final de la pantalla, instante hasta el que dura.
+    scratch_until: Option<Instant>,
+    /// Dirección hacia la que estaba rascando (+1.0 derecha, -1.0 izquierda).
+    scratch_dir: f32,
     /// Último instante en el que avanzó el paseo.
     last_roam_tick: Instant,
     /// Teclas/minuto en ventana deslizante, para el estado `happy` (spec 0014
@@ -1004,7 +1010,7 @@ impl State {
                 // Acciones especiales de ocio en reposo configuradas en el vPet activo:
                 let vpet = self.theme.as_ref().map(|t| &t.vpet);
                 let busy_interrupt = vpet.map(|v| v.busy_interrupt).unwrap_or(true);
-                let idle_special = if let Some(vp) = vpet {
+                let mut idle_special = if let Some(vp) = vpet {
                     let key_busy = (left || right) && vp.busy_interrupt;
                     let mouse_busy = vp.track_mouse
                         && self.gaze_dir != wayvpet_common::mouse::GazeDirection::Center;
@@ -1030,12 +1036,31 @@ impl State {
                     None
                 };
 
+                // Si está en curso la acción de rascar la pared en los bordes de la pantalla:
+                if let Some(until) = self.scratch_until {
+                    if now < until
+                        && !sleeping
+                        && (idle_special.is_none() || !busy_interrupt || (!left && !right))
+                    {
+                        idle_special = Some(crate::sheet_anim::StateId::Scratch);
+                    } else {
+                        self.scratch_until = None;
+                        if self.scratch_dir != 0.0 {
+                            self.roam_dir = -self.scratch_dir;
+                        }
+                    }
+                }
+
                 let mut moved = false;
                 let is_walking = idle_special == Some(crate::sheet_anim::StateId::Walk);
+                let is_running = idle_special == Some(crate::sheet_anim::StateId::Run);
+                let is_scratching = idle_special == Some(crate::sheet_anim::StateId::Scratch);
+                let is_moving = (is_walking || is_running) && !is_scratching;
+
                 // El arrastre libre **no** detiene el paseo: `edit_drag` compensa
                 // el desplazamiento de `roam_x` para que el vpet siga bajo el
                 // cursor mientras lo tienes agarrado, y al soltarlo sigue su ruta.
-                if can_roam && is_walking {
+                if can_roam && is_moving {
                     if self.roam_dir == 0.0 {
                         self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
                     }
@@ -1052,16 +1077,23 @@ impl State {
                         .unwrap_or(32);
 
                     if cur_phys <= margin && self.roam_dir < 0.0 {
-                        self.roam_dir = 1.0;
+                        // Chocó contra el borde izquierdo: se pone a rascar la pantalla antes de virar
+                        self.scratch_until = Some(now + Duration::from_millis(2600));
+                        self.scratch_dir = -1.0;
+                        self.roam_dir = 0.0;
                     } else if cur_phys >= (pw - cw - margin) && self.roam_dir > 0.0 {
-                        self.roam_dir = -1.0;
+                        // Chocó contra el borde derecho: se pone a rascar la pantalla antes de virar
+                        self.scratch_until = Some(now + Duration::from_millis(2600));
+                        self.scratch_dir = 1.0;
+                        self.roam_dir = 0.0;
                     }
 
-                    // Velocidad de caminata fluida configurada por el vPet:
-                    let step = self.roam_dir * roam_speed * dt.min(0.2);
+                    // En modo correr (Run) el felino se desplaza al doble de velocidad que caminando:
+                    let speed_factor = if is_running { 2.1 } else { 1.0 };
+                    let step = self.roam_dir * roam_speed * speed_factor * dt.min(0.2);
                     self.roam_x += step;
                     moved = true;
-                } else {
+                } else if !is_scratching {
                     self.roam_dir = 0.0;
                 }
 
@@ -1241,7 +1273,7 @@ impl State {
                 eprintln!("wayvpet: tray → tema {name}: {r}");
             }
             C::About => eprintln!(
-                "wayvpet {} — https://github.com/athomo001/wayland-wayvpet-reload",
+                "wayvpet {} — https://github.com/athomo001/wayvpet",
                 env!("CARGO_PKG_VERSION")
             ),
             C::Quit => self.exit = true,
@@ -1489,6 +1521,41 @@ impl State {
                     Err(e) => format!("ERR {e}"),
                 }
             }
+            // Miniatura de un tema: rasteriza un fotograma a 128 px y lo guarda
+            // como PNG bajo `$XDG_RUNTIME_DIR`. La ventana `wayvpet-config` la
+            // usa para la galería. `THUMB` a secas = el tema activo.
+            "THUMB" => {
+                let spec = match arg1 {
+                    "" => self.config.theme.as_str(),
+                    "embedded" | "none" => "",
+                    s => s,
+                };
+                let loaded = if spec.is_empty() {
+                    None
+                } else {
+                    match theme::resolve(spec) {
+                        Some(l) => Some(l),
+                        None => return format!("ERR el tema '{spec}' no cargó"),
+                    }
+                };
+                match rasterize_loaded(loaded.as_ref(), 128, false, false) {
+                    Ok(frames) => {
+                        let slug: String = arg1
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                            .collect();
+                        let dir = std::env::var_os("XDG_RUNTIME_DIR")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(std::env::temp_dir);
+                        let path = dir.join(format!("wayvpet-thumb-{slug}.png"));
+                        match save_frame_as_png(frames.current(0), frames.w, frames.h, &path) {
+                            Ok(()) => format!("OK {}", path.display()),
+                            Err(e) => format!("ERR {e}"),
+                        }
+                    }
+                    Err(e) => format!("ERR {e}"),
+                }
+            }
             "GET" if !arg1.is_empty() => {
                 match wayvpet_common::config::ConfDoc::parse(&self.config.to_ini()).get(arg1) {
                     Some(v) => v.to_string(),
@@ -1588,6 +1655,42 @@ impl State {
                     Err(e) => format!("ERR {e}"),
                 },
             },
+            // Perfiles (spec 0008 §8.3): configuraciones completas con nombre.
+            "PROFILE" => {
+                use wayvpet_common::config::profiles;
+                let Some(conf) = self.config_path.clone() else {
+                    return "ERR sin fichero de configuración".to_string();
+                };
+                match arg1 {
+                    "" | "list" => {
+                        let mut l = profiles::list(&conf);
+                        if let Some(a) = profiles::active() {
+                            // marca el activo con '*'
+                            for n in &mut l {
+                                if *n == a {
+                                    *n = format!("*{n}");
+                                }
+                            }
+                        }
+                        l.join(" ")
+                    }
+                    "active" => profiles::active().unwrap_or_default(),
+                    "save" if !arg2.is_empty() => {
+                        match profiles::save(&conf, arg2, &self.config.to_ini()) {
+                            Ok(()) => format!("OK perfil {arg2} guardado"),
+                            Err(e) => format!("ERR {e}"),
+                        }
+                    }
+                    "switch" if !arg2.is_empty() => match profiles::switch(&conf, arg2) {
+                        Ok(()) => {
+                            self.reload();
+                            format!("OK perfil {arg2}")
+                        }
+                        Err(e) => format!("ERR {e}"),
+                    },
+                    _ => "ERR uso: PROFILE list | active | save <n> | switch <n>".to_string(),
+                }
+            }
             "THEME" => match arg1 {
                 "" => "ERR uso: THEME list | next | <nombre>".to_string(),
                 "list" => {
@@ -1734,7 +1837,9 @@ impl State {
                 .as_ref()
                 .map(|t| t.vpet.flip_on_walk)
                 .unwrap_or(true);
-            let flip_h = if flip_on_walk && self.roam_dir < 0.0 {
+            let flip_h = if flip_on_walk
+                && (self.roam_dir < 0.0 || (self.scratch_until.is_some() && self.scratch_dir < 0.0))
+            {
                 !self.config.mirror_x
             } else {
                 self.config.mirror_x

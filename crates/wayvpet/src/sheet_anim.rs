@@ -46,10 +46,26 @@ pub enum StateId {
     Walk,
     WalkLeft,
     WalkRight,
+    /// Animación de carrera / sprint a toda velocidad.
+    Run,
+    /// Animación de rascar pared / pantalla al llegar al borde.
+    Scratch,
     /// Animación especial de comerse una memoria RAM.
     EatRam,
     /// Animación especial de enojo / bufido (arched back / hiss en felinos).
     Angry,
+    /// Amasar pan / hacer galletitas con patitas rítmicas y ronroneo.
+    Knead,
+    /// Meterse en una caja de cartón y asomar la cabeza.
+    Box,
+    /// Cazar moscas en el aire dando zarpazos y saltos.
+    CatchBug,
+    /// Rodar panza arriba por el suelo mostrando la pancita.
+    Roll,
+    /// Meneo de trasero / butt wiggle en acecho antes de saltar.
+    ButtWiggle,
+    /// Estiramiento felino clásico / yoga cat.
+    Stretch,
 }
 
 impl StateId {
@@ -80,8 +96,16 @@ impl StateId {
             "walk" | "walking" => Self::Walk,
             "walk_left" | "walk-left" => Self::WalkLeft,
             "walk_right" | "walk-right" => Self::WalkRight,
+            "run" | "running" | "sprint" => Self::Run,
+            "scratch" | "scratching" | "rascar" | "wall" => Self::Scratch,
             "eat_ram" | "eat-ram" | "eatram" | "ram" | "snack" => Self::EatRam,
             "angry" | "enojado" | "hiss" => Self::Angry,
+            "knead" | "kneading" | "biscuits" | "pan" => Self::Knead,
+            "box" | "caja" | "cardboard" => Self::Box,
+            "catch_bug" | "catch-bug" | "fly" | "mosca" => Self::CatchBug,
+            "roll" | "rolling" | "belly" | "panza" => Self::Roll,
+            "butt_wiggle" | "butt-wiggle" | "wiggle" | "stalk" => Self::ButtWiggle,
+            "stretch" | "stretching" | "estiramiento" | "yoga" => Self::Stretch,
             _ => return None,
         })
     }
@@ -112,8 +136,16 @@ impl StateId {
             Self::Walk => "walk",
             Self::WalkLeft => "walk_left",
             Self::WalkRight => "walk_right",
+            Self::Run => "run",
+            Self::Scratch => "scratch",
             Self::EatRam => "eat_ram",
             Self::Angry => "angry",
+            Self::Knead => "knead",
+            Self::Box => "box",
+            Self::CatchBug => "catch_bug",
+            Self::Roll => "roll",
+            Self::ButtWiggle => "butt_wiggle",
+            Self::Stretch => "stretch",
         }
     }
 
@@ -149,16 +181,16 @@ impl StateId {
         use StateId::*;
         match self {
             Idle => &[Idle, Boring, Writing],
-            Boring => &[Boring, Idle],
-            Writing => &[Writing, Idle],
+            Boring => &[Boring, Idle, Writing],
+            StartWriting => &[StartWriting, Writing, Idle],
+            Writing => &[Writing, ActiveBoth, Idle],
+            EndWriting => &[EndWriting, Idle, Writing],
+            Happy => &[Happy, Writing, Idle],
+            Sleep => &[Sleep, Idle, Boring],
+            WakeUp => &[WakeUp, Idle, Boring],
             ActiveLeft => &[ActiveLeft, Writing, Idle],
             ActiveRight => &[ActiveRight, Writing, Idle],
             ActiveBoth => &[ActiveBoth, Writing, Idle],
-            Happy => &[Happy, Writing, Idle],
-            Sleep => &[Sleep, Boring, Idle],
-            StartWriting => &[StartWriting],
-            EndWriting => &[EndWriting],
-            WakeUp => &[WakeUp],
             LookLeft => &[LookLeft, Idle, Boring, Writing],
             LookRight => &[LookRight, Idle, Boring, Writing],
             LookUp => &[LookUp, Idle, Boring, Writing],
@@ -170,8 +202,16 @@ impl StateId {
             Walk => &[Walk, Idle, Boring, Writing],
             WalkLeft => &[WalkLeft, Walk, Idle],
             WalkRight => &[WalkRight, Walk, Idle],
+            Run => &[Run, Walk, Idle],
+            Scratch => &[Scratch, Idle],
             EatRam => &[EatRam, Happy, Idle],
             Angry => &[Angry, Boring, Idle],
+            Knead => &[Knead, Idle, Boring],
+            Box => &[Box, Idle, Boring],
+            CatchBug => &[CatchBug, Happy, Idle],
+            Roll => &[Roll, Happy, Boring, Idle],
+            ButtWiggle => &[ButtWiggle, Happy, Idle],
+            Stretch => &[Stretch, WakeUp, Idle],
         }
     }
 }
