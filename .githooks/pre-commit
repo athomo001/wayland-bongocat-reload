@@ -2,10 +2,9 @@
 # Hook de pre-commit del proyecto. Activar una vez con:
 #   git config core.hooksPath .githooks
 #
-# Comprueba, sobre los ficheros en el índice:
-#  - formato Rust (cargo fmt --check) si hay ficheros .rs staged;
-#  - formato C (make format-check) si hay ficheros .c/.h staged;
-#    (ambos árboles conviven durante la Fase 0.5);
+# Comprueba **solo los ficheros que están en el índice** (no todo el árbol):
+#  - formato Rust (rustfmt --check) de los .rs staged;
+#  - formato C (clang-format) de los .c/.h staged (árbol C histórico);
 #  - comentarios en inglés residuales (aviso, no bloquea).
 set -euo pipefail
 
@@ -17,16 +16,20 @@ mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR -- '*.c' 
 [ "${#staged[@]}" -eq 0 ] && exit 0
 
 fail=0
-staged_str=" ${staged[*]} "
 
-if [[ "$staged_str" == *.rs\ * || "$staged_str" == *.rs$'\n'* ]] && [ -f Cargo.toml ] \
-   && command -v cargo >/dev/null 2>&1; then
-  cargo fmt --check || { echo "pre-commit: 'cargo fmt' pendiente"; fail=1; }
+# Formato Rust: solo sobre los .rs realmente en el índice, no todo el árbol. Así
+# una WIP sin formatear en otro fichero (p. ej. de otra rama) no bloquea un
+# commit que no la toca.
+mapfile -t staged_rs < <(printf '%s\n' "${staged[@]}" | grep -E '\.rs$' || true)
+if [ "${#staged_rs[@]}" -gt 0 ] && command -v rustfmt >/dev/null 2>&1; then
+  rustfmt --edition 2021 --check "${staged_rs[@]}" \
+    || { echo "pre-commit: 'cargo fmt' pendiente en ficheros del índice"; fail=1; }
 fi
 
-if { [[ "$staged_str" == *.c\ * ]] || [[ "$staged_str" == *.h\ * ]]; } \
-   && command -v make >/dev/null 2>&1 && grep -q '^format-check:' Makefile 2>/dev/null; then
-  make format-check || { echo "pre-commit: 'make format' pendiente"; fail=1; }
+mapfile -t staged_c < <(printf '%s\n' "${staged[@]}" | grep -E '\.[ch]$' || true)
+if [ "${#staged_c[@]}" -gt 0 ] && command -v clang-format >/dev/null 2>&1; then
+  clang-format --dry-run --Werror "${staged_c[@]}" \
+    || { echo "pre-commit: 'clang-format' pendiente (árbol C histórico)"; fail=1; }
 fi
 
 # Aviso de comentarios en inglés (no bloquea el commit).
