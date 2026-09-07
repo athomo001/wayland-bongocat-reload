@@ -86,6 +86,12 @@ install: release
 	$(INSTALL_DATA) packaging/wayvpet.desktop        $(DESTDIR)$(APPDIR)/wayvpet.desktop
 	$(INSTALL_DATA) packaging/wayvpet-config.desktop $(DESTDIR)$(APPDIR)/wayvpet-config.desktop
 	$(INSTALL_DATA) assets/tray/wayvpet-icon.png     $(DESTDIR)$(ICONDIR)/64x64/apps/wayvpet.png
+	@for res in 16 24 32 48 64 128 256 512; do \
+	  if [ -f "assets/icons/hicolor/$${res}x$${res}/apps/wayvpet.png" ]; then \
+	    $(INSTALL) -d "$(DESTDIR)$(ICONDIR)/$${res}x$${res}/apps"; \
+	    $(INSTALL_DATA) "assets/icons/hicolor/$${res}x$${res}/apps/wayvpet.png" "$(DESTDIR)$(ICONDIR)/$${res}x$${res}/apps/wayvpet.png"; \
+	  fi; \
+	done
 	@$(INSTALL) -d $(DESTDIR)$(UNITDIR)
 	sed 's|^ExecStart=wayvpet|ExecStart=$(BINDIR)/wayvpet|' packaging/systemd/wayvpet.service > $(DESTDIR)$(UNITDIR)/wayvpet.service
 	@chmod 644 $(DESTDIR)$(UNITDIR)/wayvpet.service
@@ -104,7 +110,7 @@ uninstall:
 	      $(DESTDIR)$(BINDIR)/wayvpet-config $(DESTDIR)$(BINDIR)/wayvpet-find-devices \
 	      $(DESTDIR)$(MANDIR)/wayvpet.1 \
 	      $(DESTDIR)$(APPDIR)/wayvpet.desktop $(DESTDIR)$(APPDIR)/wayvpet-config.desktop \
-	      $(DESTDIR)$(ICONDIR)/64x64/apps/wayvpet.png \
+	      $(DESTDIR)$(ICONDIR)/*/apps/wayvpet.png \
 	      $(DESTDIR)$(UNITDIR)/wayvpet.service
 	rm -rf $(DESTDIR)$(PKGDATADIR)
 	@if [ -z "$(DESTDIR)" ]; then \

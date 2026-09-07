@@ -3,6 +3,17 @@
 Cómo generar los instaladores (`.deb`, `.rpm`, tarball, PKGBUILD) y publicar una
 release. Para **instalar** wayvpet como usuario, mira el `README.md` de la raíz.
 
+## Dónde están los artefactos
+
+Los scripts de empaquetado están en `Makefile` y `scripts/release.sh`. El
+PKGBUILD de Arch está en `packaging/PKGBUILD`; los metadatos de Debian y RPM
+están en `crates/wayvpet/Cargo.toml`.
+
+`make pkg` genera localmente el tarball, el `.deb`, el `.rpm` y
+`SHA256SUMS`. No genera un paquete AUR: el AUR se construye a partir del
+`PKGBUILD` y se publica cuando el workflow de release tiene configurados sus
+secretos.
+
 ## Resumen
 
 | Quiero… | Comando |
@@ -27,7 +38,7 @@ Todo sale a `dist/` (ignorado por git).
 
 - Para `--publish`, la CLI de GitHub (`gh`) autenticada (`gh auth login`).
 
-## `make pkg` — generar todos los artefactos
+## `make pkg` — generar `.deb`, `.rpm` y tarball
 
 ```bash
 make pkg
@@ -55,6 +66,50 @@ dist/
 ├── wayvpet_<version>-1_amd64.deb
 └── wayvpet-<version>-1.x86_64.rpm
 ```
+
+### Generar o probar el paquete de Arch/AUR
+
+Para probar el `PKGBUILD` localmente, primero ponle la versión de un tag que
+exista y ejecuta `makepkg` desde una copia limpia:
+
+```bash
+sed -i 's/^pkgver=.*/pkgver=3.1.0/' packaging/PKGBUILD
+makepkg -p packaging/PKGBUILD --skipinteg
+```
+
+El flujo normal de usuario es instalar el paquete publicado en AUR:
+
+```bash
+yay -S wayvpet
+# o, sin ayudante AUR:
+git clone https://aur.archlinux.org/wayvpet.git
+cd wayvpet
+makepkg -si
+```
+
+Al publicar una release, `.github/workflows/aur-publish.yml` toma
+`packaging/PKGBUILD`, actualiza `pkgver` y `sha256sums`, y lo sube al AUR. Ese
+workflow requiere `AUR_USERNAME`, `AUR_EMAIL` y `AUR_SSH_PRIVATE_KEY`.
+
+## Banderas de instalación y del programa
+
+La bandera del programa para gestionar el servicio de usuario es:
+
+```bash
+wayvpet --install-service     # instala y habilita wayvpet.service
+wayvpet --uninstall-service   # deshabilita y elimina la unidad
+```
+
+No confundirla con las banderas del script de instalación:
+
+```bash
+./install.sh --prefix "$HOME/.local" --yes --no-service
+./install.sh --uninstall
+```
+
+`wayvpet --help` muestra la superficie CLI completa, incluyendo `--validate`,
+`--print-default-config`, `--dry-run`, `--toggle`, `--supervise`,
+`--watch-config`, `--monitor`, `--no-toplevel` y `--no-tray`.
 
 ### Comprobar el contenido de un paquete
 

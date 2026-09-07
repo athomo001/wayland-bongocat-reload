@@ -1,21 +1,28 @@
 {
   lib,
   stdenv,
+  cargo,
+  rustc,
   pkg-config,
   wayland,
+  libxkbcommon,
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "wayvpet";
-  version = "2.0.2";
+  version = "3.0.0-dev";
   src = ../.;
 
-  # Build toolchain and dependencies
-  # Protocol bindings are pre-generated and committed to git, so
-  # wayland-scanner and wayland-protocols are only needed for `make protocols`.
+  # El workspace se compila con Cargo; declarar ambos ejecutables es necesario
+  # porque `make release` delega directamente en `cargo build`.
   strictDeps = true;
-  nativeBuildInputs = [pkg-config];
+  nativeBuildInputs = [
+    cargo
+    rustc
+    pkg-config
+  ];
   buildInputs = [
     wayland
+    libxkbcommon
   ];
 
   makeFlags = ["release"];
@@ -23,7 +30,7 @@ stdenv.mkDerivation (finalAttrs: {
     runHook preInstall
 
     # Install binaries
-    install -Dm755 build/wayvpet $out/bin/${finalAttrs.meta.mainProgram}
+    install -Dm755 target/release/wayvpet $out/bin/${finalAttrs.meta.mainProgram}
     install -Dm755 scripts/find_input_devices.sh $out/bin/wayvpet-find-devices
     
     # Install man page

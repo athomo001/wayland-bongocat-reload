@@ -2,9 +2,10 @@
 pkgs.mkShellNoCC {
   nativeBuildInputs = with pkgs; [
     # Build dependencies
-    # Core
+    cargo
+    rustc
     pkg-config # Finds build dependencies
-    gcc # C/C++ compiler and also for `make`
+    gcc # Native compiler for dependencies
 
     # Wayland
     wayland-scanner

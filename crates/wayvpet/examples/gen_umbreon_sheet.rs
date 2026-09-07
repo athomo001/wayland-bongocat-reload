@@ -97,6 +97,7 @@ fn render_die_cut_border(canvas: &RgbaImage) -> RgbaImage {
 }
 
 /// Extrae limpiamente el personaje con escala fija y anclaje constante
+#[allow(clippy::too_many_arguments)]
 fn extract_clean_character(
     raw_img: &DynamicImage,
     rx: u32,
@@ -704,7 +705,7 @@ fn main() {
         } else {
             &writing_frames[0]
         };
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (1 * FH) as i64);
+        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, FH as i64);
     }
 
     // Fila 4 (Índice 3): END_WRITING (8 frames)

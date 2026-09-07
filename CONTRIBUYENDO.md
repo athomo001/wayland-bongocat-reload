@@ -1,8 +1,8 @@
 # Cómo contribuir a wayvpet (overlay para Wayland)
 
-¡Gracias por el interés! 🐱 Este documento cubre el flujo de trabajo del código
-**Rust** (Fase 0.5 de la migración). La versión en inglés vive en
-`CONTRIBUTING.en.md` y describe el árbol C histórico.
+¡Gracias por el interés! Este documento cubre el flujo de trabajo actual del
+código Rust de `wayvpet`. La guía inglesa equivalente está en
+`CONTRIBUTING.en.md`.
 
 ## Requisitos
 
@@ -31,7 +31,9 @@ cargo run -p wayvpet -- -c wayvpet.conf.example -w
 ```
 
 Utilidades sin compositor: `--print-default-config`, `--validate`, `--dry-run`.
-Otras opciones: `--toggle`, `--supervise`, `--monitor NOMBRE`, `--no-toplevel`.
+Otras opciones: `--toggle`, `--supervise`, `--monitor NOMBRE`, `--no-toplevel`,
+`--no-tray`, `--install-service` y `--uninstall-service`. La ayuda completa se
+obtiene con `wayvpet --help`.
 
 ## Antes de enviar cambios
 

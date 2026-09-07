@@ -471,7 +471,7 @@ fn main() {
     for i in 0..8 {
         let t = i as f32 / 7.0;
         let spr = blend_sprites(&s_idle, &writing_frames[0], t);
-        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, (1 * FH) as i64);
+        image::imageops::overlay(&mut sheet, &spr, (i * FW) as i64, FH as i64);
     }
 
     // 4. END_WRITING (Fila 4, 8 frames): Transición suave de tecleo a reposo
