@@ -5,12 +5,12 @@
   ...
 }:
 let
-  cfg = config.programs.wayland-wayvpet;
-  wayland-wayvpet = pkgs.callPackage ./default.nix { };
+  cfg = config.programs.wayvpet;
+  wayvpet = pkgs.callPackage ./default.nix { };
   configFile = pkgs.writeTextFile {
     name = "wayvpet.conf";
     text = ''
-      # Auto-generated config for `wayland-wayvpet`
+      # Auto-generated config for `wayvpet`
 
       # Cat position and size
       cat_x_offset=${toString cfg.catXOffset}
@@ -59,12 +59,12 @@ let
 in
 {
   meta.maintainers = with lib.maintainers; [ ];
-  options.programs.wayland-wayvpet = {
+  options.programs.wayvpet = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
       example = true;
-      description = "Enable `wayland-wayvpet` overlay";
+      description = "Enable `wayvpet` overlay";
     };
     autostart = lib.mkOption {
       type = lib.types.bool;
@@ -75,8 +75,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = wayland-wayvpet;
-      description = "The wayland-wayvpet package to use.";
+      default = wayvpet;
+      description = "The wayvpet package to use.";
     };
 
     # Debug mode

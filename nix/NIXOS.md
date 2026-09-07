@@ -8,11 +8,11 @@
 ### Direct Installation with Flakes
 
 ```bash
-# Try `wayland-wayvpet` without installing
-nix run github:saatvik333/wayland-wayvpet
+# Try `wayvpet` without installing
+nix run github:saatvik333/wayland-bongocat
 
 # Install to user profile
-nix profile install github:saatvik333/wayland-wayvpet
+nix profile install github:saatvik333/wayland-bongocat
 
 # Find your input devices
 wayvpet-find-devices
@@ -31,7 +31,7 @@ If you use flakes for your NixOS configuration (Which you should):
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    wayvpet.url = "github:saatvik333/wayland-wayvpet";
+    wayvpet.url = "github:saatvik333/wayland-bongocat";
   };
 
   outputs = inputs: {
@@ -41,7 +41,7 @@ If you use flakes for your NixOS configuration (Which you should):
         ./configuration.nix
         inputs.wayvpet.nixosModules.default
         {
-          programs.wayland-wayvpet = {
+          programs.wayvpet = {
             enable = true;
             autostart = true;
           };
@@ -61,11 +61,11 @@ Download this repository wherever you desire and add this to your NixOS configur
   # Import the module
   imports = [
     # ... your other imports
-    /path/to/wayland-wayvpet/nix/nixos-module.nix
+    /path/to/wayvpet/nix/nixos-module.nix
   ];
 
   # Enable and configure wayvpet
-  programs.wayland-wayvpet = {
+  programs.wayvpet = {
     enable = true;
     autostart = true;        # Start on login by creating a SystemD service
 
@@ -112,7 +112,7 @@ A home manager module is also provided by the repository flake. It's just like t
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    wayvpet.url = "github:saatvik333/wayland-wayvpet";
+    wayvpet.url = "github:saatvik333/wayland-bongocat";
   };
 
   outputs = inputs: {
@@ -176,19 +176,19 @@ enable_debug=0
 
 ## SystemD Service Management
 
-Set `programs.wayland-wayvpet.autostart = true;` to create a SystemD user service so
+Set `programs.wayvpet.autostart = true;` to create a SystemD user service so
 it gets automatically started upon login.
 
 ```bash
 # Check service status
-systemctl --user status wayland-wayvpet
+systemctl --user status wayvpet
 
 # Start/stop manually
-systemctl --user start wayland-wayvpet
-systemctl --user stop wayland-wayvpet
+systemctl --user start wayvpet
+systemctl --user stop wayvpet
 
 # View logs
-journalctl --user -u wayland-wayvpet -f
+journalctl --user -u wayvpet -f
 ```
 
 ## Troubleshooting
@@ -205,9 +205,9 @@ If you get permission errors accessing input devices:
 
 If the SystemD service fails to start:
 
-1. **Check logs:** `journalctl --user -u wayland-wayvpet -n 50`
+1. **Check logs:** `journalctl --user -u wayvpet -n 50`
 1. **Test manually:** `wayvpet --config /nix/store/.../wayvpet.conf`
-1. **Enable debug mode:** `programs.wayland-wayvpet.enableDebug = true;`
+1. **Enable debug mode:** `programs.wayvpet.enableDebug = true;`
 
 ### Input Device Detection
 
@@ -221,7 +221,7 @@ If keyboard input isn't detected:
    If using the NixOS or home-manager module -
 
    ```nix
-   programs.wayland-wayvpet.inputDevices = [
+   programs.wayvpet.inputDevices = [
        # Add as many devices as required and replace X with your device number
        "/dev/input/eventX"
        "/dev/input/eventX"
@@ -243,7 +243,7 @@ You can also use the recommended `keyboard_name=your keyboard` config suggestion
 In the NixOS or home-manager module -
 
 ```nix
-programs.wayland-wayvpet.inputDeviceNames = ["your keyboard"]
+programs.wayvpet.inputDeviceNames = ["your keyboard"]
 ```
 
 ### Wayland Compositor Compatibility
@@ -263,9 +263,9 @@ Ensure your compositor supports the layer shell protocol:
 You can override the package in the module:
 
 ```nix
-programs.wayland-wayvpet = {
+programs.wayvpet = {
   enable = true;
-  package = pkgs.wayland-wayvpet.overrideAttrs (old: {
+  package = pkgs.wayvpet.overrideAttrs (old: {
     # Custom build options
     buildInputs = old.buildInputs ++ [ pkgs.someExtraPackage ];
   });

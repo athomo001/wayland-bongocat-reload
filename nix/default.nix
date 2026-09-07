@@ -5,7 +5,7 @@
   wayland,
 }:
 stdenv.mkDerivation (finalAttrs: {
-  pname = "wayland-wayvpet";
+  pname = "wayvpet";
   version = "2.0.2";
   src = ../.;
 
@@ -36,7 +36,7 @@ stdenv.mkDerivation (finalAttrs: {
   # Package information
   meta = {
     description = "Delightful Wayland overlay that displays an animated bongo cat reacting to your keyboard input!";
-    homepage = "https://github.com/saatvik333/wayland-wayvpet";
+    homepage = "https://github.com/saatvik333/wayvpet";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [voxi0];
     mainProgram = "wayvpet";

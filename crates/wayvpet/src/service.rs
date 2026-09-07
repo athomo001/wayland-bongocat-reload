@@ -25,7 +25,7 @@ fn unit_contents(exec: &str) -> String {
     format!(
         "[Unit]\n\
          Description=wayvpet — overlay animado para Wayland\n\
-         Documentation=https://github.com/athomo001/wayland-wayvpet-reload\n\
+         Documentation=https://github.com/athomo001/wayvpet\n\
          PartOf=graphical-session.target\n\
          After=graphical-session.target\n\
          \n\

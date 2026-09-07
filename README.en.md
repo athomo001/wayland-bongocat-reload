@@ -3,7 +3,7 @@
 > 🇪🇸 El README principal de este fork está en español: [README.md](README.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-wayvpet/releases)
+[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-bongocat/releases)
 
 A cute Wayland overlay that shows an animated bongo cat reacting to your keyboard input.
 
@@ -28,8 +28,8 @@ A cute Wayland overlay that shows an animated bongo cat reacting to your keyboar
 yay -S wayvpet
 
 # Other distros - build from source
-git clone https://github.com/saatvik333/wayland-wayvpet.git
-cd wayland-wayvpet && make
+git clone https://github.com/saatvik333/wayland-bongocat.git
+cd wayland-bongocat && make
 ```
 
 ### Setup Permissions
@@ -175,8 +175,8 @@ Set `monitor=YOUR_MONITOR` (single) or `monitor=MON1,MON2` (multi) in config. Fi
 ## Building
 
 ```bash
-git clone https://github.com/saatvik333/wayland-wayvpet.git
-cd wayland-wayvpet
+git clone https://github.com/saatvik333/wayland-bongocat.git
+cd wayland-bongocat
 make          # Release build
 make debug    # Debug build
 ```

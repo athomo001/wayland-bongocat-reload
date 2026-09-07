@@ -16,8 +16,8 @@ Thank you for your interest in contributing! 🐱
 ### Building
 
 ```bash
-git clone https://github.com/saatvik333/wayland-wayvpet.git
-cd wayland-wayvpet
+git clone https://github.com/saatvik333/wayland-bongocat.git
+cd wayland-bongocat
 make debug    # Development build with debug symbols
 make          # Release build
 ```

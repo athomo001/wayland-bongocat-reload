@@ -28,7 +28,7 @@
   </copyright>
 
   <!--
-    Copia para wayland-bongocat-reload del XML de COSMIC. El overlay solo lo usa
+    Copia para wayvpet del XML de COSMIC. El overlay solo lo usa
     para saber "hay una ventana activada y a pantalla completa" y auto-ocultarse.
 
     IMPORTANTE: nos enganchamos como cliente de **versión 2**. El camino de

@@ -1,4 +1,4 @@
-# NixOS module for wayland-wayvpet
+# NixOS module for wayvpet
 {
   config,
   lib,
@@ -6,7 +6,7 @@
   ...
 }:
 with lib; let
-  cfg = config.programs.wayland-wayvpet;
+  cfg = config.programs.wayvpet;
 in {
   imports = [./common.nix];
   config = lib.mkIf cfg.enable (let
@@ -16,7 +16,7 @@ in {
       cfg.package
 
       # Helper scripts
-      # For starting `wayland-wayvpet` using the config file defined with Nix
+      # For starting `wayvpet` using the config file defined with Nix
       (pkgs.writeScriptBin "wayvpet-exec" ''
         #!${pkgs.bash}/bin/bash
         exec ${cfg.package}/bin/wayvpet --config ${configFile}
@@ -24,7 +24,7 @@ in {
     ];
 
     # SystemD service
-    systemd.user.services.wayland-wayvpet = mkIf cfg.autostart {
+    systemd.user.services.wayvpet = mkIf cfg.autostart {
       enable = true;
       description = "Wayland wayvpet Overlay";
       wantedBy = ["graphical-session.target"];

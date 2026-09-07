@@ -3,7 +3,7 @@
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 Un overlay para Wayland que muestra un gato bongo animado reaccionando a lo que
-escribes. Este fork (**wayland-wayvpet-reload**) reescribió el núcleo en Rust
+escribes. Este fork (**wayvpet**) reescribió el núcleo en Rust
 y añadió instalación en un comando, control remoto (`wayvpetctl` + icono de
 bandeja), temas/skins con animación de sprite sheet, entrada de ratón, modo de
 edición con el ratón, y endurecimiento de seguridad/privacidad.
@@ -36,8 +36,8 @@ edición con el ratón, y endurecimiento de seguridad/privacidad.
 ## Instalación
 
 ```bash
-git clone https://github.com/athomo001/wayland-wayvpet-reload.git
-cd wayland-wayvpet-reload
+git clone https://github.com/athomo001/wayvpet.git
+cd wayvpet
 ./install.sh
 ```
 
