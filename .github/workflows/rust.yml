@@ -32,7 +32,10 @@ jobs:
       - name: Formato
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # Todo lo que se distribuye (lib + los 3 binarios + tests). Los
+        # `examples/gen_*_sheet.rs` son generadores de arte de un solo uso: se
+        # exige que compilen (paso Tests con --all-targets), no que pasen clippy.
+        run: cargo clippy --workspace --lib --bins --tests -- -D warnings
       - name: Tests
         run: cargo test --workspace --all-targets
 
