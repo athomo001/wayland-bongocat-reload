@@ -81,6 +81,11 @@ mouse_move_interval=50
 # 2+ pantallas, wayvpet abre una instancia por pantalla y el gato camina de una a
 # otra al llegar al borde (y se puede arrastrar entre ellas con el ratón). Para
 # fijarlo a una sola pantalla, pon aquí su nombre.
+#
+# roam: permiso maestro del paseo. Con roam=0 el vpet se queda quieto en su
+# monitor aunque el tema tenga can_roam. Se puede alternar desde el tray
+# ("Pasear"). Solo afecta a temas can_roam.
+roam=1
 
 # Ajustes POR MONITOR (spec 0008 §8.4). Todo lo de arriba es la "base"; una
 # sección [monitor:NOMBRE] la pisa solo para esa salida. Las claves válidas son

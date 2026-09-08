@@ -24,6 +24,9 @@ pub struct RoamState {
     pub owner: String,
     /// El gato lo está arrastrando el ratón (modo edición cruzando la costura).
     pub dragging: bool,
+    /// El grupo tiene el paseo **en pausa** (alguien está en modo edición, o el
+    /// usuario apagó "Pasear"). Ninguna instancia camina mientras esté a `1`.
+    pub paused: bool,
     /// Contador monotónico. Una instancia ignora un fichero cuyo `seq` no supera
     /// al último que ella misma escribió (no reacciona a su propio eco).
     pub seq: u64,
@@ -34,11 +37,12 @@ impl RoamState {
     #[must_use]
     pub fn to_text(&self) -> String {
         format!(
-            "world_x={}\ndir={}\nowner={}\ndragging={}\nseq={}\n",
+            "world_x={}\ndir={}\nowner={}\ndragging={}\npaused={}\nseq={}\n",
             self.world_x,
             self.dir,
             self.owner,
             u8::from(self.dragging),
+            u8::from(self.paused),
             self.seq,
         )
     }
@@ -51,6 +55,7 @@ impl RoamState {
         let mut dir = 0_i8;
         let mut owner: Option<String> = None;
         let mut dragging = false;
+        let mut paused = false;
         let mut seq = 0_u64;
         for line in text.lines() {
             let Some((k, v)) = line.trim().split_once('=') else {
@@ -58,10 +63,24 @@ impl RoamState {
             };
             let v = v.trim();
             match k.trim() {
-                "world_x" => world_x = v.parse().unwrap_or(0.0),
+                // `f32::parse` acepta `nan`/`inf`/`1e40`: un fichero corrupto no
+                // debe meter un `world_x` no finito (congelaría el gato en x=0 o
+                // reventaría un `as i32` posterior). Solo valores finitos.
+                "world_x" => {
+                    world_x = v
+                        .parse()
+                        .ok()
+                        .filter(|x: &f32| x.is_finite())
+                        .unwrap_or(0.0)
+                }
                 "dir" => dir = v.parse::<i8>().unwrap_or(0).clamp(-1, 1),
-                "owner" => owner = Some(v.to_string()).filter(|s| !s.is_empty()),
+                // Nombre de salida: no vacío y con un techo sano (los nombres
+                // reales son cortos: `eDP-1`, `HDMI-A-1`, `DP-3`…).
+                "owner" => {
+                    owner = Some(v.to_string()).filter(|s| !s.is_empty() && s.len() <= 128);
+                }
                 "dragging" => dragging = matches!(v, "1" | "true"),
+                "paused" => paused = matches!(v, "1" | "true"),
                 "seq" => seq = v.parse().unwrap_or(0),
                 _ => {}
             }
@@ -71,6 +90,7 @@ impl RoamState {
             dir,
             owner: owner?,
             dragging,
+            paused,
             seq,
         })
     }
@@ -88,11 +108,17 @@ pub fn path() -> Option<PathBuf> {
 /// # Errores
 /// E/S distinta de "no existe".
 pub fn read(path: &Path) -> std::io::Result<Option<RoamState>> {
-    match std::fs::read_to_string(path) {
-        Ok(t) => Ok(RoamState::parse(&t)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    use std::io::Read;
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    // El fichero que escribimos son ~150 bytes. Un tope generoso evita cargar en
+    // memoria algo enorme si otra cosa pisa la ruta.
+    let mut buf = String::new();
+    f.take(64 * 1024).read_to_string(&mut buf)?;
+    Ok(RoamState::parse(&buf))
 }
 
 /// Escribe el estado de forma **atómica** (temporal + `rename`, vía
@@ -108,18 +134,52 @@ pub fn write_atomic(path: &Path, state: &RoamState) -> std::io::Result<()> {
 }
 
 /// Geometría de las salidas para el paseo global. `(nombre, x0, ancho)` en
-/// píxeles lógicos del espacio del compositor, ordenadas de izquierda a derecha.
+/// píxeles lógicos, ordenadas de izquierda a derecha.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoamLayout {
     outputs: Vec<(String, i32, i32)>,
 }
 
 impl RoamLayout {
-    /// Ordena por `x0`. Salidas con ancho ≤ 0 se descartan (aún sin geometría).
+    /// `(nombre, x0_lógico, ancho)`. `x0` es `Option`: si **todas** las salidas
+    /// traen posición lógica y son **distintas** se usan (layout real); si no
+    /// (algunos compositores —Pop!_OS— reportan `(0,0)` para todas), se cae a
+    /// una **tira horizontal** ordenada por nombre, cada salida pegada a la
+    /// anterior — no es fiel al layout físico pero da adyacencia estable entre
+    /// instancias. Salidas con ancho ≤ 0 se descartan.
     #[must_use]
-    pub fn new(outputs: impl IntoIterator<Item = (String, i32, i32)>) -> Self {
-        let mut outputs: Vec<_> = outputs.into_iter().filter(|(_, _, w)| *w > 0).collect();
-        outputs.sort_by_key(|(_, x, _)| *x);
+    pub fn new(outputs: impl IntoIterator<Item = (String, Option<i32>, i32)>) -> Self {
+        let mut raw: Vec<(String, Option<i32>, i32)> =
+            outputs.into_iter().filter(|(_, _, w)| *w > 0).collect();
+
+        let xs: Vec<i32> = raw.iter().filter_map(|(_, x, _)| *x).collect();
+        let positions_usable = xs.len() == raw.len() && {
+            let mut s = xs.clone();
+            s.sort_unstable();
+            s.dedup();
+            s.len() == xs.len()
+        };
+
+        let outputs = if positions_usable {
+            let mut v: Vec<(String, i32, i32)> = raw
+                .into_iter()
+                .map(|(n, x, w)| (n, x.unwrap_or(0), w))
+                .collect();
+            v.sort_by_key(|(_, x, _)| *x);
+            v
+        } else {
+            // Orden por nombre **sin distinguir mayúsculas**: así `eDP-1`
+            // (portátil, normalmente a la izquierda) va antes que `HDMI-A-1`.
+            raw.sort_by_key(|a| a.0.to_lowercase());
+            let mut cursor = 0;
+            raw.into_iter()
+                .map(|(n, _, w)| {
+                    let e = (n, cursor, w);
+                    cursor += w;
+                    e
+                })
+                .collect()
+        };
         Self { outputs }
     }
 
@@ -127,6 +187,16 @@ impl RoamLayout {
     #[must_use]
     pub fn count(&self) -> usize {
         self.outputs.len()
+    }
+
+    /// `nombre@x0+ancho` de cada salida, para el `STATE` de depuración.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        self.outputs
+            .iter()
+            .map(|(n, x, w)| format!("{n}@{x}+{w}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// `(x0, ancho)` de la salida `name`.
@@ -139,7 +209,10 @@ impl RoamLayout {
     }
 
     /// Salida que contiene la X global `cx` (se usa con el **centro** del gato).
-    /// Si `cx` cae en un hueco entre salidas, la de borde más cercano.
+    /// Si `cx` cae en un hueco entre salidas, la de borde más cercano. (El
+    /// handoff del `tick` usa `neighbor` + dirección; esto se conserva para
+    /// diagnóstico y para recolocar tras un layout raro.)
+    #[allow(dead_code)]
     #[must_use]
     pub fn owner_at(&self, cx: f32) -> Option<&str> {
         let cx = cx.round() as i32;
@@ -188,6 +261,7 @@ mod tests {
             dir: -1,
             owner: "HDMI-A-1".into(),
             dragging: true,
+            paused: true,
             seq: 42,
         };
         assert_eq!(RoamState::parse(&s.to_text()), Some(s));
@@ -207,6 +281,17 @@ mod tests {
         assert_eq!(s.dir, 1, "dir se acota a [-1,1]");
         assert_eq!(s.world_x, 0.0);
         assert!(!s.dragging);
+        assert!(!s.paused);
+    }
+
+    #[test]
+    fn state_world_x_no_finito_cae_a_cero_y_owner_gigante_se_descarta() {
+        for junk in ["nan", "inf", "-inf", "1e40", "NaN"] {
+            let s = RoamState::parse(&format!("owner=eDP-1\nworld_x={junk}\n")).unwrap();
+            assert!(s.world_x.is_finite() && s.world_x == 0.0, "world_x={junk}");
+        }
+        let big = "x".repeat(500);
+        assert_eq!(RoamState::parse(&format!("owner={big}\n")), None);
     }
 
     #[test]
@@ -226,6 +311,7 @@ mod tests {
             dir: 1,
             owner: "DP-2".into(),
             dragging: false,
+            paused: false,
             seq: 7,
         };
         write_atomic(&p, &s).unwrap();
@@ -237,9 +323,9 @@ mod tests {
         // eDP-1 a la izquierda (0..1920), HDMI a la derecha (1920..3360), y una
         // salida sin geometría (ancho 0) que debe ignorarse.
         RoamLayout::new([
-            ("HDMI-A-1".to_string(), 1920, 1440),
-            ("eDP-1".to_string(), 0, 1920),
-            ("VGA-1".to_string(), 5000, 0),
+            ("HDMI-A-1".to_string(), Some(1920), 1440),
+            ("eDP-1".to_string(), Some(0), 1920),
+            ("VGA-1".to_string(), Some(5000), 0),
         ])
     }
 
@@ -251,6 +337,25 @@ mod tests {
         assert_eq!(l.rect_of("HDMI-A-1"), Some((1920, 1440)));
         assert_eq!(l.rect_of("VGA-1"), None);
         assert_eq!(l.global_bounds(), Some((0, 3360)));
+    }
+
+    #[test]
+    fn layout_cae_a_tira_por_nombre_si_las_posiciones_no_sirven() {
+        // Pop!_OS: ambas salidas en (0,0). Sin posiciones usables → tira por
+        // nombre: eDP-1 en [0,1920), HDMI-A-1 en [1920,3840).
+        let l = RoamLayout::new([
+            ("HDMI-A-1".to_string(), Some(0), 1920),
+            ("eDP-1".to_string(), Some(0), 1920),
+        ]);
+        assert_eq!(l.rect_of("eDP-1"), Some((0, 1920)));
+        assert_eq!(l.rect_of("HDMI-A-1"), Some((1920, 1920)));
+        assert_eq!(l.global_bounds(), Some((0, 3840)));
+        assert_eq!(l.neighbor("eDP-1", 1), Some("HDMI-A-1"));
+        assert_eq!(l.owner_at(2500.0), Some("HDMI-A-1"));
+        // También cuando falta del todo la posición (None).
+        let l2 = RoamLayout::new([("B".to_string(), None, 1000), ("A".to_string(), None, 1000)]);
+        assert_eq!(l2.rect_of("A"), Some((0, 1000)));
+        assert_eq!(l2.rect_of("B"), Some((1000, 1000)));
     }
 
     #[test]

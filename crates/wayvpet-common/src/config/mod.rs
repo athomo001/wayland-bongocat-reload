@@ -80,6 +80,7 @@ pub const KEYS: &[&str] = &[
     "enable_ipc",
     "enable_tray",
     "check_updates",
+    "roam",
 ];
 
 /// Opciones válidas de cada enum del `.conf`, en la grafía del fichero. Las usa
@@ -221,6 +222,10 @@ pub struct Config {
     /// API de releases de GitHub y termina; si hay versión mayor, aparece un
     /// aviso en el tray. Nunca instala nada.
     pub check_updates: bool,
+    /// Deja que un tema con `can_roam` **patrulle** la pantalla (y cruce entre
+    /// monitores). Por defecto `1`; `0` lo deja quieto y editable como un tema
+    /// normal aunque el `vpet.ini` diga `can_roam=1`.
+    pub roam: bool,
 }
 
 impl Default for Config {
@@ -266,6 +271,7 @@ impl Default for Config {
             enable_ipc: true,
             enable_tray: true,
             check_updates: false,
+            roam: true,
         }
     }
 }
@@ -526,6 +532,7 @@ fn apply_kv(c: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "enable_ipc" => c.enable_ipc = boolean()?,
         "enable_tray" => c.enable_tray = boolean()?,
         "check_updates" => c.check_updates = boolean()?,
+        "roam" => c.roam = boolean()?,
         "enable_scheduled_sleep" => c.enable_scheduled_sleep = boolean()?,
         "disable_fullscreen_hide" => c.disable_fullscreen_hide = boolean()?,
 
@@ -798,6 +805,7 @@ impl Config {
         w("enable_ipc", &b(self.enable_ipc));
         w("enable_tray", &b(self.enable_tray));
         w("check_updates", &b(self.check_updates));
+        w("roam", &b(self.roam));
         for dev in &self.keyboard_devices {
             w("keyboard_device", dev);
         }

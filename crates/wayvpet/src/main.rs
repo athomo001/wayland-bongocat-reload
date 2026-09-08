@@ -317,7 +317,10 @@ fn main() -> ExitCode {
     //     ≥2 pantallas conectadas → el gato podrá cruzar entre ellas (multi-head).
     if args.monitor.is_none() && !args.multi_monitor_child {
         let mut names = loaded.config.output_names.clone();
-        if names.is_empty() && theme::resolve(&loaded.config.theme).is_some_and(|t| t.can_roam()) {
+        if names.is_empty()
+            && loaded.config.roam
+            && theme::resolve(&loaded.config.theme).is_some_and(|t| t.can_roam())
+        {
             let connected = wl::connected_outputs();
             if connected.len() >= 2 {
                 eprintln!(

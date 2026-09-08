@@ -500,7 +500,7 @@ fn articulate_quadruped_run(run_frames: &[RgbaImage], frame_idx: u32) -> RgbaIma
     let stretch_x = 1.0 + (angle.sin() - 0.5) * 0.06;
     let stretch_y = 1.0 - (angle.sin() - 0.5) * 0.05;
 
-    let spr = transform_sprite(
+    transform_sprite(
         base,
         leap_x,
         leap_y,
@@ -508,9 +508,7 @@ fn articulate_quadruped_run(run_frames: &[RgbaImage], frame_idx: u32) -> RgbaIma
         stretch_y,
         (FW / 2) as f32,
         FLOOR_Y as f32,
-    );
-
-    spr
+    )
 }
 
 /// Dibuja una 'Z' bien visible para el sueño

@@ -56,6 +56,8 @@ pub enum TrayCommand {
     /// Ítem "🔔 Versión nueva" (spec 0015 M4): abre la página del release (M5:
     /// el diálogo de `wayvpet-config` con "Descargar").
     OpenUpdate,
+    /// Ítem "Pasear": activa/desactiva que el vpet patrulle (y cruce monitores).
+    ToggleRoam,
     /// Salida limpia de todo.
     Quit,
 }
@@ -74,6 +76,7 @@ impl TrayCommand {
             "reload" => Self::Reload,
             "about" => Self::About,
             "update" => Self::OpenUpdate,
+            "roam" => Self::ToggleRoam,
             "quit" => Self::Quit,
             other => match other.strip_prefix("theme:") {
                 Some(name) if !name.is_empty() => Self::SetTheme(name.to_string()),
@@ -176,6 +179,8 @@ enum ToTray {
     /// El modo edición entró o salió (clic en el tray, o IPC `EDIT`): re-marca
     /// el ítem "Modo edición".
     SetEditActive(bool),
+    /// El paseo (clave `roam`) se activó/desactivó: re-marca el ítem "Pasear".
+    SetRoamOn(bool),
     Shutdown,
 }
 
@@ -197,6 +202,8 @@ struct SniTray {
     /// Si el modo edición (spec 0005) está activo ahora mismo; marca el ítem
     /// del menú con un `✓`.
     edit_active: bool,
+    /// Si el vpet tiene permitido pasear (clave `roam`); marca el ítem "Pasear".
+    roam_on: bool,
 }
 
 impl SniTray {
@@ -273,6 +280,12 @@ impl ksni::Tray for SniTray {
             activate: Box::new(|t: &mut Self| t.send(TrayCommand::ToggleEdit)),
             ..Default::default()
         });
+        let roam = MenuItem::Checkmark(CheckmarkItem {
+            label: "Pasear".into(),
+            checked: self.roam_on,
+            activate: Box::new(|t: &mut Self| t.send(TrayCommand::ToggleRoam)),
+            ..Default::default()
+        });
 
         let mut items = Vec::new();
         // "🔔 Versión nueva" va arriba del todo, solo si hay aviso pendiente
@@ -293,6 +306,7 @@ impl ksni::Tray for SniTray {
         }
         items.extend([
             edit,
+            roam,
             item("Reiniciar overlay", TrayCommand::RestartOverlays),
             item("Recargar configuración", TrayCommand::Reload),
             MenuItem::SubMenu(SubMenu {
@@ -336,6 +350,11 @@ impl TrayHandle {
     pub fn set_edit_active(&self, active: bool) {
         let _ = self.to_tray.send(ToTray::SetEditActive(active));
     }
+
+    /// Re-marca el ítem "Pasear" (`✓` si `on`). No bloqueante.
+    pub fn set_roam_on(&self, on: bool) {
+        let _ = self.to_tray.send(ToTray::SetRoamOn(on));
+    }
 }
 
 /// Arranca el servicio del tray en un hilo dedicado. `cmd_tx` recibe un
@@ -346,6 +365,7 @@ pub fn spawn(
     cmd_tx: Sender<TrayCommand>,
     themes: Vec<String>,
     active_theme: String,
+    roam_on: bool,
 ) -> Option<TrayHandle> {
     let (to_tray, from_main) = mpsc::channel::<ToTray>();
     let (icon_base, icon_size) = embedded_icon_base();
@@ -356,6 +376,7 @@ pub fn spawn(
                 cmd_tx,
                 themes,
                 active_theme,
+                roam_on,
                 icon_base,
                 icon_size,
                 &from_main,
@@ -369,6 +390,7 @@ fn run(
     cmd_tx: Sender<TrayCommand>,
     themes: Vec<String>,
     active_theme: String,
+    roam_on: bool,
     icon_base: Vec<u8>,
     icon_size: u32,
     from_main: &mpsc::Receiver<ToTray>,
@@ -381,6 +403,7 @@ fn run(
         icon_size,
         status: TrayStatus::Normal,
         edit_active: false,
+        roam_on,
     };
     // `ksni` con `async-io` gestiona su propio hilo ejecutor; aquí solo hay que
     // llevar el futuro de `spawn()` a término, mantener vivo el `Handle` y
@@ -427,6 +450,9 @@ fn run(
                 }
                 Ok(ToTray::SetEditActive(active)) => {
                     handle.update(|t| t.edit_active = active).await;
+                }
+                Ok(ToTray::SetRoamOn(on)) => {
+                    handle.update(|t| t.roam_on = on).await;
                 }
                 Ok(ToTray::Shutdown) | Err(_) => break,
             }

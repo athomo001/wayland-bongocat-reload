@@ -468,6 +468,12 @@ pub const FIELDS: &[FieldMeta] = &[
         Section::Advanced,
         "Al arrancar hace UNA consulta a GitHub para ver si hay versión nueva y lo avisa en la bandeja. No instala nada. Desactivado = wayvpet nunca abre la red.",
     ),
+    boolean(
+        "roam",
+        "Dejar pasear al vpet",
+        Section::Advanced,
+        "Un vpet con can_roam patrulla la pantalla y cruza entre monitores. Desactívalo para dejarlo quieto y colocarlo/redimensionarlo a mano.",
+    ),
 ];
 
 /// Metadatos de una clave, o `None` si no es un campo conocido.
