@@ -40,8 +40,10 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     delegate_noop, event_created_child,
-    globals::registry_queue_init,
-    protocol::{wl_compositor, wl_output, wl_pointer, wl_region, wl_seat, wl_shm, wl_surface},
+    globals::{registry_queue_init, GlobalListContents},
+    protocol::{
+        wl_compositor, wl_output, wl_pointer, wl_region, wl_registry, wl_seat, wl_shm, wl_surface,
+    },
     Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
@@ -144,6 +146,98 @@ impl Dispatch<wl_output::WlOutput, ()> for OutputProbe {
     }
 }
 
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for OutputProbe {
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// Nombres de **todas** las salidas conectadas, ordenados. Abre una conexión
+/// Wayland corta (fuera del bucle principal) y la cierra. Vacío si algo falla:
+/// el llamante cae a instancia única. Lo usa `main` para decidir si repartir un
+/// vpet que pasea sobre varias pantallas (multi-head).
+#[must_use]
+pub fn connected_outputs() -> Vec<String> {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return Vec::new();
+    };
+    let Ok((globals, mut queue)) = registry_queue_init::<OutputProbe>(&conn) else {
+        return Vec::new();
+    };
+    let qh = queue.handle();
+    let mut probe = OutputProbe::default();
+    for g in globals.contents().clone_list() {
+        if g.interface == "wl_output" {
+            let o = globals.registry().bind::<wl_output::WlOutput, _, _>(
+                g.name,
+                g.version.min(4),
+                &qh,
+                (),
+            );
+            probe.outputs.push((o, None));
+        }
+    }
+    // El evento `name` puede llegar en el segundo roundtrip.
+    let _ = queue.roundtrip(&mut probe);
+    let _ = queue.roundtrip(&mut probe);
+    let mut names: Vec<String> = probe.outputs.into_iter().filter_map(|(_, n)| n).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Contexto multi-monitor de esta instancia (la pasa `main` desde las banderas).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MultiHead {
+    /// Lanzada por `spawn_per_monitor` (`--multi-monitor-child`): hay hermanas.
+    pub child: bool,
+    /// Es la primaria del grupo (`--multi-primary`): monta el tray y `wayvpet.sock`.
+    pub primary: bool,
+}
+
+/// Estado del paseo **entre monitores** de esta instancia (multi-head, sobre
+/// spec 0008 §8.4). `Some` solo si: se lanzó dentro de un grupo multi-monitor,
+/// el tema pasea (`can_roam`) y hay ≥2 salidas con geometría lógica conocida.
+struct RoamWorld {
+    /// Nombre de la salida de esta instancia.
+    my_name: String,
+    /// Geometría de todas las salidas del grupo (ordenadas izq→der).
+    layout: crate::roam::RoamLayout,
+    /// Esta instancia renderiza y anima el gato ahora mismo.
+    owner: bool,
+    /// X lógica **global** del borde izquierdo del gato (espejo del fichero).
+    world_x: f32,
+    /// Último `seq` que escribimos (ignoramos nuestro propio eco al releer).
+    last_seq: u64,
+}
+
+/// `f32` de sentido del paseo (`1.0`/`-1.0`/`0.0`) → `i8` (`1`/`-1`/`0`).
+fn roam_dir_to_i8(d: f32) -> i8 {
+    if d > 0.0 {
+        1
+    } else if d < 0.0 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// `RoamLayout` con la geometría lógica actual de las salidas (xdg-output).
+/// Vacío mientras el compositor no la haya entregado.
+fn roam_layout_from(output_state: &OutputState) -> crate::roam::RoamLayout {
+    let outs = output_state.outputs().filter_map(|o| {
+        let info = output_state.info(&o)?;
+        Some((info.name?, info.logical_position?.0, info.logical_size?.0))
+    });
+    crate::roam::RoamLayout::new(outs)
+}
+
 /// Rasteriza los 5 fotogramas a la altura `h` (px) desde el tema cargado, o del
 /// embebido si no hay. Un tema SVG (`theme_format` 1/2) va por `rasterize_from`;
 /// uno de sprite sheet (formato 3, spec 0014) por `rasterize_sheet`.
@@ -222,6 +316,7 @@ fn local_now_minutes() -> Option<i32> {
 /// Arranca el overlay: conecta a Wayland, crea la layer-surface y corre el bucle
 /// `calloop`. Con `watch_config`, vigila `config_path` y recarga en caliente.
 /// Devuelve cuando el compositor cierra la surface o llega SIGINT/SIGTERM.
+#[allow(clippy::too_many_arguments)] // ya eran 7; multi-head añade `mh`
 pub fn run_overlay(
     config: &Config,
     config_path: Option<PathBuf>,
@@ -230,9 +325,10 @@ pub fn run_overlay(
     tray_enabled: bool,
     input: input::Isolated,
     target_output_name: Option<String>,
+    mh: MultiHead,
 ) -> Result<(), Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
-    let (globals, event_queue) = registry_queue_init(&conn)?;
+    let (globals, mut event_queue) = registry_queue_init(&conn)?;
     let qh: QueueHandle<State> = event_queue.handle();
 
     let compositor =
@@ -436,11 +532,22 @@ pub fn run_overlay(
         _fs_obj: fs_obj,
         _target_output: target_output,
         target_output_name: target_output_name.clone(),
+        roam_world: None,
+        multi_group: Vec::new(),
         ipc_dirty: std::collections::HashSet::new(),
         manual_hidden: None,
         exit: false,
         configured: false,
     };
+
+    // Multi-head: asentar la geometría de las salidas (xdg-output) antes de
+    // entrar al bucle, para poder construir el `RoamWorld` del paseo entre
+    // pantallas. Dos roundtrips como en `OutputProbe` (el evento puede tardar).
+    if mh.child {
+        let _ = event_queue.roundtrip(&mut state);
+        let _ = event_queue.roundtrip(&mut state);
+        state.init_multi_head(&target_output_name, config, mh);
+    }
 
     // ── Bucle de eventos ────────────────────────────────────────────────────
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
@@ -503,6 +610,21 @@ pub fn run_overlay(
         }
     }
 
+    // Multi-head: observar el fichero del paseo entre pantallas. Cuando otra
+    // instancia lo reescribe (el gato cruzó la costura), esta toma —o cede— el
+    // relevo. Independiente de `--watch-config`.
+    if state.roam_world.is_some() {
+        if let Some(rp) = crate::roam::path() {
+            let (rtx, rrx) = calloop::channel::channel::<()>();
+            watch::spawn(rp, rtx);
+            lh.insert_source(rrx, |ev, _, state| {
+                if let calloop::channel::Event::Msg(()) = ev {
+                    state.roam_reload();
+                }
+            })?;
+        }
+    }
+
     // Icono de bandeja (spec 0011): hilo `ksni` → cada clic de menú llega como un
     // `TrayCommand` que se ejecuta con la misma lógica que los verbos IPC. El
     // handle vive en `State` (para poder empujarle cambios de estado) y se
@@ -524,44 +646,49 @@ pub fn run_overlay(
     // comprobó hace poco, o si el helper no está instalado.
     update_check::maybe_spawn(config.check_updates);
 
-    // Socket de control IPC (spec 0003 M1): PING / STATE / QUIT.
-    let _ipc_guard = if config.enable_ipc {
-        match ipc::bind(target_output_name.as_deref()) {
-            Ok((listener, guard)) => {
-                let src = calloop::generic::Generic::new(
-                    listener,
-                    calloop::Interest::READ,
-                    calloop::Mode::Level,
-                );
-                lh.insert_source(src, |_readiness, listener, state: &mut State| {
-                    loop {
-                        match listener.accept() {
-                            Ok((stream, _)) => {
-                                if !ipc::same_uid(&stream) {
-                                    continue;
+    // Socket(s) de control IPC (spec 0003 M1): PING / STATE / QUIT. La instancia
+    // primaria de un grupo multi-monitor enlaza además `wayvpet.sock` (sin
+    // sufijo) para que `wayvpetctl` / `wayvpet-config` funcionen sin `-m`.
+    let mut _ipc_guards = Vec::new();
+    if config.enable_ipc {
+        let mut targets: Vec<Option<&str>> = vec![target_output_name.as_deref()];
+        if mh.primary && target_output_name.is_some() {
+            targets.push(None);
+        }
+        for t in targets {
+            match ipc::bind(t) {
+                Ok((listener, guard)) => {
+                    let src = calloop::generic::Generic::new(
+                        listener,
+                        calloop::Interest::READ,
+                        calloop::Mode::Level,
+                    );
+                    lh.insert_source(src, |_readiness, listener, state: &mut State| {
+                        loop {
+                            match listener.accept() {
+                                Ok((stream, _)) => {
+                                    if !ipc::same_uid(&stream) {
+                                        continue;
+                                    }
+                                    if let Ok(req) = ipc::read_request(&stream) {
+                                        let reply = state.ipc_reply(&req);
+                                        let _ = writeln!(&stream, "{reply}");
+                                    }
                                 }
-                                if let Ok(req) = ipc::read_request(&stream) {
-                                    let reply = state.ipc_reply(&req);
-                                    let _ = writeln!(&stream, "{reply}");
-                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(_) => break,
                             }
-                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(_) => break,
                         }
-                    }
-                    Ok(calloop::PostAction::Continue)
-                })?;
-                Some(guard)
-            }
-            Err(e) => {
-                eprintln!("wayvpet: no se pudo abrir el socket IPC: {e}");
-                None
+                        Ok(calloop::PostAction::Continue)
+                    })?;
+                    _ipc_guards.push(guard);
+                }
+                Err(e) => eprintln!("wayvpet: no se pudo abrir el socket IPC: {e}"),
             }
         }
     } else {
         eprintln!("wayvpet: enable_ipc=0; sin socket de control");
-        None
-    };
+    }
 
     // Tick de animación: recalcula el fotograma y redibuja si cambió. Se
     // reprograma a un instante **exacto** (`State::next_wake`) en vez de a
@@ -670,6 +797,13 @@ struct State {
     /// la recarga aplica `[monitor:NOMBRE]` y `SAVE` dirige la escritura a esa
     /// sección (spec 0008 §8.4).
     target_output_name: Option<String>,
+    /// Paseo entre monitores (multi-head): `Some` solo con tema `can_roam` y ≥2
+    /// salidas hermanas. Ver [`RoamWorld`].
+    roam_world: Option<RoamWorld>,
+    /// Nombres de las salidas **hermanas** (grupo multi-monitor, sin esta). Los
+    /// comandos del tray se reenvían a sus sockets IPC para mantener el grupo en
+    /// sincronía. Vacío = instancia suelta.
+    multi_group: Vec<String>,
     /// Claves cambiadas por `SET` de IPC y aún sin `SAVE` al fichero.
     ipc_dirty: std::collections::HashSet<String>,
     /// Anulación manual del ocultado (IPC `SHOW`/`HIDE`/`TOGGLE`): `Some` fuerza
@@ -745,6 +879,19 @@ impl State {
             wayvpet_common::sheet::Anchor::Baseline => phys_h - ch,
         };
         let y = (y_base + yoff).clamp(24 - ch, (phys_h - 24).max(0));
+
+        // Multi-head: la X del gato es su posición GLOBAL menos el origen de esta
+        // salida (proyección a coords locales). Sin el `clamp` al ancho propio:
+        // dejamos que asome por la costura hasta el handoff. `world_x` es lógico.
+        if let Some(rw) = self.roam_world.as_ref() {
+            if let Some((my_x0, _)) = rw.layout.rect_of(&rw.my_name) {
+                let local_logical = rw.world_x - my_x0 as f32;
+                let x =
+                    scale_offset_120(local_logical.round() as i32, s).clamp(-cw, phys_w.max(cw));
+                return (x, y);
+            }
+        }
+
         let base_x = match align {
             Align::Center => (phys_w - cw) / 2 + xoff,
             Align::Left => xoff,
@@ -995,8 +1142,20 @@ impl State {
             .as_ref()
             .and_then(|t| t.cat_align())
             .unwrap_or(self.config.cat_align);
-        let can_roam = self.theme.as_ref().is_some_and(|t| t.can_roam());
+        // Multi-head: solo la instancia `owner` pasea y anima; las demás quedan
+        // quietas (el gato está en otra pantalla; `draw` las deja transparentes).
+        let mh_owner = self.roam_world.as_ref().map(|rw| rw.owner);
+        let can_roam =
+            self.theme.as_ref().is_some_and(|t| t.can_roam()) && mh_owner.unwrap_or(true);
         let roam_speed = self.theme.as_ref().map(|t| t.roam_speed()).unwrap_or(45.0);
+        let roam_margin = self.theme.as_ref().map_or(32, |t| t.vpet.roam_margin);
+        // Ancho lógico del gato (los fotogramas se rasterizan a px físicos).
+        let cwl = unscale_offset_120(cw, s).max(1);
+        // Geometría de esta salida en el espacio global, si hay paseo multi-head.
+        let mh_rect = self
+            .roam_world
+            .as_ref()
+            .and_then(|rw| rw.layout.rect_of(&rw.my_name));
 
         let changed = match &mut self.frames.kind {
             anim::FramesKind::Classic(_) => {
@@ -1075,35 +1234,86 @@ impl State {
                     if self.roam_dir == 0.0 {
                         self.roam_dir = if self.roam_x > 0.0 { -1.0 } else { 1.0 };
                     }
-                    let base_x = match cat_align {
-                        Align::Center => (pw - cw) / 2 + xoff,
-                        Align::Left => xoff,
-                        Align::Right => pw - cw - xoff,
-                    };
-                    let cur_phys = base_x + scale_offset_120(self.roam_x.round() as i32, s);
-                    let margin = self
-                        .theme
-                        .as_ref()
-                        .map(|t| t.vpet.roam_margin)
-                        .unwrap_or(32);
-
-                    if cur_phys <= margin && self.roam_dir < 0.0 {
-                        // Chocó contra el borde izquierdo: se pone a rascar la pantalla antes de virar
-                        self.scratch_until = Some(now + Duration::from_millis(2600));
-                        self.scratch_dir = -1.0;
-                        self.roam_dir = 0.0;
-                    } else if cur_phys >= (pw - cw - margin) && self.roam_dir > 0.0 {
-                        // Chocó contra el borde derecho: se pone a rascar la pantalla antes de virar
-                        self.scratch_until = Some(now + Duration::from_millis(2600));
-                        self.scratch_dir = 1.0;
-                        self.roam_dir = 0.0;
-                    }
-
-                    // En modo correr (Run) el felino se desplaza al doble de velocidad que caminando:
+                    // En modo correr (Run) el felino va al doble de velocidad.
                     let speed_factor = if is_running { 2.1 } else { 1.0 };
-                    let step = self.roam_dir * roam_speed * speed_factor * dt.min(0.2);
-                    self.roam_x += step;
-                    moved = true;
+                    let vstep = self.roam_dir * roam_speed * speed_factor * dt.min(0.2);
+
+                    if let Some((my_x0, my_w)) = mh_rect {
+                        // ── Paseo GLOBAL entre pantallas (multi-head) ──────────
+                        // `world_x` = borde izq. del gato en px lógicos globales.
+                        // El centro decide en qué salida "debería" estar.
+                        let dir = roam_dir_to_i8(self.roam_dir);
+                        let rw = self.roam_world.as_ref().unwrap();
+                        let world_x = rw.world_x + vstep;
+                        let center = world_x + cwl as f32 / 2.0;
+                        let should_own = rw.layout.owner_at(center).map(str::to_string);
+                        let (gmin, gmax) =
+                            rw.layout.global_bounds().unwrap_or((my_x0, my_x0 + my_w));
+                        // Handoff solo si el centro está de verdad en OTRA salida
+                        // (no solo asomando por el borde de la mía).
+                        let handoff = match &should_own {
+                            Some(o) if *o != rw.my_name => Some(o.clone()),
+                            _ => None,
+                        };
+
+                        if let Some(neigh) = handoff {
+                            // La salida vecina toma el relevo; cedemos la
+                            // propiedad conservando `world_x` y el sentido.
+                            let seq = {
+                                let rw = self.roam_world.as_mut().unwrap();
+                                rw.world_x = world_x;
+                                rw.owner = false;
+                                rw.last_seq = rw.last_seq.wrapping_add(1);
+                                rw.last_seq
+                            };
+                            if let Some(p) = crate::roam::path() {
+                                let st = crate::roam::RoamState {
+                                    world_x,
+                                    dir,
+                                    owner: neigh,
+                                    dragging: false,
+                                    seq,
+                                };
+                                let _ = crate::roam::write_atomic(&p, &st);
+                            }
+                            self.roam_dir = 0.0;
+                            moved = true;
+                        } else {
+                            // Sigo siendo el owner (o soy el monitor extremo y no
+                            // hay vecina): rascar la pared contra el borde GLOBAL.
+                            let ml = roam_margin as f32;
+                            if dir < 0 && world_x <= gmin as f32 + ml {
+                                self.scratch_until = Some(now + Duration::from_millis(2600));
+                                self.scratch_dir = -1.0;
+                                self.roam_dir = 0.0;
+                            } else if dir > 0 && world_x + cwl as f32 >= gmax as f32 - ml {
+                                self.scratch_until = Some(now + Duration::from_millis(2600));
+                                self.scratch_dir = 1.0;
+                                self.roam_dir = 0.0;
+                            }
+                            self.roam_world.as_mut().unwrap().world_x = world_x;
+                            moved = true;
+                        }
+                    } else {
+                        // ── Paseo dentro de una pantalla (comportamiento clásico) ──
+                        let base_x = match cat_align {
+                            Align::Center => (pw - cw) / 2 + xoff,
+                            Align::Left => xoff,
+                            Align::Right => pw - cw - xoff,
+                        };
+                        let cur_phys = base_x + scale_offset_120(self.roam_x.round() as i32, s);
+                        if cur_phys <= roam_margin && self.roam_dir < 0.0 {
+                            self.scratch_until = Some(now + Duration::from_millis(2600));
+                            self.scratch_dir = -1.0;
+                            self.roam_dir = 0.0;
+                        } else if cur_phys >= (pw - cw - roam_margin) && self.roam_dir > 0.0 {
+                            self.scratch_until = Some(now + Duration::from_millis(2600));
+                            self.scratch_dir = 1.0;
+                            self.roam_dir = 0.0;
+                        }
+                        self.roam_x += vstep;
+                        moved = true;
+                    }
                 } else if !is_scratching {
                     self.roam_dir = 0.0;
                 }
@@ -1221,6 +1431,160 @@ impl State {
         eprintln!("wayvpet: tema recargado desde disco");
     }
 
+    // ── Paseo entre monitores (multi-head, spec 0008 §8.4) ────────────────
+
+    /// Monta [`State::roam_world`] tras asentar la geometría de las salidas.
+    /// `Some` solo con tema `can_roam` y ≥2 salidas con posición lógica conocida.
+    fn init_multi_head(&mut self, my_name: &Option<String>, config: &Config, mh: MultiHead) {
+        // Grupo (para el broadcast del tray): `monitor=` si está, si no todas
+        // las salidas conocidas; siempre sin esta instancia.
+        let mut group: Vec<String> = if config.output_names.is_empty() {
+            self.output_state
+                .outputs()
+                .filter_map(|o| self.output_state.info(&o).and_then(|i| i.name))
+                .collect()
+        } else {
+            config.output_names.clone()
+        };
+        group.sort();
+        group.dedup();
+        if let Some(me) = my_name {
+            group.retain(|n| n != me);
+        }
+        self.multi_group = group;
+
+        let Some(my_name) = my_name.clone() else {
+            return;
+        };
+        if !self
+            .theme
+            .as_ref()
+            .is_some_and(theme::LoadedTheme::can_roam)
+        {
+            return;
+        }
+        let layout = roam_layout_from(&self.output_state);
+        if layout.count() < 2 {
+            return;
+        }
+        let Some((my_x0, my_w)) = layout.rect_of(&my_name) else {
+            eprintln!(
+                "wayvpet: multi-head: sin geometría de '{my_name}'; paseo entre pantallas OFF"
+            );
+            return;
+        };
+        let cwl = self.roam_cw_logical();
+        let existing = crate::roam::path().and_then(|p| crate::roam::read(&p).ok().flatten());
+        let resume = existing
+            .as_ref()
+            .is_some_and(|st| layout.rect_of(&st.owner).is_some());
+        let (owner, world_x, seq) = if resume {
+            let st = existing.as_ref().unwrap();
+            (st.owner == my_name, st.world_x, st.seq)
+        } else {
+            // Sin estado válido: lo reclama la primaria; el gato arranca centrado
+            // en su pantalla.
+            let home = my_x0 as f32 + (my_w - cwl) as f32 / 2.0;
+            (mh.primary, home, 0)
+        };
+        let rw = RoamWorld {
+            my_name,
+            layout,
+            owner,
+            world_x,
+            last_seq: seq,
+        };
+        self.roam_world = Some(rw);
+        if owner && !resume {
+            self.roam_persist_bump();
+        }
+        eprintln!(
+            "wayvpet: paseo entre pantallas activo (owner inicial: {})",
+            if owner { "esta" } else { "otra" }
+        );
+    }
+
+    /// Ancho **lógico** del gato (los fotogramas se rasterizan a px físicos).
+    fn roam_cw_logical(&self) -> i32 {
+        unscale_offset_120(self.frames.w as i32, self.eff_scale_120()).max(1)
+    }
+
+    /// Escribe el fichero de estado del paseo con `seq` incrementado.
+    fn roam_persist_bump(&mut self) {
+        let Some(path) = crate::roam::path() else {
+            return;
+        };
+        let dir = roam_dir_to_i8(self.roam_dir);
+        let dragging = self.edit.dragging;
+        let Some(rw) = self.roam_world.as_mut() else {
+            return;
+        };
+        rw.last_seq = rw.last_seq.wrapping_add(1);
+        let st = crate::roam::RoamState {
+            world_x: rw.world_x,
+            dir,
+            owner: rw.my_name.clone(),
+            dragging,
+            seq: rw.last_seq,
+        };
+        if let Err(e) = crate::roam::write_atomic(&path, &st) {
+            eprintln!("wayvpet: no pude escribir el estado del paseo: {e}");
+        }
+    }
+
+    /// Reconstruye el `RoamLayout` cuando cambia la geometría de las salidas
+    /// (hotplug, xdg-output tardío). No cambia quién es `owner`.
+    fn refresh_roam_layout(&mut self) {
+        if self.roam_world.is_none() {
+            return;
+        }
+        let layout = roam_layout_from(&self.output_state);
+        if layout.count() >= 2 {
+            if let Some(rw) = self.roam_world.as_mut() {
+                rw.layout = layout;
+            }
+        }
+    }
+
+    /// Relee el fichero de estado del paseo (lo dispara el watch inotify). Toma
+    /// el relevo si el `owner` pasó a ser esta salida; se apaga si dejó de serlo.
+    fn roam_reload(&mut self) {
+        let Some(path) = crate::roam::path() else {
+            return;
+        };
+        let Ok(Some(st)) = crate::roam::read(&path) else {
+            return;
+        };
+        let Some(rw) = self.roam_world.as_ref() else {
+            return;
+        };
+        if st.seq <= rw.last_seq {
+            return; // nuestro propio eco, o nada nuevo
+        }
+        let was_owner = rw.owner;
+        let now_owner = st.owner == rw.my_name;
+        {
+            let rw = self.roam_world.as_mut().unwrap();
+            rw.last_seq = st.seq;
+            rw.world_x = st.world_x;
+            rw.owner = now_owner;
+        }
+        match (was_owner, now_owner) {
+            (false, true) => {
+                self.roam_dir = f32::from(st.dir);
+                self.scratch_until = None;
+                self.last_roam_tick = Instant::now();
+                eprintln!("wayvpet: relevo del paseo entre pantallas");
+                self.draw();
+            }
+            (true, false) => {
+                self.roam_dir = 0.0;
+                self.draw(); // deja el buffer transparente en esta pantalla
+            }
+            _ => {}
+        }
+    }
+
     /// Empuja al icono del tray el estado `Normal`/`Hidden` si cambió desde la
     /// última vez (spec 0011 §"Estado del icono", M2 parcial — `Error` queda
     /// para cuando exista supervisión real de la surface). No hace nada sin
@@ -1264,6 +1628,24 @@ impl State {
     /// Cada rama reutiliza la misma lógica que el verbo IPC equivalente.
     fn apply_tray_command(&mut self, cmd: tray::TrayCommand) {
         use tray::TrayCommand as C;
+        // Multi-monitor (un solo icono): tras aplicar en esta instancia, reenviar
+        // los comandos de estado compartido a las hermanas por IPC para mantener
+        // el grupo en sincronía. `LaunchConfig`/`About`/`OpenUpdate` son locales.
+        if !self.multi_group.is_empty() {
+            let verb = match &cmd {
+                C::ToggleVisibility => Some("TOGGLE".to_string()),
+                C::ToggleEdit => Some("EDIT toggle".to_string()),
+                C::Reload => Some("RELOAD".to_string()),
+                C::SetTheme(n) => Some(format!("THEME {n}")),
+                C::Quit => Some("QUIT".to_string()),
+                _ => None,
+            };
+            if let Some(verb) = verb {
+                for sib in self.multi_group.clone() {
+                    let _ = wayvpet_common::ipc::send_request(Some(&sib), &verb);
+                }
+            }
+        }
         match cmd {
             C::ToggleVisibility => {
                 self.manual_hidden = Some(!self.effective_hidden());
@@ -1436,13 +1818,21 @@ impl State {
     fn edit_drag(&mut self, px: f64, py: f64) {
         let (fx, fy) = self.ptr_phys(px, py);
         self.edit.ptr = (fx, fy);
+        let s = self.eff_scale_120();
+
+        // Multi-head: el gato se recoloca en coords GLOBALES; si el cursor lo
+        // saca hacia una pantalla vecina, se cede el relevo (aparece en la otra).
+        if self.roam_world.is_some() {
+            self.edit_drag_multihead(fx, fy, s);
+            return;
+        }
+
         let (pw, ph) = self.phys_size();
         let (_, _, cw, ch) = self.cat_phys_rect();
         // Origen físico deseado = puntero menos el punto de agarre, acotado igual
         // que `cat_origin` para que lo que se ve no se despegue de la config.
         let ox = ((fx - self.edit.grab_dx).round() as i32).clamp(10, (pw - cw - 10).max(10));
         let oy = ((fy - self.edit.grab_dy).round() as i32).clamp(24 - ch, (ph - 24).max(0));
-        let s = self.eff_scale_120();
         // `cat_origin` suma `roam_x` a la X, así que para dejar el vpet **bajo el
         // cursor** hay que descontarlo: si el vpet está paseando, seguirá bajo el
         // ratón mientras lo tengas agarrado.
@@ -1459,6 +1849,62 @@ impl State {
         };
         self.config.cat_x_offset = unscale_offset_120(xoff_phys, s);
         self.config.cat_y_offset = unscale_offset_120(oy - y_base, s);
+        self.draw();
+    }
+
+    /// Arrastre en modo edición con paseo entre pantallas: el gato sigue al
+    /// cursor en coords globales; si el cursor lo saca de esta salida hacia una
+    /// vecina, se cede el relevo y el gato aparece en la otra pantalla.
+    fn edit_drag_multihead(&mut self, fx: f64, fy: f64, s: u32) {
+        let (_, _, cw, ch) = self.cat_phys_rect();
+        let (_, ph) = self.phys_size();
+        let oy = ((fy - self.edit.grab_dy).round() as i32).clamp(24 - ch, (ph - 24).max(0));
+        let y_base = match self.cat_anchor() {
+            wayvpet_common::sheet::Anchor::Center => (ph - ch) / 2,
+            wayvpet_common::sheet::Anchor::Baseline => ph - ch,
+        };
+        self.config.cat_y_offset = unscale_offset_120(oy - y_base, s);
+
+        let ptr_logical = unscale_offset_120(fx.round() as i32, s);
+        let grab_logical = unscale_offset_120(self.edit.grab_dx.round() as i32, s);
+        let cwl = unscale_offset_120(cw, s).max(1);
+        let Some(rw) = self.roam_world.as_ref() else {
+            return;
+        };
+        let Some((my_x0, my_w)) = rw.layout.rect_of(&rw.my_name) else {
+            return;
+        };
+        let world_x = (my_x0 + ptr_logical - grab_logical) as f32;
+        let center = world_x + cwl as f32 / 2.0;
+        let dir: i8 = if center >= (my_x0 + my_w) as f32 {
+            1
+        } else if center < my_x0 as f32 {
+            -1
+        } else {
+            0
+        };
+        let neigh = (dir != 0)
+            .then(|| rw.layout.neighbor(&rw.my_name, dir).map(str::to_string))
+            .flatten();
+
+        let rw = self.roam_world.as_mut().unwrap();
+        rw.world_x = world_x;
+        if let Some(neigh) = neigh {
+            rw.owner = false;
+            rw.last_seq = rw.last_seq.wrapping_add(1);
+            let seq = rw.last_seq;
+            if let Some(p) = crate::roam::path() {
+                let st = crate::roam::RoamState {
+                    world_x,
+                    dir: 0,
+                    owner: neigh,
+                    dragging: true,
+                    seq,
+                };
+                let _ = crate::roam::write_atomic(&p, &st);
+            }
+            self.edit.dragging = false; // el ratón ya está en la otra pantalla
+        }
         self.draw();
     }
 
@@ -1502,7 +1948,8 @@ impl State {
             "PING" => "PONG".to_string(),
             "STATE" => format!(
                 "pid={} frame={} sheet={} hidden={} manual_hidden={} edit={} theme={} scale_120={} \
-                 fps={} width={} height={} cat_height={} cat_opacity={} roaming={}",
+                 fps={} width={} height={} cat_height={} cat_opacity={} roaming={} \
+                 multihead={} world_x={} owner={}",
                 std::process::id(),
                 self.frame,
                 match &self.frames.kind {
@@ -1533,6 +1980,11 @@ impl State {
                 // ¿el vpet activo se pasea solo? La ventana de config oculta los
                 // campos de posición cuando es así (se recoloca arrastrando).
                 u8::from(self.theme.as_ref().is_some_and(|t| t.can_roam())),
+                // Paseo entre pantallas (multi-head): activo / X global / si esta
+                // instancia renderiza el gato ahora.
+                u8::from(self.roam_world.is_some()),
+                self.roam_world.as_ref().map_or(0.0, |rw| rw.world_x),
+                u8::from(self.roam_world.as_ref().is_some_and(|rw| rw.owner)),
             ),
             "SNAPSHOT" | "SCREENSHOT" => {
                 let path_str = if arg1.is_empty() {
@@ -1840,7 +2292,10 @@ impl State {
         // Se calculan antes de tocar el pool (evita conflictos de préstamo).
         let (ox, oy) = self.cat_origin(pw as i32, ph as i32);
         let (fw, fh) = (self.frames.w, self.frames.h);
-        let hidden = self.effective_hidden();
+        // Multi-head: una instancia que no es `owner` no dibuja el gato (está en
+        // otra pantalla) — buffer transparente, igual que oculto.
+        let mh_off = self.roam_world.as_ref().is_some_and(|rw| !rw.owner);
+        let hidden = self.effective_hidden() || mh_off;
         let frame = self.frames.current(self.frame);
 
         if let Err(e) = self.pool.resize(needed.max(1)) {
@@ -2005,8 +2460,11 @@ impl OutputHandler for State {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _c: &Connection, _qh: &QueueHandle<Self>, _o: wl_output::WlOutput) {}
+    fn new_output(&mut self, _c: &Connection, _qh: &QueueHandle<Self>, _o: wl_output::WlOutput) {
+        self.refresh_roam_layout();
+    }
     fn update_output(&mut self, _c: &Connection, _qh: &QueueHandle<Self>, _o: wl_output::WlOutput) {
+        self.refresh_roam_layout();
     }
     fn output_destroyed(
         &mut self,
@@ -2014,6 +2472,7 @@ impl OutputHandler for State {
         _qh: &QueueHandle<Self>,
         _o: wl_output::WlOutput,
     ) {
+        self.refresh_roam_layout();
     }
 }
 

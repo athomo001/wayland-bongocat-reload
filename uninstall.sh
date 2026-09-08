@@ -36,6 +36,39 @@ fi
 SUDO=""
 if [ "$IS_ROOT" = 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
 
+# ── Parar cualquier instancia en marcha ANTES de borrar nada ──────────────────
+# Si no, el gato y el icono de la bandeja siguen ahí (el binario ya está en
+# memoria) hasta el próximo reinicio de sesión.
+if [ "$IS_ROOT" = 0 ]; then
+	say "Paro las instancias en marcha"
+	RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+	# 1) el servicio de usuario, si está activo
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl --user stop wayvpet.service >/dev/null 2>&1 || true
+	fi
+	# 2) por IPC: socket por defecto + uno por monitor (multi-pantalla)
+	if command -v wayvpetctl >/dev/null 2>&1; then
+		wayvpetctl stop >/dev/null 2>&1 || true
+		for s in "$RUN"/wayvpet-*.sock; do
+			[ -S "$s" ] || continue
+			m=${s##*/wayvpet-}
+			m=${m%.sock}
+			wayvpetctl -m "$m" stop >/dev/null 2>&1 || true
+		done
+	fi
+	# 3) lo que quede (arranque manual, --supervise, hijos por monitor)
+	sleep 1
+	if command -v pkill >/dev/null 2>&1; then
+		pkill -x wayvpet >/dev/null 2>&1 || true
+		pkill -x wayvpet-config >/dev/null 2>&1 || true
+		pkill -x wayvpet-update-check >/dev/null 2>&1 || true
+	fi
+	# 4) sockets, pidfiles y estado del paseo huérfanos
+	rm -f "$RUN"/wayvpet.sock "$RUN"/wayvpet-*.sock \
+	      "$RUN"/wayvpet.pid "$RUN"/wayvpet-*.pid 2>/dev/null || true
+	rm -rf "$RUN/wayvpet" 2>/dev/null || true
+fi
+
 # Unidad systemd de usuario (la instala `wayvpet --install-service` en el HOME).
 if [ "$WANT_SERVICE" = 1 ] && [ "$IS_ROOT" = 0 ] && command -v wayvpet >/dev/null 2>&1; then
 	say "Quito la unidad systemd de usuario"

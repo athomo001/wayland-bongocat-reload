@@ -76,6 +76,11 @@ mouse_move_interval=50
 # Nombres de monitor: wlr-randr  o  hyprctl monitors
 # monitor=eDP-1
 # monitor=eDP-1,HDMI-A-1
+#
+# Vpets que PASEAN (can_roam, p. ej. miku/umbreon/gabumon): con `monitor=` vacío y
+# 2+ pantallas, wayvpet abre una instancia por pantalla y el gato camina de una a
+# otra al llegar al borde (y se puede arrastrar entre ellas con el ratón). Para
+# fijarlo a una sola pantalla, pon aquí su nombre.
 
 # Ajustes POR MONITOR (spec 0008 §8.4). Todo lo de arriba es la "base"; una
 # sección [monitor:NOMBRE] la pisa solo para esa salida. Las claves válidas son

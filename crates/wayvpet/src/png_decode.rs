@@ -11,11 +11,11 @@
 //! dimensión máxima por lado, número máximo de píxeles y número máximo de
 //! fotogramas. El llamante añade un tope al tamaño del fichero en disco.
 
-/// Lado máximo admitido de una hoja (px). Cubre de sobra rejillas grandes de
-/// wayland-vpets sin permitir cabeceras absurdas.
-pub const MAX_DIM: u32 = 8192;
-/// Píxeles totales máximos (~16 Mpx ⇒ 64 MiB en RGBA8).
-pub const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+/// Lado máximo admitido de una hoja (px). Cubre rejillas ultra-anchas de
+/// 60 fotogramas (ej: 11520 px) sin permitir cabeceras absurdas.
+pub const MAX_DIM: u32 = 16384;
+/// Píxeles totales máximos (~48 Mpx ⇒ 192 MiB en RGBA8 para hojas HD ultra-fluidas).
+pub const MAX_PIXELS: u64 = 48 * 1024 * 1024;
 /// Fotogramas máximos de un APNG (wayland-vpets tope 500 por estado; con margen).
 pub const MAX_FRAMES: u32 = 1000;
 

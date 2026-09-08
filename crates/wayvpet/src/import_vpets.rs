@@ -22,7 +22,7 @@ use crate::png_decode;
 use crate::sheet_anim::StateId;
 
 /// Tope al tamaño en disco de una hoja que se importa (igual que `theme.rs`).
-const MAX_SHEET_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SHEET_BYTES: u64 = 48 * 1024 * 1024;
 
 /// Un estado tal y como venía en el `.conf` de wayland-vpets, ya con la fila
 /// normalizada a **1-based** (sea cual sea el `row_base` del origen).

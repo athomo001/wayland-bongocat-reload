@@ -21,6 +21,7 @@ mod ipc;
 mod kpm;
 mod pidfile;
 mod png_decode;
+mod roam;
 mod service;
 mod sheet_anim;
 mod theme;
@@ -41,6 +42,9 @@ struct Args {
     toggle: bool,
     supervise: bool,
     multi_monitor_child: bool,
+    /// Esta instancia es la "primaria" del grupo multi-monitor: monta el tray y
+    /// además enlaza `wayvpet.sock` (sin sufijo de monitor).
+    multi_primary: bool,
     /// No conectar a ningún protocolo de toplevels (deshabilita el auto-ocultar
     /// en pantalla completa). Escotilla por si el protocolo del compositor da
     /// problemas.
@@ -107,6 +111,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-t" | "--toggle" => a.toggle = true,
             "-S" | "--supervise" => a.supervise = true,
             "--multi-monitor-child" => a.multi_monitor_child = true,
+            "--multi-primary" => a.multi_primary = true,
             "--no-toplevel" => a.no_toplevel = true,
             "--no-tray" => a.no_tray = true,
             "--validate" => a.validate = true,
@@ -305,10 +310,26 @@ fn main() -> ExitCode {
         return supervise(&argv);
     }
 
-    // Multi-monitor: si hay >1 salida configurada (`monitor=`) y no se fijó una
-    // con `--monitor`, lanzar una instancia hija por salida y esperar a todas.
-    if args.monitor.is_none() && !args.multi_monitor_child && loaded.config.output_names.len() > 1 {
-        return spawn_per_monitor(&args, &loaded);
+    // Multi-monitor: una instancia hija por salida (una superficie de layer-shell
+    // se ata a una salida de por vida). Se reparte cuando:
+    //   - `monitor=` lista ≥2 salidas, o
+    //   - `monitor=` está vacío pero el tema activo **pasea** (`can_roam`) y hay
+    //     ≥2 pantallas conectadas → el gato podrá cruzar entre ellas (multi-head).
+    if args.monitor.is_none() && !args.multi_monitor_child {
+        let mut names = loaded.config.output_names.clone();
+        if names.is_empty() && theme::resolve(&loaded.config.theme).is_some_and(|t| t.can_roam()) {
+            let connected = wl::connected_outputs();
+            if connected.len() >= 2 {
+                eprintln!(
+                    "wayvpet: tema con paseo y {} pantallas: una instancia por salida",
+                    connected.len()
+                );
+                names = connected;
+            }
+        }
+        if names.len() > 1 {
+            return spawn_per_monitor(&args, &loaded, &names);
+        }
     }
 
     // Salida objetivo: `--monitor` gana; si no, la primera de `monitor=`.
@@ -366,6 +387,10 @@ fn main() -> ExitCode {
         tray_enabled,
         input,
         target,
+        wl::MultiHead {
+            child: args.multi_monitor_child,
+            primary: args.multi_primary,
+        },
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -425,9 +450,13 @@ fn supervise(argv: &[String]) -> ExitCode {
     }
 }
 
-/// Lanza una instancia hija por cada salida de `monitor=` (con `--monitor
-/// NOMBRE`) y espera a que terminen todas. Porta `multi_monitor_launch`.
-fn spawn_per_monitor(args: &Args, loaded: &io::Loaded) -> ExitCode {
+/// Lanza una instancia hija por cada salida de `names` (con `--monitor NOMBRE`) y
+/// espera a que terminen todas. Porta `multi_monitor_launch`.
+///
+/// La **primera** salida es la "primaria": es la única que monta el icono de la
+/// bandeja (a las demás se les pasa `--no-tray`), de modo que multi-monitor
+/// muestre un solo icono. El menú controla a todas por IPC.
+fn spawn_per_monitor(args: &Args, loaded: &io::Loaded, names: &[String]) -> ExitCode {
     use std::process::Command;
 
     let exe = match std::env::current_exe() {
@@ -439,9 +468,16 @@ fn spawn_per_monitor(args: &Args, loaded: &io::Loaded) -> ExitCode {
     };
 
     let mut kids = Vec::new();
-    for name in &loaded.config.output_names {
+    for (i, name) in names.iter().enumerate() {
         let mut cmd = Command::new(&exe);
         cmd.arg("--multi-monitor-child").arg("--monitor").arg(name);
+        if i == 0 {
+            // La primaria monta el tray y enlaza `wayvpet.sock`.
+            cmd.arg("--multi-primary");
+        } else {
+            // Las demás, sin icono: un solo icono para el grupo.
+            cmd.arg("--no-tray");
+        }
         if let Some(p) = &loaded.path {
             cmd.arg("-c").arg(p);
         }

@@ -19,7 +19,7 @@ use crate::png_decode;
 
 const MAX_FRAME_BYTES: u64 = 2 * 1024 * 1024;
 /// Tope al tamaño en disco de una hoja de sprites (`theme_format = 3`).
-const MAX_SHEET_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SHEET_BYTES: u64 = 48 * 1024 * 1024;
 
 /// El arte de un tema, según su `theme_format`.
 pub enum ThemeArt {

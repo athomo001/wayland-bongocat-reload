@@ -1,29 +1,16 @@
-//! Generador del sprite sheet HD de Umbreon (Gato Negro) con animación genuina fotograma a fotograma:
-//! - 19 filas de animación REAL y ESPECÍFICA de gato:
-//!   1. Idle: movimiento amplio de cola de lado a lado, giro de cabeza, orejas y parpadeo.
-//!   2. Start writing: transición de reposo a patas en teclado.
-//!   3. Writing: patitas delanteras alternando toques sobre el teclado con chispas doradas y orejas dinámicas.
-//!   4. End writing: transición de vuelta a reposo.
-//!   5. Sleep: durmiendo hecho un ovillo con Zzz ascendentes.
-//!   6. Happy: caza acrobática del ratón con captura y salto.
-//!   7. Boring: acicalamiento felino y lamido de pata y bigotes.
-//!   8. Wake up: despertar estirando lomo y patas.
-//!   9. Walk: caminata articulada a 4 patas paso a paso.
-//!   10. Run: sprint / carrera veloz con galope felino auténtico.
-//!   11. Scratch: apoyado en patas traseras rascando la pared / cristal de la pantalla al llegar al borde.
-//!   12. Eat: comiendo de su plato con croquetas crujientes.
-//!   13. Angry: lomo arqueado, cola erizada y bufido.
-//!   14. Knead: amasando pan / haciendo galletitas rítmicamente con patitas y ronroneo.
-//!   15. Box: dentro de su cajita de cartón asomando cabeza y patitas curioso.
-//!   16. CatchBug: cazando moscas en el aire dando manotazos y saltos.
-//!   17. Roll: rodando panza arriba por el suelo moviendo las 4 patas al aire.
-//!   18. ButtWiggle: agazapado meneando el trasero con pupilas dilatadas antes de saltar.
-//!   19. Stretch: estiramiento yoga felino con pecho al suelo y arqueo de lomo bostezando.
-//! - CERO deformaciones inflables ni cambios bruscos de escala.
-//! - Contorno blanco die-cut limpio de 3.2px.
+//! Generador del sprite sheet HD de Umbreon (Gato Negro) con matriz de 60 fotogramas
+//! y simulación biomecánica felina NÍTIDA (sin ghosting, sin doble cabeza, sin fotogramas repetidos):
+//! - 60 columnas × 19 filas (resolución: 11520 × 3040 px, celdas 192 × 160 px).
+//! - CERO GHOSTING / CERO DOBLE CABEZA: Cada fotograma se basa en una pose sólida limpia y
+//!   aplica deformación cinemática espacial (elevación de corvejón/rodilla, onda espinal,
+//!   vaivén de cola, squash & stretch). Jamás se funden dos dibujos distintos en transparencia.
+//! - CERO FOTOGRAMAS DUPLICADOS: Cada uno de los 60 fotogramas posee desplazamiento,
+//!   rebote, articulación y deformación elástica única y medible.
+//! - Borde troquelado blanco die-cut limpio de 3.2px aplicado sobre cada fotograma final.
 
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use std::collections::VecDeque;
+use std::f32::consts::TAU;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -31,7 +18,7 @@ use std::path::Path;
 const FW: u32 = 192;
 const FH: u32 = 160;
 const FLOOR_Y: u32 = 144;
-const COLS: u32 = 16;
+const COLS: u32 = 60;
 const ROWS: u32 = 19;
 
 /// Genera un borde blanco die-cut nítido y suave de 3.2px
@@ -293,7 +280,7 @@ fn extract_clean_character(
         }
     }
 
-    render_die_cut_border(&clean_char)
+    clean_char
 }
 
 fn sample_bilinear(img: &RgbaImage, x: f32, y: f32) -> Rgba<u8> {
@@ -374,13 +361,21 @@ fn extract_sequence_6x1(
     frames
 }
 
-/// Desplaza el sprite manteniendo estrictamente su escala real 1.0
-fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
+/// Transforma un sprite con escala y desplazamiento subpixel alrededor de un pivote
+fn transform_sprite(
+    src: &RgbaImage,
+    dx: f32,
+    dy: f32,
+    scale_x: f32,
+    scale_y: f32,
+    pivot_x: f32,
+    pivot_y: f32,
+) -> RgbaImage {
     let mut out = ImageBuffer::new(FW, FH);
     for y in 0..FH {
         for x in 0..FW {
-            let src_x = x as f32 - dx;
-            let src_y = y as f32 - dy;
+            let src_x = pivot_x + (x as f32 - pivot_x - dx) / scale_x;
+            let src_y = pivot_y + (y as f32 - pivot_y - dy) / scale_y;
             let p = sample_bilinear(src, src_x, src_y);
             if p[3] > 0 {
                 out.put_pixel(x, y, p);
@@ -388,6 +383,134 @@ fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
         }
     }
     out
+}
+
+/// Desplaza el sprite manteniendo estrictamente su escala real
+fn shift_sprite(src: &RgbaImage, dx: f32, dy: f32) -> RgbaImage {
+    transform_sprite(src, dx, dy, 1.0, 1.0, (FW / 2) as f32, FLOOR_Y as f32)
+}
+
+/// Anima una secuencia de poses clave de forma TOTALMENTE NÍTIDA y continua SIN DOBLE CABEZA NI GHOSTING.
+/// Cada fotograma utiliza una pose sólida única y le aplica articulación cinemática continua,
+/// desplazamiento espacial, rebote y deformación elástica.
+fn articulate_action_sequence(
+    frames: &[RgbaImage],
+    frame_idx: u32,
+    total_frames: u32,
+    dy_amplitude: f32,
+    dx_amplitude: f32,
+    squash_stretch: f32,
+) -> RgbaImage {
+    let n = frames.len();
+    if n == 0 {
+        return ImageBuffer::new(FW, FH);
+    }
+    let frames_per_pose = total_frames as f32 / n as f32;
+    let current_pose_idx = ((frame_idx as f32 / frames_per_pose).floor() as usize) % n;
+    let sub_progress = (frame_idx as f32 % frames_per_pose) / frames_per_pose; // 0.0 .. 1.0
+
+    // POSE SÓLIDA ÚNICA: NUNCA SE FUNDE EN ALFA CON OTRA POSE (CERO DOBLE CABEZA)
+    let base = &frames[current_pose_idx];
+
+    // Movimiento cinemático y dinámico dentro de la pose:
+    let angle = sub_progress * std::f32::consts::PI;
+    let dy = -angle.sin() * dy_amplitude;
+    let dx = (sub_progress - 0.5) * dx_amplitude;
+    let scale_y = 1.0 + (angle.sin() - 0.5) * squash_stretch;
+    let scale_x = 1.0 - (angle.sin() - 0.5) * (squash_stretch * 0.7);
+
+    transform_sprite(
+        base,
+        dx,
+        dy,
+        scale_x,
+        scale_y,
+        (FW / 2) as f32,
+        FLOOR_Y as f32,
+    )
+}
+
+/// Simulación biomecánica felina para caminata cuadrúpeda NÍTIDA (60 fotogramas)
+/// 6 poses genuinas de paso, 10 fotogramas por pose con articulación de pata, corvejón y cola
+fn articulate_quadruped_walk(walk_frames: &[RgbaImage], frame_idx: u32) -> RgbaImage {
+    let pose_idx = ((frame_idx / 10) as usize) % 6;
+    let u = (frame_idx % 10) as f32 / 10.0; // 0.0 .. 0.9
+
+    // POSE SÓLIDA NÍTIDA: sin doble cabeza
+    let base = &walk_frames[pose_idx];
+
+    // Dinámica de zancada:
+    // - Avance del cuerpo en el espacio
+    let stride_x = (u - 0.5) * 3.2;
+    // - Rebote vertical de hombros/pelvis al absorber y propulsar peso
+    let bob_y = -(u * std::f32::consts::PI).sin() * 4.2;
+    // - Squash & Stretch elástico al pisar y despegar
+    let scale_y = 1.0 + ((u * std::f32::consts::PI).sin() - 0.4) * 0.04;
+    let scale_x = 1.0 - ((u * std::f32::consts::PI).sin() - 0.4) * 0.03;
+
+    // - Contrapeso dinámico de la cola a lo largo de los 60 frames
+    let tail_sway = (frame_idx as f32 / 60.0 * TAU).sin() * 4.5;
+
+    let spr = transform_sprite(
+        base,
+        stride_x,
+        bob_y,
+        scale_x,
+        scale_y,
+        (FW / 2) as f32,
+        FLOOR_Y as f32,
+    );
+
+    // Desplazamiento articular de patas (y > 105) para despegar del suelo
+    let leg_lift = -(u * std::f32::consts::PI).sin() * 3.8;
+    let mut out = ImageBuffer::new(FW, FH);
+    for y in 0..FH {
+        for x in 0..FW {
+            let mut dy = 0.0;
+            let mut dx = 0.0;
+            if y > 105 {
+                let leg_factor = ((y as f32 - 105.0) / 40.0).clamp(0.0, 1.0);
+                dy += leg_lift * leg_factor;
+            } else if x < 65 && y < 115 {
+                // Cola
+                dx += tail_sway;
+            }
+            let sx = x as f32 - dx;
+            let sy = y as f32 - dy;
+            let p = sample_bilinear(&spr, sx, sy);
+            if p[3] > 0 {
+                out.put_pixel(x, y, p);
+            }
+        }
+    }
+    out
+}
+
+/// Simulación biomecánica del galope felino NÍTIDO (60 fotogramas)
+fn articulate_quadruped_run(run_frames: &[RgbaImage], frame_idx: u32) -> RgbaImage {
+    let pose_idx = ((frame_idx / 10) as usize) % 6;
+    let u = (frame_idx % 10) as f32 / 10.0;
+
+    let base = &run_frames[pose_idx];
+
+    // Suspensión aérea vs compresión elástica
+    let angle = u * std::f32::consts::PI;
+    let leap_y = -angle.sin() * 6.5;
+    let leap_x = (u - 0.5) * 4.2;
+    let stretch_x = 1.0 + (angle.sin() - 0.5) * 0.06;
+    let stretch_y = 1.0 - (angle.sin() - 0.5) * 0.05;
+
+    let spr = transform_sprite(
+        base,
+        leap_x,
+        leap_y,
+        stretch_x,
+        stretch_y,
+        (FW / 2) as f32,
+        FLOOR_Y as f32,
+    );
+
+    spr
 }
 
 /// Dibuja una 'Z' bien visible para el sueño
@@ -488,7 +611,7 @@ fn main() {
     let s_sleep = extract_clean_character(&raw_img, 680, 335, 315, 320, 0.35, FLOOR_Y, true);
 
     // 2. IDLE GENUINO: 8 poses con movimiento de cola de izquierda a derecha, orejas y cabeza
-    println!("Extrayendo 8 fotogramas genuinos de IDLE (cola batiendo de lado a lado)...");
+    println!("Extrayendo 8 fotogramas genuinos de IDLE...");
     let idle_boxes = [
         (40, 30, 280, 330),
         (370, 30, 270, 330),
@@ -505,10 +628,8 @@ fn main() {
         idle_frames.push(f);
     }
 
-    // 3. SCRATCH GENUINO: 6 poses apoyado en 2 patas rascando la pared
-    println!(
-        "Extrayendo 6 fotogramas genuinos de SCRATCH (rascar la pantalla al llegar al borde)..."
-    );
+    // 3. SCRATCH GENUINO: 6 poses
+    println!("Extrayendo 6 fotogramas genuinos de SCRATCH...");
     let scratch_boxes = [
         (60, 45, 390, 295),
         (490, 45, 390, 295),
@@ -523,8 +644,8 @@ fn main() {
         scratch_frames.push(f);
     }
 
-    // 4. RUN GENUINO: 6 poses de sprint y galope felino veloz
-    println!("Extrayendo 6 fotogramas genuinos de RUN (carrera felina veloz)...");
+    // 4. RUN GENUINO: 6 poses
+    println!("Extrayendo 6 fotogramas genuinos de RUN...");
     let run_boxes = [
         (40, 80, 410, 250),
         (470, 80, 430, 250),
@@ -539,8 +660,8 @@ fn main() {
         run_frames.push(f);
     }
 
-    // 5. WALK GENUINO: 6 poses de caminata a 4 patas a escala fija 0.38
-    println!("Extrayendo 6 fotogramas de WALK (caminata a 4 patas)...");
+    // 5. WALK GENUINO: 6 poses de caminata
+    println!("Extrayendo 6 fotogramas de WALK...");
     let w0 = extract_clean_character(&raw_walk, 10, 145, 226, 260, 0.38, FLOOR_Y, false);
     let w1 = extract_clean_character(&raw_walk, 236, 145, 223, 260, 0.38, FLOOR_Y, false);
     let w2 = extract_clean_character(&raw_walk, 459, 145, 222, 260, 0.38, FLOOR_Y, false);
@@ -549,7 +670,7 @@ fn main() {
     let w5 = extract_clean_character(&raw_walk, 1125, 145, 235, 260, 0.38, FLOOR_Y, false);
     let walk_frames = [w0, w1, w2, w3, w4, w5];
 
-    // 6. CAZA DEL RATÓN (HAPPY): 6 poses acrobáticas a escala fija 0.38
+    // 6. CAZA DEL RATÓN (HAPPY): 6 poses
     println!("Extrayendo 6 fotogramas de caza del ratón...");
     let p0 = extract_clean_character(&raw_pounce, 40, 270, 215, 220, 0.38, FLOOR_Y, false);
     let p1 = extract_clean_character(&raw_pounce, 270, 260, 195, 230, 0.38, FLOOR_Y, false);
@@ -577,7 +698,7 @@ fn main() {
     let p5 = extract_clean_character(&raw_pounce, 1140, 250, 195, 250, 0.38, FLOOR_Y, true);
     let pounce_frames = [p0, p1, p2, p3, p4, p5];
 
-    // 7. ASEO FELINO (BORING): 6 poses a escala fija 0.33
+    // 7. ASEO FELINO (BORING): 6 poses
     println!("Extrayendo 6 fotogramas de aseo felino...");
     let g0 = extract_clean_character(&raw_groom, 20, 180, 230, 350, 0.33, FLOOR_Y, false);
     let g1 = extract_clean_character(&raw_groom, 255, 180, 215, 350, 0.33, FLOOR_Y, false);
@@ -587,7 +708,7 @@ fn main() {
     let g5 = extract_clean_character(&raw_groom, 1105, 190, 245, 345, 0.33, FLOOR_Y, false);
     let groom_frames = [g0, g1, g2, g3, g4, g5];
 
-    // 8. COMIDA GENUINA (EAT): 6 poses con cuenco
+    // 8. COMIDA GENUINA (EAT): 6 poses
     println!("Extrayendo 6 fotogramas de comida con cuenco...");
     let e0 = extract_clean_character(&raw_eat, 25, 20, 440, 365, 0.28, FLOOR_Y, true);
     let e1 = extract_clean_character(&raw_eat, 465, 60, 440, 325, 0.28, FLOOR_Y, true);
@@ -597,7 +718,7 @@ fn main() {
     let e5 = extract_clean_character(&raw_eat, 925, 385, 440, 375, 0.28, FLOOR_Y, true);
     let eat_frames = [e0, e1, e2, e3, e4, e5];
 
-    // 9. ENOJADO GENUINO (ANGRY): 6 poses con bufido y cola erizada
+    // 9. ENOJADO GENUINO (ANGRY): 6 poses
     println!("Extrayendo 6 fotogramas de bufido y erizado...");
     let a0 = extract_clean_character(&raw_angry, 20, 205, 240, 320, 0.34, FLOOR_Y, false);
     let a1 = extract_clean_character(&raw_angry, 260, 205, 228, 320, 0.34, FLOOR_Y, false);
@@ -607,131 +728,188 @@ fn main() {
     let a5 = extract_clean_character(&raw_angry, 1139, 205, 226, 320, 0.34, FLOOR_Y, false);
     let angry_frames = [a0, a1, a2, a3, a4, a5];
 
-    // 10. AMASAR PAN / GALLETITAS (KNEAD): 6 poses
-    println!("Extrayendo 6 fotogramas de amasar pan (knead)...");
+    // 10-15. 6 Nuevas secuencias
+    println!("Extrayendo 6 fotogramas de knead, box, fly, roll, wiggle, stretch...");
     let knead_frames = extract_sequence_4x2(&raw_knead, 0.33, FLOOR_Y, false);
-
-    // 11. EN LA CAJA DE CARTÓN (BOX): 6 poses
-    println!("Extrayendo 6 fotogramas de caja de cartón (box)...");
     let box_frames = extract_sequence_4x2(&raw_box, 0.31, FLOOR_Y, true);
-
-    // 12. CAZAR MOSCAS (CATCH BUG): 6 poses
-    println!("Extrayendo 6 fotogramas de cazar moscas (catch_bug)...");
     let fly_frames = extract_sequence_4x2(&raw_fly, 0.33, FLOOR_Y, true);
-
-    // 13. RODAR PANZA ARRIBA (ROLL): 6 poses
-    println!("Extrayendo 6 fotogramas de rodar panza arriba (roll)...");
     let roll_frames = extract_sequence_4x2(&raw_roll, 0.33, FLOOR_Y, false);
-
-    // 14. MENEO DE TRASERO EN ACECHO (BUTT WIGGLE): 6 poses
-    println!("Extrayendo 6 fotogramas de butt wiggle...");
     let wiggle_frames = extract_sequence_6x1(&raw_wiggle, 0.33, FLOOR_Y, false);
-
-    // 15. ESTIRAMIENTO YOGA FELINO (STRETCH): 6 poses
-    println!("Extrayendo 6 fotogramas de estiramiento felino (stretch)...");
     let stretch_frames = extract_sequence_6x1(&raw_stretch, 0.33, FLOOR_Y, false);
 
     let sheet_w = FW * COLS;
     let sheet_h = FH * ROWS;
+    println!("Inicializando lienzo sprite sheet de {sheet_w}x{sheet_h} px (COLS = {COLS})...");
     let mut sheet: RgbaImage = ImageBuffer::new(sheet_w, sheet_h);
-    let tau = std::f32::consts::TAU;
 
-    // Fila 1 (Índice 0): IDLE (16 frames)
-    println!("Generando Fila 1: Idle...");
-    for i in 0..16 {
-        let frame_idx = match i {
-            0..=7 => i,
-            8..=15 => 15 - i,
-            _ => 0,
+    // =========================================================================
+    // FILA 1 (Índice 0): IDLE (60 frames con respiración viva, giro de cabeza,
+    // batido de cola y parpadeo dulce sin fantasmas)
+    // =========================================================================
+    println!("Generando Fila 1: Idle (60 fotogramas nítidos)...");
+    for i in 0..COLS {
+        let pose_idx = match i {
+            0..=7 => 0,
+            8..=14 => 1,
+            15..=22 => 2,
+            23..=29 => 3,
+            30..=37 => 4,
+            38..=44 => 5,
+            45..=52 => 6,
+            _ => 7,
         };
-        let spr = &idle_frames[frame_idx];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, 0);
+        let base_f = &idle_frames[pose_idx];
+
+        let progress = i as f32 / COLS as f32;
+        let angle = progress * TAU;
+        let breath_scale = 1.0 + angle.sin() * 0.030;
+        let dy = angle.sin() * 2.2;
+        let sway_x = (angle * 0.5).cos() * 2.0;
+
+        let mut spr = transform_sprite(
+            base_f,
+            sway_x,
+            dy,
+            1.0,
+            breath_scale,
+            (FW / 2) as f32,
+            FLOOR_Y as f32,
+        );
+
+        // Parpadeo tierno en fotogramas 28..34 (cierre y apertura limpia)
+        if (28..=34).contains(&i) {
+            let blink_progress = (i - 28) as f32 / 6.0;
+            let eye_shut = (blink_progress * std::f32::consts::PI).sin();
+            if eye_shut > 0.35 {
+                for dy in -1..=1 {
+                    for dx in -3..=3 {
+                        let px = (FW / 2 + 18) as i32 + dx;
+                        let py = (FLOOR_Y - 58) as i32 + dy;
+                        if px >= 0 && px < FW as i32 && py >= 0 && py < FH as i32 {
+                            spr.put_pixel(px as u32, py as u32, Rgba([30, 25, 25, 255]));
+                        }
+                    }
+                }
+            }
+        }
+
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, 0);
     }
 
-    // Fila 3 (Índice 2): WRITING (16 frames)
-    println!("Generando Fila 3: Writing...");
+    // =========================================================================
+    // FILA 3 (Índice 2): WRITING (60 frames de tecleo Bongo Cat nítido)
+    // =========================================================================
+    println!("Generando Fila 3: Writing (60 fotogramas con impactos y chispas)...");
     let mut writing_frames = Vec::new();
-    for i in 0..16 {
-        let is_left_tap = (i / 2) % 2 == 0;
+    for i in 0..COLS {
+        let strike_idx = (i / 10) % 6;
+        let u = (i % 10) as f32 / 10.0;
+        let is_left_tap = strike_idx % 2 == 0;
+
         let base_pose = if is_left_tap {
             &idle_frames[1]
         } else {
             &idle_frames[5]
         };
-        let bob = if i % 2 == 0 { -1.5 } else { 0.5 };
-        let mut spr = shift_sprite(base_pose, 0.0, bob);
 
-        if is_left_tap {
-            draw_sparkle(
-                &mut spr,
-                (FW / 2 - 12) as i32,
-                (FLOOR_Y - 6) as i32,
-                3,
-                Rgba([255, 220, 0, 255]),
-            );
-            draw_sparkle(
-                &mut spr,
-                (FW / 2 - 16) as i32,
-                (FLOOR_Y - 10) as i32,
-                1,
-                Rgba([255, 245, 160, 220]),
-            );
+        // Cinemática de la patita: elevación anticipada, golpe en u=0.5, rebote elástico
+        let tap_bob = if u < 0.5 {
+            -(u / 0.5 * std::f32::consts::PI).sin() * 5.0
         } else {
+            ((u - 0.5) / 0.5 * std::f32::consts::PI).sin() * 1.8
+        };
+        let lean_x = if is_left_tap { -1.5 } else { 1.5 };
+
+        let mut spr = shift_sprite(base_pose, lean_x * (u - 0.5).abs(), tap_bob);
+
+        // Chispas doradas en el momento del impacto (u entre 0.4 y 0.7)
+        if (0.4..=0.7).contains(&u) {
+            let spark_x = if is_left_tap {
+                (FW / 2 - 14) as i32
+            } else {
+                (FW / 2 + 14) as i32
+            };
+            let spark_y = (FLOOR_Y - 8) as i32;
+            draw_sparkle(&mut spr, spark_x, spark_y, 4, Rgba([255, 220, 30, 255]));
             draw_sparkle(
                 &mut spr,
-                (FW / 2 + 12) as i32,
-                (FLOOR_Y - 6) as i32,
-                3,
-                Rgba([255, 220, 0, 255]),
-            );
-            draw_sparkle(
-                &mut spr,
-                (FW / 2 + 16) as i32,
-                (FLOOR_Y - 10) as i32,
-                1,
-                Rgba([255, 245, 160, 220]),
+                spark_x - 3,
+                spark_y - 4,
+                2,
+                Rgba([255, 245, 150, 230]),
             );
         }
 
-        writing_frames.push(spr.clone());
-        image::imageops::overlay(&mut sheet, &spr, (i as u32 * FW) as i64, (2 * FH) as i64);
+        let final_frame = render_die_cut_border(&spr);
+        writing_frames.push(final_frame.clone());
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (2 * FH) as i64);
     }
 
-    // Fila 2 (Índice 1): START_WRITING (8 frames)
-    println!("Generando Fila 2: Start Writing...");
-    for i in 0..8 {
-        let spr = if i < 4 {
+    // =========================================================================
+    // FILA 2 (Índice 1): START_WRITING (60 frames transición elástica nítida)
+    // =========================================================================
+    println!("Generando Fila 2: Start Writing (60 fotogramas nítidos)...");
+    for i in 0..COLS {
+        let t = i as f32 / COLS as f32;
+        let base = if t < 0.5 {
             &idle_frames[0]
         } else {
-            &writing_frames[0]
+            &idle_frames[1]
         };
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, FH as i64);
+        let lift_y = -(t * std::f32::consts::PI).sin() * 4.5;
+        let lean_x = (t - 0.5) * 3.0;
+        let spr = shift_sprite(base, lean_x, lift_y);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, FH as i64);
     }
 
-    // Fila 4 (Índice 3): END_WRITING (8 frames)
-    println!("Generando Fila 4: End Writing...");
-    for i in 0..8 {
-        let spr = if i < 4 {
-            &writing_frames[15]
+    // =========================================================================
+    // FILA 4 (Índice 3): END_WRITING (60 frames retorno elástico nítido)
+    // =========================================================================
+    println!("Generando Fila 4: End Writing (60 fotogramas nítidos)...");
+    for i in 0..COLS {
+        let t = i as f32 / COLS as f32;
+        let base = if t < 0.5 {
+            &idle_frames[5]
         } else {
             &idle_frames[0]
         };
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (3 * FH) as i64);
+        let drop_y = -(t * std::f32::consts::PI).sin() * 4.5;
+        let lean_x = (0.5 - t) * 3.0;
+        let spr = shift_sprite(base, lean_x, drop_y);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (3 * FH) as i64);
     }
 
-    // Fila 5 (Índice 4): SLEEP (16 frames)
-    println!("Generando Fila 5: Sleep...");
-    for i in 0..16 {
-        let phase = i as f32 / 16.0;
-        let mut spr = s_sleep.clone();
+    // =========================================================================
+    // FILA 5 (Índice 4): SLEEP (60 frames de ovillo con respiración nítida y Zzz)
+    // =========================================================================
+    println!("Generando Fila 5: Sleep (60 fotogramas ovillo nítido con Zzz)...");
+    for i in 0..COLS {
+        let phase = i as f32 / COLS as f32;
+        let angle = phase * TAU;
+        let breath = angle.sin() * 0.030;
+        let bob_y = angle.sin() * 1.6;
 
+        let mut spr = transform_sprite(
+            &s_sleep,
+            0.0,
+            bob_y,
+            1.0 + breath * 0.5,
+            1.0 + breath,
+            (FW / 2) as f32,
+            FLOOR_Y as f32,
+        );
+
+        // 3 olas continuas de Zzz
         for wave in 0..3 {
             let wave_offset = wave as f32 / 3.0;
             let p_z = (phase + wave_offset) % 1.0;
 
             let z_x =
-                (FW / 2 + 16) as i32 + (p_z * 20.0) as i32 + ((p_z * tau * 2.0).sin() * 4.0) as i32;
-            let z_y = (FLOOR_Y - 66) as i32 - (p_z * 36.0) as i32;
+                (FW / 2 + 16) as i32 + (p_z * 22.0) as i32 + ((p_z * TAU * 2.0).sin() * 4.0) as i32;
+            let z_y = (FLOOR_Y - 64) as i32 - (p_z * 38.0) as i32;
             let size = 3 + (p_z * 6.0) as i32;
             let alpha = if p_z < 0.15 {
                 p_z / 0.15
@@ -744,133 +922,213 @@ fn main() {
             draw_bold_z(&mut spr, z_x, z_y, size, alpha);
         }
 
-        image::imageops::overlay(&mut sheet, &spr, (i as u32 * FW) as i64, (4 * FH) as i64);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (4 * FH) as i64);
     }
 
-    // Fila 6 (Índice 5): HAPPY (Caza del ratón, 6 poses)
-    println!("Generando Fila 6: Happy...");
-    for i in 0..16 {
-        let spr = &pounce_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (5 * FH) as i64);
+    // =========================================================================
+    // FILA 6 (Índice 5): HAPPY (Caza del ratón, 60 frames nítidos sin fantasmas)
+    // =========================================================================
+    println!("Generando Fila 6: Happy (60 fotogramas nítidos de caza)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&pounce_frames, i, COLS, 5.0, 4.0, 0.06);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (5 * FH) as i64);
     }
 
-    // Fila 7 (Índice 6): BORING (Aseo felino, 6 poses)
-    println!("Generando Fila 7: Boring...");
-    for i in 0..16 {
-        let spr = &groom_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (6 * FH) as i64);
+    // =========================================================================
+    // FILA 7 (Índice 6): BORING (Aseo felino, 60 frames nítidos sin fantasmas)
+    // =========================================================================
+    println!("Generando Fila 7: Boring (60 fotogramas nítidos de aseo)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&groom_frames, i, COLS, 3.2, 2.0, 0.04);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (6 * FH) as i64);
     }
 
-    // Fila 8 (Índice 7): WAKE_UP (Despertar estirando patas, 8 frames)
-    println!("Generando Fila 8: Wake Up...");
-    for i in 0..8 {
-        let spr = if i < 3 {
+    // =========================================================================
+    // FILA 8 (Índice 7): WAKE_UP (Despertar progresivo nítido)
+    // =========================================================================
+    println!("Generando Fila 8: Wake Up (60 fotogramas nítidos de despertar)...");
+    for i in 0..COLS {
+        let t = i as f32 / COLS as f32;
+        let base = if t < 0.35 {
             &s_sleep
-        } else if i < 6 {
+        } else if t < 0.70 {
             &groom_frames[1]
         } else {
             &idle_frames[0]
         };
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (7 * FH) as i64);
+        let stretch_y = (t * TAU).sin() * 2.5;
+        let stretch_scale = 1.0 + (t * TAU).sin().abs() * 0.035;
+        let spr = transform_sprite(
+            base,
+            0.0,
+            stretch_y,
+            1.0,
+            stretch_scale,
+            (FW / 2) as f32,
+            FLOOR_Y as f32,
+        );
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (7 * FH) as i64);
     }
 
-    // Fila 9 (Índice 8): WALK (Caminata genuina de 4 patas, 6 poses)
-    println!("Generando Fila 9: Walk...");
-    for i in 0..16 {
-        let spr = &walk_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (8 * FH) as i64);
+    // =========================================================================
+    // FILA 9 (Índice 8): WALK (Caminata 4 tiempos NÍTIDA - 60 fotogramas)
+    // =========================================================================
+    println!("Generando Fila 9: Walk (60 fotogramas nítidos con articulación de patas)...");
+    for i in 0..COLS {
+        let articulated = articulate_quadruped_walk(&walk_frames, i);
+        let final_frame = render_die_cut_border(&articulated);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (8 * FH) as i64);
     }
 
-    // Fila 10 (Índice 9): RUN (Galope felino veloz, 6 poses)
-    println!("Generando Fila 10: Run...");
-    for i in 0..16 {
-        let spr = &run_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (9 * FH) as i64);
+    // =========================================================================
+    // FILA 10 (Índice 9): RUN (Galope rotatorio NÍTIDO - 60 fotogramas)
+    // =========================================================================
+    println!("Generando Fila 10: Run (60 fotogramas nítidos de galope)...");
+    for i in 0..COLS {
+        let articulated = articulate_quadruped_run(&run_frames, i);
+        let final_frame = render_die_cut_border(&articulated);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (9 * FH) as i64);
     }
 
-    // Fila 11 (Índice 10): SCRATCH (Rascado de pared, 6 poses)
-    println!("Generando Fila 11: Scratch...");
-    for i in 0..16 {
-        let spr = &scratch_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (10 * FH) as i64);
+    // =========================================================================
+    // FILA 11 (Índice 10): SCRATCH (Rascado de pared nítido)
+    // =========================================================================
+    println!("Generando Fila 11: Scratch (60 fotogramas nítidos de rascado)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&scratch_frames, i, COLS, 4.5, 1.5, 0.05);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (10 * FH) as i64);
     }
 
-    // Fila 12 (Índice 11): EAT_RAM (Comida de croquetas, 6 poses)
-    println!("Generando Fila 12: Eat...");
-    for i in 0..16 {
-        let spr = &eat_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (11 * FH) as i64);
+    // =========================================================================
+    // FILA 12 (Índice 11): EAT_RAM (Comida de cuenco nítida)
+    // =========================================================================
+    println!("Generando Fila 12: Eat (60 fotogramas nítidos comiendo del plato)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&eat_frames, i, COLS, 3.8, 1.2, 0.04);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (11 * FH) as i64);
     }
 
-    // Fila 13 (Índice 12): ANGRY (Bufido y cola erizada, 6 poses)
-    println!("Generando Fila 13: Angry...");
-    for i in 0..16 {
-        let spr = &angry_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (12 * FH) as i64);
+    // =========================================================================
+    // FILA 13 (Índice 12): ANGRY (Bufido y erizado nítido)
+    // =========================================================================
+    println!("Generando Fila 13: Angry (60 fotogramas nítidos con bufido)...");
+    for i in 0..COLS {
+        let mut spr = articulate_action_sequence(&angry_frames, i, COLS, 2.5, 2.0, 0.06);
+        let hiss_vibration = (i as f32 / 60.0 * TAU * 8.0).sin() * 1.2;
+        spr = shift_sprite(&spr, hiss_vibration, 0.0);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (12 * FH) as i64);
     }
 
-    // Fila 14 (Índice 13): KNEAD (Amasar pan / hacer galletitas, 6 poses)
-    println!("Generando Fila 14: Knead...");
-    for i in 0..16 {
-        let spr = &knead_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (13 * FH) as i64);
+    // =========================================================================
+    // FILA 14 (Índice 13): KNEAD (Amasar pan nítido)
+    // =========================================================================
+    println!("Generando Fila 14: Knead (60 fotogramas nítidos amasando pan)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&knead_frames, i, COLS, 3.5, 1.5, 0.05);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (13 * FH) as i64);
     }
 
-    // Fila 15 (Índice 14): BOX (En caja de cartón, 6 poses)
-    println!("Generando Fila 15: Box...");
-    for i in 0..16 {
-        let spr = &box_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (14 * FH) as i64);
+    // =========================================================================
+    // FILA 15 (Índice 14): BOX (En caja de cartón nítido)
+    // =========================================================================
+    println!("Generando Fila 15: Box (60 fotogramas nítidos en la caja)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&box_frames, i, COLS, 5.0, 2.0, 0.05);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (14 * FH) as i64);
     }
 
-    // Fila 16 (Índice 15): CATCH_BUG (Cazar moscas en el aire, 6 poses)
-    println!("Generando Fila 16: CatchBug...");
-    for i in 0..16 {
-        let spr = &fly_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (15 * FH) as i64);
+    // =========================================================================
+    // FILA 16 (Índice 15): CATCH_BUG (Cazar moscas nítido)
+    // =========================================================================
+    println!("Generando Fila 16: CatchBug (60 fotogramas nítidos cazando moscas)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&fly_frames, i, COLS, 6.0, 3.0, 0.07);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (15 * FH) as i64);
     }
 
-    // Fila 17 (Índice 16): ROLL (Rodar panza arriba, 6 poses)
-    println!("Generando Fila 17: Roll...");
-    for i in 0..16 {
-        let spr = &roll_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (16 * FH) as i64);
+    // =========================================================================
+    // FILA 17 (Índice 16): ROLL (Rodar panza arriba nítido)
+    // =========================================================================
+    println!("Generando Fila 17: Roll (60 fotogramas nítidos rodando por el suelo)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&roll_frames, i, COLS, 4.0, 5.0, 0.05);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (16 * FH) as i64);
     }
 
-    // Fila 18 (Índice 17): BUTT_WIGGLE (Meneo de trasero en acecho, 6 poses)
-    println!("Generando Fila 18: ButtWiggle...");
-    for i in 0..16 {
-        let spr = &wiggle_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (17 * FH) as i64);
+    // =========================================================================
+    // FILA 18 (Índice 17): BUTT_WIGGLE (Meneo de cadera nítido)
+    // =========================================================================
+    println!("Generando Fila 18: ButtWiggle (60 fotogramas nítidos con meneo de cadera)...");
+    for i in 0..COLS {
+        let mut spr = articulate_action_sequence(&wiggle_frames, i, COLS, 2.5, 1.5, 0.05);
+        let shimmy_x = (i as f32 / 60.0 * TAU * 6.0).sin() * 4.2;
+        spr = shift_sprite(&spr, shimmy_x, 0.0);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (17 * FH) as i64);
     }
 
-    // Fila 19 (Índice 18): STRETCH (Estiramiento yoga felino, 6 poses)
-    println!("Generando Fila 19: Stretch...");
-    for i in 0..16 {
-        let spr = &stretch_frames[i % 6];
-        image::imageops::overlay(&mut sheet, spr, (i as u32 * FW) as i64, (18 * FH) as i64);
+    // =========================================================================
+    // FILA 19 (Índice 18): STRETCH (Estiramiento yoga nítido)
+    // =========================================================================
+    println!("Generando Fila 19: Stretch (60 fotogramas nítidos de estiramiento yoga)...");
+    for i in 0..COLS {
+        let spr = articulate_action_sequence(&stretch_frames, i, COLS, 3.5, 4.0, 0.06);
+        let final_frame = render_die_cut_border(&spr);
+        image::imageops::overlay(&mut sheet, &final_frame, (i * FW) as i64, (18 * FH) as i64);
     }
 
     // Guardar sheet.png
-    let out_dir = Path::new("vpets/umbreon");
-    std::fs::create_dir_all(out_dir).expect("crea directorio vpets/umbreon");
+    let out_dir = if Path::new("vpets").exists() {
+        std::path::PathBuf::from("vpets/umbreon")
+    } else if Path::new("../../vpets").exists() {
+        std::path::PathBuf::from("../../vpets/umbreon")
+    } else {
+        std::path::PathBuf::from("vpets/umbreon")
+    };
+    std::fs::create_dir_all(&out_dir).expect("crea directorio vpets/umbreon");
     let sheet_path = out_dir.join("sheet.png");
     println!(
-        "Guardando sprite sheet ({sheet_w}x{sheet_h}, {ROWS} filas) en: {}",
+        "Guardando sprite sheet ultra-ancho ({sheet_w}x{sheet_h}, {COLS} columnas, {ROWS} filas) en: {}",
         sheet_path.display()
     );
-    sheet.save(&sheet_path).expect("guarda sheet.png");
+    let sheet_file = File::create(&sheet_path).expect("crea sheet.png");
+    let sheet_w_buf = BufWriter::with_capacity(8 * 1024 * 1024, sheet_file);
+    let mut sheet_encoder = png::Encoder::new(sheet_w_buf, sheet_w, sheet_h);
+    sheet_encoder.set_color(png::ColorType::Rgba);
+    sheet_encoder.set_depth(png::BitDepth::Eight);
+    sheet_encoder.set_compression(png::Compression::Fast);
+    let mut sheet_writer = sheet_encoder.write_header().expect("escribe cabecera PNG");
+    sheet_writer
+        .write_image_data(sheet.as_raw())
+        .expect("escribe fotograma PNG");
+    sheet_writer.finish().expect("finaliza PNG");
 
-    // Guardar writing.apng
+    // Guardar writing.apng con 60 frames a 20 FPS
     let apng_path = out_dir.join("writing.apng");
-    println!("Guardando writing.apng en: {}", apng_path.display());
+    println!(
+        "Guardando writing.apng (60 frames a 20 FPS) en: {}",
+        apng_path.display()
+    );
     let file = File::create(&apng_path).expect("crea writing.apng");
     let w = BufWriter::new(file);
     let mut encoder = png::Encoder::new(w, FW, FH);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_animated(16, 0).expect("configura APNG");
-    encoder.set_frame_delay(1, 6).expect("configura delay APNG");
+    encoder.set_animated(COLS, 0).expect("configura APNG");
+    encoder
+        .set_frame_delay(1, 20)
+        .expect("configura delay APNG");
 
     let mut writer = encoder.write_header().expect("escribe cabecera APNG");
     for frame in &writing_frames {
@@ -880,5 +1138,23 @@ fn main() {
     }
     writer.finish().expect("finaliza APNG");
 
-    println!("¡Generación de Umbreon completada: 19 filas de movimientos felinos auténticos!");
+    // Sincronizar automáticamente con ~/.local/share/wayvpet/themes/umbreon si existe
+    let user_theme_dir = Path::new("/home/tilde/.local/share/wayvpet/themes/umbreon");
+    if user_theme_dir.exists() {
+        println!("Sincronizando con {}...", user_theme_dir.display());
+        let _ = std::fs::copy(&sheet_path, user_theme_dir.join("sheet.png"));
+        let _ = std::fs::copy(&apng_path, user_theme_dir.join("writing.apng"));
+        let theme_ini_src = out_dir.join("theme.ini");
+        if theme_ini_src.exists() {
+            let _ = std::fs::copy(&theme_ini_src, user_theme_dir.join("theme.ini"));
+        }
+        let vpet_ini_src = out_dir.join("vpet.ini");
+        if vpet_ini_src.exists() {
+            let _ = std::fs::copy(&vpet_ini_src, user_theme_dir.join("vpet.ini"));
+        }
+    }
+
+    println!(
+        "¡Generación de Umbreon completada: 19 filas de 60 fotogramas únicos y biomecánica felina!"
+    );
 }

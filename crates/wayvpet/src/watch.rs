@@ -51,7 +51,18 @@ fn run(path: &PathBuf, mask: WatchMask, tx: &Sender<()>) {
             return;
         }
     };
-    if ino.watches().add(path, mask).is_err() {
+    // El fichero puede no existir todavía (p. ej. el estado del paseo
+    // multi-monitor lo crea otra instancia justo al arrancar): reintentar el
+    // alta unos segundos antes de rendirse.
+    let mut added = false;
+    for _ in 0..50 {
+        if ino.watches().add(path, mask).is_ok() {
+            added = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !added {
         eprintln!("wayvpet: no se pudo vigilar {}", path.display());
         return;
     }

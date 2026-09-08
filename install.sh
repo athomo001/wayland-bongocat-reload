@@ -14,6 +14,8 @@
 #   --no-service       No instalar la unidad systemd de usuario
 #   --no-input-group   No tocar la pertenencia al grupo `input`
 #   --no-deps          No intentar instalar dependencias de compilación
+#                      (se comprueba primero si ya están; si sí, ni se mira el
+#                       gestor de paquetes ni se pide sudo)
 #   --no-vpets         No instalar el pack de vpets pesados (miku/umbreon/gabumon)
 #   --uninstall        Desinstalar (llama a uninstall.sh)
 #
@@ -57,7 +59,7 @@ while [ $# -gt 0 ]; do
 		--no-input-group) WANT_INPUT_GROUP=0; shift ;;
 		--no-deps) WANT_DEPS=0; shift ;;
 		--no-vpets) WANT_VPETS=0; shift ;;
-		-h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,20p' "$0"; exit 0 ;;
 		*) die "opción desconocida: $1 (prueba --help)" ;;
 	esac
 done
@@ -95,10 +97,37 @@ if [ -r /etc/os-release ]; then
 fi
 say "Distribución: ${ID:-desconocida}  (familia: $DISTRO_FAMILY)"
 
+# Lista de dependencias de compilación que faltan (vacío = están todas). Se
+# comprueba con las herramientas reales, no con el gestor de paquetes: así una
+# máquina que ya las tiene se salta el `apt-get update` / `sudo` y va directa a
+# compilar. `pkg-config --exists` mira los `.pc` que traen los paquetes `-dev`.
+missing_deps() {
+	_m=""
+	command -v cargo      >/dev/null 2>&1 || _m="$_m cargo"
+	command -v make       >/dev/null 2>&1 || _m="$_m make"
+	command -v pkg-config >/dev/null 2>&1 || _m="$_m pkg-config"
+	command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || command -v clang >/dev/null 2>&1 || _m="$_m compilador-C"
+	if command -v pkg-config >/dev/null 2>&1; then
+		pkg-config --exists wayland-client 2>/dev/null || _m="$_m libwayland-dev"
+		pkg-config --exists xkbcommon      2>/dev/null || _m="$_m libxkbcommon-dev"
+	else
+		_m="$_m libwayland-dev libxkbcommon-dev"
+	fi
+	printf '%s' "${_m# }"
+}
+
 # $pkgs va sin comillas a propósito: es una lista de paquetes que debe trocearse.
 # shellcheck disable=SC2086
 install_deps() {
 	[ "$WANT_DEPS" = 1 ] || { say "Salto la instalación de dependencias (--no-deps)."; return 0; }
+
+	_miss=$(missing_deps)
+	if [ -z "$_miss" ]; then
+		say "Dependencias de compilación ya presentes ($(cargo --version 2>/dev/null || echo cargo)); no instalo nada."
+		return 0
+	fi
+	say "Faltan dependencias: $_miss"
+
 	case "$DISTRO_FAMILY" in
 		arch)
 			pkgs="rust wayland libxkbcommon pkgconf make"
