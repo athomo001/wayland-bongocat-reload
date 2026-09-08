@@ -126,6 +126,12 @@ Un tema es una carpeta con SVG (vectorial) o una hoja de sprites PNG/APNG
 (animada, con estados como `idle`/`writing`/`sleep`/`happy`/`boring`). Guía
 completa en [`themes/README.md`](themes/README.md).
 
+![Vpets: miku, umbreon, gabumon](assets/readme-vpets.gif)
+
+Los vpets pesados (`miku`, `umbreon`, `gabumon`) van en el paquete aparte
+`wayvpet-vpets`; los ligeros (`classic`, `pink`, `demo`) en el base. Regenerar
+este GIF: `cargo run -p wayvpet --example gen_readme_gif`.
+
 ```bash
 wayvpet theme list                  # temas instalados
 wayvpet theme new mi-skin           # crea una plantilla en $XDG_DATA_HOME
