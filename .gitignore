@@ -69,4 +69,4 @@ Thumbs.db
 /bongocat.conf
 
 # Artefactos de release (make pkg / scripts/release.sh)
-#/dist/
+/dist/
