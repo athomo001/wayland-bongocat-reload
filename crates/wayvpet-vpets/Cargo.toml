@@ -7,7 +7,7 @@
 # `vpets/` NO requiere tocar este fichero**: el glob `vpets/**/*` lo recoge.
 [package]
 name = "wayvpet-vpets"
-version = "3.0.0-dev"
+version = "3.0.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"

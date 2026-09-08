@@ -31,7 +31,7 @@ mod update_check;
 mod watch;
 mod wl;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("WAYVPET_VERSION");
 
 #[derive(Debug, Default)]
 struct Args {

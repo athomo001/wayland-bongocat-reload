@@ -6,7 +6,7 @@
 # solo si `check_updates=1` y el binario está presente.
 [package]
 name = "wayvpet-update"
-version = "3.0.0-dev"
+version = "3.0.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"

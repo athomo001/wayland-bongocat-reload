@@ -90,8 +90,14 @@ Hace, en orden:
 3. `make deb` — `cargo deb` con la metadata de
    `crates/wayvpet/Cargo.toml` (`[package.metadata.deb]`).
 4. `make rpm` — `cargo generate-rpm` con `[package.metadata.generate-rpm]`. RPM
-   no admite `-` en la versión, así que `3.0.0-dev` se convierte en `3.0.0~dev`.
+   no admite `-` en la versión (se convertiría a `~`); usa versiones limpias
+   `X.Y.Z`.
 5. `make checksums` — `dist/SHA256SUMS`.
+
+**Versión de los paquetes** = la de `crates/wayvpet/Cargo.toml` (`X.Y.Z`), que
+fija `scripts/release.sh`. La que muestra `wayvpet --version` es aparte: la
+deriva un build script de `git describe` (`X.Y.Z-<n>-g<sha>` entre tags),
+cayendo a la de `Cargo.toml` sin repo git.
 
 Resultado típico:
 

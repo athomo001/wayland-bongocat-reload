@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use wayvpet_common::config::{ConfDoc, Config};
 use wayvpet_common::io;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("WAYVPET_VERSION");
 
 const HELP: &str = "\
 wayvpetctl — configuración de wayvpet

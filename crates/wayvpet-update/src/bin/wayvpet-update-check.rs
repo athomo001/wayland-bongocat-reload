@@ -32,7 +32,11 @@ use wayvpet_update::{
 };
 
 /// Versión que se compara con la del release. Va a la par con la de `wayvpet`.
+/// Versión instalada para la **comparación semver** con el release de GitHub:
+/// tiene que ser un semver limpio (`3.0.0`), no un `git describe`.
 const INSTALLED: &str = env!("CARGO_PKG_VERSION");
+/// Versión para mostrar en `--version` (puede ser `git describe`).
+const DISPLAY_VERSION: &str = env!("WAYVPET_VERSION");
 
 const HELP: &str = "\
 wayvpet-update-check — aviso de nueva versión de wayvpet (spec 0015)
@@ -88,7 +92,7 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "-V" | "--version" => {
-                println!("wayvpet-update-check {INSTALLED}");
+                println!("wayvpet-update-check {DISPLAY_VERSION}");
                 return ExitCode::SUCCESS;
             }
             // El primer positional tras `--download` es el nombre del asset.

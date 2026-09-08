@@ -1678,7 +1678,7 @@ impl State {
             }
             C::About => eprintln!(
                 "wayvpet {} — https://github.com/athomo001/wayvpet",
-                env!("CARGO_PKG_VERSION")
+                env!("WAYVPET_VERSION")
             ),
             C::OpenUpdate => {
                 if let Some(n) = update_check::pending_notice() {

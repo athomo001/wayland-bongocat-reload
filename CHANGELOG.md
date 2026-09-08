@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+La versión que muestra `wayvpet --version` se deriva de `git describe` (build
+script): en un build etiquetado es `X.Y.Z`; entre tags, `X.Y.Z-<n>-g<sha>`.
+
+## [3.0.0] - 2026-09-07
+
+Fork de `bongocat` reescrito en Rust, renombrado a **wayvpet**.
+
+### Añadido
+
+- **Reescritura en Rust** con paridad funcional sobre el árbol C y endurecimiento
+  de seguridad: lector de teclado en proceso aislado con `seccomp` (la identidad
+  de la tecla nunca se registra), validación de rutas `/dev/input/`, PID-file con
+  `flock`, `SO_PEERCRED` en el socket IPC.
+- **Vpets** (temas de sprite sheet, estilo wayland-vpets): formato `theme_format
+  = 3`, PNG/APNG en rejilla, máquina de estados (`idle`/`writing`/`sleep`/
+  `happy`/`walk`/`run`/…). Se incluyen `miku`, `umbreon`, `gabumon` en el paquete
+  aparte `wayvpet-vpets`; los ligeros (`classic`, `pink`, `demo`) en el base.
+- **Icono en la bandeja** (StatusNotifierItem, D-Bus puro Rust): mostrar/ocultar,
+  reiniciar overlay, recargar, elegir tema, modo edición.
+- **Modo edición con el ratón**: arrastrar el vpet y la rueda para el tamaño; se
+  persiste al `.conf` conservando comentarios y orden.
+- **Ventana de configuración** `wayvpet-config` (egui): todos los ajustes con
+  deslizadores, galería de temas con miniaturas, mapa de pantalla, selector de
+  monitor, presets y perfiles, asistente de primer uso, modo experto.
+- **Config por monitor** `[monitor:NOMBRE]` (spec 0008 §8.4): base + sección por
+  salida; `wayvpetctl set/get -m NOMBRE` dirige a la sección.
+- **Paseo entre monitores** (multi-head): un vpet que `can_roam` con 2+ pantallas
+  camina de una a otra al llegar al borde y se puede arrastrar entre ellas; una
+  instancia por salida, un solo icono en la bandeja.
+- **Aviso de nueva versión** (spec 0015, opt-in `check_updates=1`): al arrancar,
+  un proceso hijo corto (`wayvpet-update-check`, paquete opcional) hace **una**
+  consulta a la API de releases de GitHub; si hay versión mayor, ítem en el tray
+  → diálogo → "Descargar" deja el paquete verificado por SHA-256 en `~/Descargas`
+  (nunca instala). Con `check_updates=0` (por defecto) no se abre ningún socket.
+- **HiDPI**: `wp_viewporter` + `wp_fractional_scale_v1` (búfer físico → capa
+  lógica).
+- **Empaquetado**: `.deb` (`cargo-deb`), `.rpm` (`cargo-generate-rpm`), PKGBUILD
+  para AUR, `install.sh` por distro, `Makefile` estilo GNU, `man wayvpet.1`.
+  Paquetes extra `wayvpet-vpets` y `wayvpet-update` como `Recommends:`.
+- **Auto-ocultar en pantalla completa** también en COSMIC
+  (`ext-foreign-toplevel-list-v1` + `zcosmic_toplevel_info_v1`), además de wlr.
+
+### Cambiado
+
+- El proyecto pasa a llamarse **wayvpet**: binarios `wayvpet` / `wayvpetctl` /
+  `wayvpet-config`, config en `~/.config/wayvpet/wayvpet.conf`, unidad
+  `wayvpet.service`, temas en `…/wayvpet/themes/`.
+- `enable_debug` queda sin efecto (nunca hubo volcado de keycodes; spec 0013).
+- `install.sh` comprueba primero si las dependencias de compilación ya están
+  antes de tocar el gestor de paquetes.
+- `uninstall.sh` para las instancias en marcha (servicio, IPC, `pkill`) antes de
+  borrar los ficheros.
+
 ## [2.0.2] - 2026-07-13
 
 ### Fixed

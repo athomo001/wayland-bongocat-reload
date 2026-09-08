@@ -3713,7 +3713,7 @@ dependencies = [
 
 [[package]]
 name = "wayvpet"
-version = "3.0.0-dev"
+version = "3.0.0"
 dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
@@ -3741,7 +3741,7 @@ version = "0.0.0"
 
 [[package]]
 name = "wayvpet-config"
-version = "3.0.0-dev"
+version = "3.0.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3751,7 +3751,7 @@ dependencies = [
 
 [[package]]
 name = "wayvpetctl"
-version = "3.0.0-dev"
+version = "3.0.0"
 dependencies = [
  "wayvpet-common",
 ]
