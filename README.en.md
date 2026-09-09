@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/saatvik333/wayland-bongocat/releases)
 
+<a href="https://www.buymeacoffee.com/athomo"><img src="https://img.buymeacoffee.com/button-api/?text=Comprame un cafecito&emoji=&slug=athomo&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" /></a>
+
 A cute Wayland overlay that shows an animated bongo cat reacting to your keyboard input.
 
 ![Demo](assets/demo.gif)

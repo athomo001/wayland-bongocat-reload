@@ -2,6 +2,8 @@
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
+<a href="https://www.buymeacoffee.com/athomo"><img src="https://img.buymeacoffee.com/button-api/?text=Comprame un cafecito&emoji=&slug=athomo&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" /></a>
+
 Un overlay para Wayland que muestra un gato bongo animado reaccionando a lo que
 escribes. Este fork (**wayvpet**) reescribió el núcleo en Rust
 y añadió instalación en un comando, control remoto (`wayvpetctl` + icono de
